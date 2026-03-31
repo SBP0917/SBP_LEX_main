@@ -1,12 +1,24 @@
-from typing import Dict, Any
+from .legal_domain import LegalDomain
+from .sovereign_domain import SovereignDomain
+from .risk_domain import RiskDomain
+from .operational_domain import OperationalDomain
 
 
-def run_domain_wrap(state: Dict[str, Any]) -> Dict[str, Any]:
-    # placeholder — domains will be wired next
+DOMAINS = [
+    SovereignDomain(),
+    LegalDomain(),
+    RiskDomain(),
+    OperationalDomain(),
+]
+
+
+def run_domain_wrap(state):
+    for domain in DOMAINS:
+        result = domain.execute(state)
+
+        if result != "pass":
+            state["domain_result"] = result
+            return state
+
     state["domain_result"] = "pass"
-    state.setdefault("domain_trace", []).append({
-        "layer": "domains",
-        "result": "pass",
-        "reason": "placeholder"
-    })
     return state
