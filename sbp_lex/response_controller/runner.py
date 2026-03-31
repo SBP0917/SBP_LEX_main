@@ -5,6 +5,7 @@ from sbp_lex.classification.engine import ClassificationEngine
 from sbp_lex.licensing.engine import LicensingEngine
 from sbp_lex.governance.engine import GovernanceEngine
 from sbp_lex.domains.runner import run_domain_wrap
+from sbp_lex.aurion15.runtime.runner import run_aurion15
 from sbp_lex.response_controller.controller import stop
 
 
@@ -30,6 +31,10 @@ def run_pipeline(input_data: Dict[str, Any]) -> Dict[str, Any]:
 
     state = run_domain_wrap(state)
     if state.get("domain_result") != "pass":
+        return stop(state)
+
+    state = run_aurion15(state)
+    if state.get("aurion15_result") != "pass":
         return stop(state)
 
     return state
