@@ -16,10 +16,14 @@ class RiskDomain(DomainEngine):
         if risk is None:
             return self._finalise_result(state, "refine_candidate")
 
-        if float(risk) > 0.85:
+        risk = float(risk)
+
+        if risk > 0.85:
+            self._escalate_tier_if_needed(state, "cascading_impact", 3)
             return self._finalise_result(state, "escalate")
 
-        if float(risk) > 0.60:
+        if risk > 0.60:
+            self._escalate_tier_if_needed(state, "cascading_impact", 2)
             return self._finalise_result(state, "refine_candidate")
 
         return self._finalise_result(state, "pass")
