@@ -15,14 +15,17 @@ class SovereignDomain(DomainEngine):
             return self._finalise_result(state, "require_next_candidate")
 
         if not authority or not jurisdiction:
+            self._escalate_tier_if_needed(state, "cascading_impact", 3)
             return self._finalise_result(state, "escalate")
 
         c = str(candidate).lower()
 
         if "override_authority" in c:
+            self._escalate_tier_if_needed(state, "cascading_impact", 3)
             return self._finalise_result(state, "escalate")
 
         if "cross_jurisdiction" in c:
+            self._escalate_tier_if_needed(state, "cascading_impact", 2)
             return self._finalise_result(state, "refine_candidate")
 
         return self._finalise_result(state, "pass")
