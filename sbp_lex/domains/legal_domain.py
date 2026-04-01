@@ -15,11 +15,13 @@ class LegalDomain(DomainEngine):
             return self._finalise_result(state, "require_next_candidate")
 
         if not jurisdiction or not authority:
+            self._escalate_tier_if_needed(state, "cascading_impact", 2)
             return self._finalise_result(state, "escalate")
 
         c = str(candidate).lower()
 
         if "illegal" in c:
+            self._escalate_tier_if_needed(state, "irreversibility", 3)
             return self._finalise_result(state, "escalate")
 
         if "uncertain" in c:
