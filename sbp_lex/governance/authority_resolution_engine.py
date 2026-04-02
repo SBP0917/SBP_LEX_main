@@ -1,50 +1,25 @@
-from sbp_lex.types import EngineResult
-from .registry import register
+from typing import Dict, Any
+from .base_engine import AurionEngine
+from .registry import aurion_registry
 
 
-@register("authority_resolution")
-def authority_resolution_engine(payload: dict) -> EngineResult:
+class AuthorityResolutionEngine(AurionEngine):
+    name = "authority_resolution_engine"
+    stage = 1
+    depends_on = ["jurisdiction_determination_engine"]
 
-    jurisdiction = payload.get("jurisdiction")
-    action = payload.get("action")
+    def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        resolved_authority = state.get("resolved_authority") or state.get("authority")
+        jurisdiction = state.get("aurion15_jurisdiction") or state.get("jurisdiction")
 
-    if not jurisdiction:
-        return EngineResult(
-            ok=False,
-            name="authority_resolution",
-            detail="No jurisdiction provided"
-        )
+        if not resolved_authority and not jurisdiction:
+            state["status"] = "escalate"
+            state["aurion_reason"] = "missing_authority_context"
+            return state
 
-    authority = {
-        "primary_authority": None,
-        "secondary_authority": None,
-        "escalation_required": False
-    }
+        state["aurion15_resolved_authority"] = resolved_authority or jurisdiction
+        state["status"] = "pass"
+        return state
 
-    country = jurisdiction.get("country")
 
-    if country == "AU":
-        authority["primary_authority"] = "Australian Federal Authority"
-        authority["secondary_authority"] = "State Authority"
-
-    elif country == "US":
-        authority["primary_authority"] = "US Federal Authority"
-        authority["secondary_authority"] = "State Authority"
-
-    elif country == "EU":
-        authority["primary_authority"] = "European Commission"
-        authority["secondary_authority"] = "Member State Authority"
-
-    else:
-        authority["primary_authority"] = "External Sovereign Authority"
-        authority["escalation_required"] = True
-
-    return EngineResult(
-        ok=True,
-        name="authority_resolution",
-        detail="Authority resolved",
-        data={
-            "authority": authority,
-            "action": action
-        }
-    )
+aurion_registry.register(AuthorityResolutionEngine())
