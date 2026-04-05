@@ -1,4 +1,4 @@
-from sbp_lex.pipeline.runner import run_v6
+from sbp_lex.pipeline.runner import run_v6_pipeline
 
 
 payload = {
@@ -43,5 +43,5 @@ payload = {
     },
 }
 
-result = run_v6(payload)
+result = run_v6_pipeline(payload)
 print(result)
