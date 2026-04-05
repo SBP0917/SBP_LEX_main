@@ -13,7 +13,7 @@ from sbp_lex.authority_first.attestation_consensus_engine import attestation_con
 from sbp_lex.classification.engine import ClassificationEngine
 from sbp_lex.licensing.engine import LicensingEngine
 from sbp_lex.governance.engine import GovernanceEngine
-from sbp_lex.governance.procedural_truth import evaluate_procedural_truth, compute_safety_tier
+from sbp_lex.governance.procedural_truth import procedural_truth, compute_safety_tier
 from sbp_lex.domains.runner import run_domain_wrap
 from sbp_lex.aurion15.runtime.runner import run_aurion15
 from sbp_lex.audit.engine import AuditEngine
