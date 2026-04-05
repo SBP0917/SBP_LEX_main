@@ -595,3 +595,11 @@ def run_v6(input_data: Dict[str, Any]) -> Dict[str, Any]:
         "ledger_entries": state.get("ledger_entries"),
     },
 )
+
+return state
+
+except Exception as e:
+    return {
+        "decision": "DENY",
+        "error": str(e),
+    }
