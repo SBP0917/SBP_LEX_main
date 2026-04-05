@@ -588,8 +588,10 @@ def run_v6(input_data: Dict[str, Any]) -> Dict[str, Any]:
         state = _finalize_audit(state)
 
         _append_hash_chain(
-            state,
-            "audit",
-            {
-                "audit_hash": state.get("audit_hash"),
-                "ledger_entries":
+    state,
+    "audit",
+    {
+        "audit_hash": state.get("audit_hash"),
+        "ledger_entries": state.get("ledger_entries"),
+    },
+)
