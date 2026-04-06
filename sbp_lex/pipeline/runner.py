@@ -599,8 +599,3 @@ def run_v6_pipeline(input_data: Dict[str, Any]) -> Dict[str, Any]:
 
         return state
 
-    except Exception as e:
-        return {
-            "decision": "DENY",
-            "error": str(e),
-        }
