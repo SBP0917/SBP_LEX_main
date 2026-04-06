@@ -1,4 +1,4 @@
-1from sbp_lex.types import EngineResult
+from sbp_lex.types import EngineResult
 from .registry import register
 
 
