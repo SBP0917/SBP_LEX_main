@@ -1,3 +1,5 @@
+from sbp_lex.shared.types import EngineResult
+
 class EngineResult:
     def __init__(self, ok: bool, name: str, detail: str = "", data: dict = None):
         self.ok = ok
