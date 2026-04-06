@@ -604,7 +604,3 @@ def run_v6_pipeline(input_data: Dict[str, Any]) -> Dict[str, Any]:
             "decision": "DENY",
             "error": str(e),
         }
-
-
-def run_v6(input_data: Dict[str, Any]) -> Dict[str, Any]:
-    return run_v6_pipeline(input_data)
