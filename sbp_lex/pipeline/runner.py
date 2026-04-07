@@ -1,30 +1,56 @@
-import sys
-import os
-
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
-
 from __future__ import annotations
 
-from copy import deepcopy
 from hashlib import sha256
-from typing import Any, Dict
+from typing import Dict, Any
 
 from sbp_lex.shared.state_builder import build_state
+
+from sbp_lex.collective.context_interface import attach_collective_signals
 
 from sbp_lex.authority_first.anchor_validation_engine import anchor_validation_engine
 from sbp_lex.authority_first.attestation_engine import attestation_engine
 from sbp_lex.authority_first.attestation_consensus_engine import attestation_consensus_engine
+from sbp_lex.authority_first.truth_anchor_engine import truth_anchor_engine
+from sbp_lex.authority_first.truth_continuity_engine import truth_continuity_engine
+from sbp_lex.authority_first.truth_expiry_engine import truth_expiry_engine
+from sbp_lex.authority_first.truth_revocation_engine import truth_revocation_engine
 
 from sbp_lex.classification.engine import ClassificationEngine
 from sbp_lex.licensing.engine import LicensingEngine
 from sbp_lex.governance.engine import GovernanceEngine
-from sbp_lex.governance.procedural_truth import compute_safety_tier
+from sbp_lex.governance.procedural_truth_engine import evaluate_procedural_truth
+from sbp_lex.governance.grc import (
+    apply_grc,
+    enforce_non_repeat_rule,
+    build_deny_feedback,
+    build_escalate_feedback,
+)
+
+from sbp_lex.config.thresholds import apply_financial_factor, apply_consequentiality_tier
 from sbp_lex.domains.runner import run_domain_wrap
 from sbp_lex.aurion15.runtime.runner import run_aurion15
+from sbp_lex.execution.execution_gate import run_execution_gate
 from sbp_lex.audit.engine import AuditEngine
 from sbp_lex.audit.audit_ledger import record_audit
 
+from sbp_lex.security.token_stack import issue_token
+from sbp_lex.config.pipeline_config import (
+    AURION_MAX_CANDIDATE_ATTEMPTS,
+    AURION_REQUIRE_NEXT_CANDIDATE_RESULT,
+    AURION_PASS_RESULT,
+    AURION_ESCALATE_RESULT,
+    GOVERNANCE_ALLOW,
+    GOVERNANCE_DENY,
+    GOVERNANCE_ESCALATE,
+    PROCEDURAL_TRUTH_PASS,
+    PROCEDURAL_TRUTH_ESCALATE,
+    CLASSIFICATION_ALLOW,
+    CLASSIFICATION_ESCALATE,
+    LICENSING_ALLOW,
+    LICENSING_ESCALATE,
+    DOMAIN_PASS_RESULT,
+    DOMAIN_ESCALATE_RESULT,
+)
 
 classification_engine = ClassificationEngine()
 licensing_engine = LicensingEngine()
@@ -48,7 +74,7 @@ def _request_fingerprint(state: Dict[str, Any]) -> str:
     )
 
 
-def _append_hash_chain(state: Dict[str, Any], stage: str, payload: Dict[str, Any]) -> None:
+def _append_hash_chain(state: Dict[str, Any], stage: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     state.setdefault("hash_chain", [])
     previous_hash = state["hash_chain"][-1]["hash"] if state["hash_chain"] else "GENESIS"
 
@@ -61,223 +87,86 @@ def _append_hash_chain(state: Dict[str, Any], stage: str, payload: Dict[str, Any
 
     state["hash_chain"].append(entry)
     state["state_hash"] = entry["hash"]
+    return state
 
 
-def _build_feedback(
-    state: Dict[str, Any],
-    status: str,
-    denial_code: str,
-    denial_reason: str,
-    retry_eligible: bool,
-    required_change_for_retry: str,
-    escalation_allowed: bool,
-    fallback_action_allowed: bool,
-    safe_state_required: bool,
-) -> Dict[str, Any]:
-    feedback = {
-        "status": status,
-        "denial_code": denial_code,
-        "denial_reason": denial_reason,
-        "repeat_same_request_allowed": False,
-        "retry_eligible": retry_eligible,
-        "required_change_for_retry": required_change_for_retry,
-        "escalation_allowed": escalation_allowed,
-        "fallback_action_allowed": fallback_action_allowed,
-        "safe_state_required": safe_state_required,
-        "request_fingerprint": state.get("request_fingerprint"),
-    }
-    state["governance_feedback"] = feedback
-    return feedback
-
-
-def _deny(
-    state: Dict[str, Any],
-    denial_code: str,
-    denial_reason: str,
-    retry_eligible: bool = False,
-    required_change_for_retry: str = "Material change required before retry.",
-    escalation_allowed: bool = True,
-    fallback_action_allowed: bool = True,
-    safe_state_required: bool = True,
-) -> Dict[str, Any]:
-    state["decision"] = "DENY"
-    state["last_denied_fingerprint"] = state.get("request_fingerprint")
-
-    _append_hash_chain(
-        state,
-        "deny",
-        {
-            "code": denial_code,
-            "reason": denial_reason,
-        },
-    )
-
-    return _build_feedback(
-        state=state,
-        status="DENY",
-        denial_code=denial_code,
-        denial_reason=denial_reason,
-        retry_eligible=retry_eligible,
-        required_change_for_retry=required_change_for_retry,
-        escalation_allowed=escalation_allowed,
-        fallback_action_allowed=fallback_action_allowed,
-        safe_state_required=safe_state_required,
-    )
-
-
-def _escalate(
-    state: Dict[str, Any],
-    denial_code: str,
-    denial_reason: str,
-    safe_state_required: bool = True,
-) -> Dict[str, Any]:
-    state["decision"] = "ESCALATE"
-
-    _append_hash_chain(
-        state,
-        "escalate",
-        {
-            "code": denial_code,
-            "reason": denial_reason,
-        },
-    )
-
-    return _build_feedback(
-        state=state,
-        status="ESCALATE",
-        denial_code=denial_code,
-        denial_reason=denial_reason,
-        retry_eligible=False,
-        required_change_for_retry="Escalation pathway required.",
-        escalation_allowed=True,
-        fallback_action_allowed=True,
-        safe_state_required=safe_state_required,
-    )
-
-
-def _result_ok(result: Any) -> bool:
+def _engine_ok(result: Any) -> bool:
     return bool(getattr(result, "ok", False))
 
 
-def _result_detail(result: Any) -> str:
+def _engine_detail(result: Any) -> str:
     return getattr(result, "detail", "engine_failed")
 
 
-def _result_data(result: Any) -> Any:
+def _engine_data(result: Any) -> Any:
     return getattr(result, "data", None)
 
 
-def _run_authority_first(state: Dict[str, Any]) -> Dict[str, Any]:
-    state.setdefault("authority_first_trace", [])
+def _run_root_of_trust(state: Dict[str, Any]) -> Dict[str, Any]:
+    state.setdefault("root_of_trust_trace", [])
 
-    for stage_name, fn in [
+    chain = [
         ("anchor_validation", anchor_validation_engine),
         ("attestation", attestation_engine),
         ("attestation_consensus", attestation_consensus_engine),
-    ]:
+        ("truth_anchor", truth_anchor_engine),
+        ("truth_continuity", truth_continuity_engine),
+        ("truth_expiry", truth_expiry_engine),
+        ("truth_revocation", truth_revocation_engine),
+    ]
+
+    for stage_name, fn in chain:
         result = fn(state)
 
-        state["authority_first_trace"].append(
+        ok = _engine_ok(result)
+        detail = _engine_detail(result)
+        data = _engine_data(result)
+
+        state["root_of_trust_trace"].append(
             {
                 "engine": stage_name,
-                "ok": _result_ok(result),
-                "detail": _result_detail(result),
+                "ok": ok,
+                "detail": detail,
             }
         )
 
         _append_hash_chain(
             state,
-            f"authority_first:{stage_name}",
+            f"root_of_trust:{stage_name}",
             {
-                "ok": _result_ok(result),
-                "detail": _result_detail(result),
-                "data": _result_data(result),
+                "ok": ok,
+                "detail": detail,
+                "data": data,
             },
         )
 
-        if not _result_ok(result):
+        if not ok:
             state["authority_first_result"] = "DENY"
-            state["authority_first_reason"] = _result_detail(result)
+            state["authority_first_reason"] = detail
             return state
 
-        state[stage_name] = _result_data(result)
-
-    truth_checks = {
-        "truth_anchor_engine": bool(state.get("truth_anchor", True)),
-        "truth_continuity_engine": bool(state.get("truth_continuity", True)),
-        "truth_expiry_engine": not bool(state.get("truth_expiry", False)),
-        "truth_revocation_engine": not bool(state.get("truth_revocation", False)),
-    }
-
-    for name, passed in truth_checks.items():
-        state["authority_first_trace"].append(
-            {
-                "engine": name,
-                "ok": passed,
-                "detail": "pass" if passed else "truth_state_failed",
-            }
-        )
-
-        _append_hash_chain(
-            state,
-            f"authority_first:{name}",
-            {"ok": passed},
-        )
-
-        if not passed:
-            state["authority_first_result"] = "DENY"
-            state["authority_first_reason"] = f"{name}_failed"
-            return state
+        state[stage_name] = data
 
     state["authority_first_result"] = "ALLOW"
-    state["authority_first_reason"] = "authority_first_valid"
+    state["authority_first_reason"] = "root_of_trust_valid"
     return state
 
 
-def _recompute_tier_and_thresholds(state: Dict[str, Any]) -> Dict[str, Any]:
-    state = compute_safety_tier(state)
-
-    tier = state.get("safety_profile", {}).get("computed_tier")
-
-    if tier == "TOP":
-        state["corroboration_required"] = 5
-    elif tier == "MEDIUM":
-        state["corroboration_required"] = 3
-    else:
-        state["corroboration_required"] = 2
-
-    return state
-
-
-def _non_repeat_allowed(state: Dict[str, Any]) -> bool:
-    last_denied = state.get("last_denied_fingerprint")
-    current = state.get("request_fingerprint")
-    if not last_denied:
-        return True
-    return last_denied != current
-
-
-def _run_execution_gate(state: Dict[str, Any]) -> Dict[str, Any]:
-    state.setdefault("execution_trace", [])
-
-    checks = [
-        ("hash_chain_present", bool(state.get("hash_chain"))),
-        ("procedural_truth_pass", state.get("procedural_truth_result") == "PASS"),
-        ("corroboration_met", bool(state.get("corroboration_met"))),
-        ("governance_allow", state.get("governance_result") == "ALLOW"),
-        ("domain_pass", state.get("domain_result") == "pass"),
-        ("aurion_pass", state.get("aurion15_result") == "pass"),
-    ]
-
-    for name, passed in checks:
-        state["execution_trace"].append({"check": name, "passed": passed})
-        if not passed:
-            state["execution_result"] = "HALT"
-            return state
-
-    state["execution_result"] = "EXECUTE"
-    state["decision"] = "APPROVED"
-    return state
+def _issue_core_token(
+    state: Dict[str, Any],
+    token_name: str,
+    issuer: str,
+    issued_at_stage: str,
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    return issue_token(
+        state,
+        token_name=token_name,
+        issuer=issuer,
+        issued_at_stage=issued_at_stage,
+        payload=payload,
+        key_id=f"{issuer}_root",
+    )
 
 
 def _finalize_audit(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -288,10 +177,9 @@ def _finalize_audit(state: Dict[str, Any]) -> Dict[str, Any]:
         "request_fingerprint": state.get("request_fingerprint"),
         "decision": state.get("decision"),
         "state_hash": state.get("state_hash"),
-        "hash_chain": deepcopy(state.get("hash_chain", [])),
-        "governance_feedback": deepcopy(state.get("governance_feedback")),
+        "governance_feedback": state.get("governance_feedback"),
+        "hash_chain": state.get("hash_chain", []),
     }
-
     state["audit_hash"] = _stable_hash(state["audit_record"])
 
     previous_ledger_hash = (
@@ -308,67 +196,72 @@ def _finalize_audit(state: Dict[str, Any]) -> Dict[str, Any]:
 
     state.setdefault("audit_ledger", [])
     state["audit_ledger"].append(ledger_entry)
-
     return state
 
-def run_v6_pipeline(input_data: Dict[str, Any]) -> Dict[str, Any]:
+
+def run_v6(input_data: Dict[str, Any], pre_context_signals: Dict[str, Any] | None = None) -> Dict[str, Any]:
     try:
         state = build_state(input_data)
 
         state.setdefault("context", {})
         state.setdefault("payload", {})
-        state.setdefault("sources", [])
+        state.setdefault("tokens", {})
         state.setdefault("hash_chain", [])
-        state.setdefault(
-            "financial_thresholds",
-            {
-                "low_max": 499.99,
-                "medium_max": 49999.99,
-                "currency": "AUD",
-            },
-        )
-        state.setdefault(
-            "safety_profile",
-            {
-                "human_safety": 0,
-                "irreversibility": 0,
-                "cascading_impact": 0,
-                "financial_operational": 0,
-                "computed_tier": None,
-            },
-        )
+        state.setdefault("audit_ledger", [])
+        state.setdefault("last_denied_fingerprint", None)
+        state.setdefault("financial_amount", 0.0)
 
         state["request_fingerprint"] = _request_fingerprint(state)
 
-        if not _non_repeat_allowed(state):
-            return _deny(
+        state = enforce_non_repeat_rule(state)
+        if state.get("governance_feedback", {}).get("status") == "DENY":
+            state["decision"] = "DENY"
+            _append_hash_chain(
                 state,
-                denial_code="IDENTICAL_DENIED_RESUBMISSION",
-                denial_reason="Identical denied request must not be reprocessed.",
-                retry_eligible=False,
-                required_change_for_retry="Change authority, payload, scope, or invoke escalation.",
-                escalation_allowed=True,
-                fallback_action_allowed=True,
-                safe_state_required=False,
+                "grc:identical_denied_resubmission",
+                state["governance_feedback"],
             )
+            return state
 
-        state = _run_authority_first(state)
+        state = attach_collective_signals(state, pre_context_signals)
+        _append_hash_chain(
+            state,
+            "collective_attach",
+            {
+                "collective_signal_status": state.get("collective_signal_status"),
+                "collective_signals": state.get("collective_signals"),
+            },
+        )
 
+        state = _run_root_of_trust(state)
         if state.get("authority_first_result") != "ALLOW":
-            return _deny(
+            state = build_deny_feedback(
                 state,
                 denial_code="AUTHORITY_FIRST_FAILURE",
-                denial_reason=state.get("authority_first_reason", "Authority-first validation failed."),
+                denial_reason=state.get("authority_first_reason", "Authority first validation failed."),
                 retry_eligible=True,
-                required_change_for_retry="Provide valid anchor, attestation, consensus, and truth substrate.",
+                required_change_for_retry="Provide valid authority, attestation, and truth conditions.",
                 escalation_allowed=True,
                 fallback_action_allowed=False,
                 safe_state_required=True,
             )
+            state["decision"] = "DENY"
+            return state
 
-        state = _recompute_tier_and_thresholds(state)
-        state["procedural_truth_result"] = "PASS"
-        state["corroboration_met"] = True
+        state = _issue_core_token(
+            state,
+            "authority",
+            "root_of_trust",
+            "root_of_trust",
+            {
+                "authority_first_result": state.get("authority_first_result"),
+                "authority_first_reason": state.get("authority_first_reason"),
+            },
+        )
+
+        state = evaluate_procedural_truth(state)
+        state = apply_financial_factor(state)
+        state = apply_consequentiality_tier(state)
 
         _append_hash_chain(
             state,
@@ -381,28 +274,42 @@ def run_v6_pipeline(input_data: Dict[str, Any]) -> Dict[str, Any]:
             },
         )
 
-        if state.get("procedural_truth_result") == "ESCALATE":
-            return _escalate(
+        if state.get("procedural_truth_result") == PROCEDURAL_TRUTH_ESCALATE:
+            state = build_escalate_feedback(
                 state,
                 denial_code="PROCEDURAL_TRUTH_ESCALATION",
-                denial_reason="Procedural truth requires escalation.",
+                denial_reason="Procedural truth escalation required.",
                 safe_state_required=True,
             )
+            state["decision"] = "ESCALATE"
+            return state
 
-        if state.get("procedural_truth_result") != "PASS":
-            return _deny(
+        if state.get("procedural_truth_result") != PROCEDURAL_TRUTH_PASS:
+            state = build_deny_feedback(
                 state,
                 denial_code="PROCEDURAL_TRUTH_FAILURE",
                 denial_reason="Procedural truth validation failed.",
                 retry_eligible=True,
-                required_change_for_retry="Provide sufficient verified, attested, fresh, and consistent sources.",
+                required_change_for_retry="Provide sufficient procedural truth and evidentiary sufficiency.",
                 escalation_allowed=True,
                 fallback_action_allowed=True,
                 safe_state_required=False,
             )
+            state["decision"] = "DENY"
+            return state
+
+        state = _issue_core_token(
+            state,
+            "procedural_truth",
+            "procedural_truth_engine",
+            "procedural_truth",
+            {
+                "procedural_truth_result": state.get("procedural_truth_result"),
+                "corroboration_met": state.get("corroboration_met"),
+            },
+        )
 
         state = classification_engine.execute(state)
-
         _append_hash_chain(
             state,
             "classification",
@@ -412,28 +319,42 @@ def run_v6_pipeline(input_data: Dict[str, Any]) -> Dict[str, Any]:
             },
         )
 
-        if state.get("classification_result") == "ESCALATE":
-            return _escalate(
+        if state.get("classification_result") == CLASSIFICATION_ESCALATE:
+            state = build_escalate_feedback(
                 state,
                 denial_code="CLASSIFICATION_ESCALATION",
                 denial_reason=state.get("classification_reason", "Classification escalation required."),
                 safe_state_required=False,
             )
+            state["decision"] = "ESCALATE"
+            return state
 
-        if state.get("classification_result") != "ALLOW":
-            return _deny(
+        if state.get("classification_result") != CLASSIFICATION_ALLOW:
+            state = build_deny_feedback(
                 state,
                 denial_code="CLASSIFICATION_DENIAL",
                 denial_reason=state.get("classification_reason", "Classification denied."),
                 retry_eligible=True,
-                required_change_for_retry="Adjust classification inputs and resubmit a materially changed request.",
+                required_change_for_retry="Adjust classification inputs and resubmit materially changed request.",
                 escalation_allowed=True,
                 fallback_action_allowed=True,
                 safe_state_required=False,
             )
+            state["decision"] = "DENY"
+            return state
+
+        state = _issue_core_token(
+            state,
+            "classification",
+            "classification_engine",
+            "classification",
+            {
+                "classification_result": state.get("classification_result"),
+                "classification_reason": state.get("classification_reason"),
+            },
+        )
 
         state = licensing_engine.execute(state)
-
         _append_hash_chain(
             state,
             "licensing",
@@ -443,28 +364,42 @@ def run_v6_pipeline(input_data: Dict[str, Any]) -> Dict[str, Any]:
             },
         )
 
-        if state.get("licensing_result") == "ESCALATE":
-            return _escalate(
+        if state.get("licensing_result") == LICENSING_ESCALATE:
+            state = build_escalate_feedback(
                 state,
                 denial_code="LICENSING_ESCALATION",
                 denial_reason=state.get("licensing_reason", "Licensing escalation required."),
                 safe_state_required=False,
             )
+            state["decision"] = "ESCALATE"
+            return state
 
-        if state.get("licensing_result") != "ALLOW":
-            return _deny(
+        if state.get("licensing_result") != LICENSING_ALLOW:
+            state = build_deny_feedback(
                 state,
                 denial_code="LICENSING_DENIAL",
                 denial_reason=state.get("licensing_reason", "Licensing denied."),
                 retry_eligible=True,
-                required_change_for_retry="Provide valid licensing conditions or reduce scope/autonomy.",
+                required_change_for_retry="Provide valid licence state or reduce scope/autonomy.",
                 escalation_allowed=True,
                 fallback_action_allowed=True,
                 safe_state_required=False,
             )
+            state["decision"] = "DENY"
+            return state
+
+        state = _issue_core_token(
+            state,
+            "licensing",
+            "licensing_engine",
+            "licensing",
+            {
+                "licensing_result": state.get("licensing_result"),
+                "licensing_reason": state.get("licensing_reason"),
+            },
+        )
 
         state = governance_engine.execute(state)
-
         _append_hash_chain(
             state,
             "governance",
@@ -474,133 +409,184 @@ def run_v6_pipeline(input_data: Dict[str, Any]) -> Dict[str, Any]:
             },
         )
 
-        if state.get("governance_result") == "ESCALATE":
-            return _escalate(
-                state,
-                denial_code="GOVERNANCE_ESCALATION",
-                denial_reason=state.get("governance_reason", "Governance escalation required."),
-                safe_state_required=True,
-            )
+        state = apply_grc(state)
 
-        if state.get("governance_result") != "ALLOW":
-            return _deny(
-                state,
-                denial_code="GOVERNANCE_DENIAL",
-                denial_reason=state.get("governance_reason", "Governance denied."),
-                retry_eligible=True,
-                required_change_for_retry="Change authority, legality, scope, or invoke escalation.",
-                escalation_allowed=True,
-                fallback_action_allowed=True,
-                safe_state_required=True,
-            )
+        if state.get("governance_result") == GOVERNANCE_ESCALATE:
+            state["decision"] = "ESCALATE"
+            return state
 
-        state = run_domain_wrap(state)
-        state = _recompute_tier_and_thresholds(state)
+        if state.get("governance_result") != GOVERNANCE_ALLOW:
+            state["decision"] = "DENY"
+            return state
 
-        _append_hash_chain(
+        state = _issue_core_token(
             state,
-            "domains",
+            "governance",
+            "governance_engine",
+            "governance",
             {
-                "domain_result": state.get("domain_result"),
-                "tier": state.get("safety_profile", {}).get("computed_tier"),
-                "tier_recomputed": state.get("tier_recomputed"),
+                "governance_result": state.get("governance_result"),
+                "governance_reason": state.get("governance_reason"),
             },
         )
 
-        if state.get("domain_result") == "escalate":
-            return _escalate(
+        state = run_domain_wrap(state)
+        _append_hash_chain(
+            state,
+            "domain_wrap",
+            {
+                "domain_result": state.get("domain_result"),
+            },
+        )
+
+        if state.get("domain_result") == DOMAIN_ESCALATE_RESULT:
+            state = build_escalate_feedback(
                 state,
                 denial_code="DOMAIN_ESCALATION",
-                denial_reason="Domain wrap escalated the request.",
+                denial_reason="Domain escalation required.",
                 safe_state_required=False,
             )
+            state["decision"] = "ESCALATE"
+            return state
 
-        if state.get("domain_result") != "pass":
-            return _deny(
+        if state.get("domain_result") != DOMAIN_PASS_RESULT:
+            state = build_deny_feedback(
                 state,
                 denial_code="DOMAIN_DENIAL",
-                denial_reason=f"Domain wrap blocked current pathway: {state.get('domain_result')}",
+                denial_reason=f"Domain blocked pathway: {state.get('domain_result')}",
                 retry_eligible=True,
-                required_change_for_retry="Provide a materially changed request, fallback action, or escalation request.",
+                required_change_for_retry="Provide materially changed request, fallback request, or escalation request.",
                 escalation_allowed=True,
                 fallback_action_allowed=True,
                 safe_state_required=False,
             )
+            state["decision"] = "DENY"
+            return state
 
-        aurion_loops = 0
-        max_aurion_loops = 12
+        state = _issue_core_token(
+            state,
+            "domain",
+            "domain_wrap",
+            "domain_wrap",
+            {
+                "domain_result": state.get("domain_result"),
+            },
+        )
 
+        aurion_attempts = 0
         while True:
-            aurion_loops += 1
+            aurion_attempts += 1
             state = run_aurion15(state)
-            state = _recompute_tier_and_thresholds(state)
 
             _append_hash_chain(
                 state,
-                f"aurion:{aurion_loops}",
+                f"aurion_runtime:{aurion_attempts}",
                 {
                     "aurion15_result": state.get("aurion15_result"),
                     "candidate_attempt_count": state.get("candidate_attempt_count"),
-                    "tier": state.get("safety_profile", {}).get("computed_tier"),
+                    "current_candidate": state.get("current_candidate"),
                 },
             )
 
-            if state.get("aurion15_result") == "pass":
+            if state.get("aurion15_result") == AURION_PASS_RESULT:
                 break
 
-            if state.get("aurion15_result") == "escalate":
-                return _escalate(
+            if state.get("aurion15_result") == AURION_ESCALATE_RESULT:
+                state = build_escalate_feedback(
                     state,
                     denial_code="AURION_ESCALATION",
-                    denial_reason="Aurion runtime escalated the request.",
+                    denial_reason="Aurion escalation required.",
                     safe_state_required=False,
                 )
+                state["decision"] = "ESCALATE"
+                return state
 
-            if aurion_loops >= max_aurion_loops or state.get("aurion15_result") == "require_next_candidate":
-                return _deny(
-                    state,
-                    denial_code="AURION_RESOLUTION_FAILURE",
-                    denial_reason="Aurion could not resolve a valid pathway.",
-                    retry_eligible=True,
-                    required_change_for_retry="Provide materially changed request, fallback action, or escalation request.",
-                    escalation_allowed=True,
-                    fallback_action_allowed=True,
-                    safe_state_required=False,
-                )
+            if (
+                state.get("aurion15_result") == AURION_REQUIRE_NEXT_CANDIDATE_RESULT
+                and aurion_attempts < AURION_MAX_CANDIDATE_ATTEMPTS
+            ):
+                continue
 
-        state = _run_execution_gate(state)
+            state = build_deny_feedback(
+                state,
+                denial_code="AURION_RESOLUTION_FAILURE",
+                denial_reason="Aurion could not resolve a valid pathway.",
+                retry_eligible=True,
+                required_change_for_retry="Provide materially changed request, fallback request, or escalation request.",
+                escalation_allowed=True,
+                fallback_action_allowed=True,
+                safe_state_required=False,
+            )
+            state["decision"] = "DENY"
+            return state
 
+        state = _issue_core_token(
+            state,
+            "aurion",
+            "aurion15_runtime",
+            "aurion_runtime",
+            {
+                "aurion15_result": state.get("aurion15_result"),
+                "candidate_attempt_count": state.get("candidate_attempt_count"),
+                "current_candidate": state.get("current_candidate"),
+            },
+        )
+
+        state = _issue_core_token(
+            state,
+            "execution_boundary",
+            "execution_gate",
+            "execution_prep",
+            {
+                "boundary_clear": True,
+            },
+        )
+
+        state = _issue_core_token(
+            state,
+            "execution_attestation",
+            "execution_gate",
+            "execution_prep",
+            {
+                "attested_for_execution": True,
+            },
+        )
+
+        state = run_execution_gate(state)
         _append_hash_chain(
             state,
-            "execution",
+            "execution_gate",
             {
                 "execution_result": state.get("execution_result"),
                 "decision": state.get("decision"),
+                "execution_reason": state.get("execution_reason"),
             },
         )
 
         if state.get("execution_result") != "EXECUTE":
-            return _deny(
-                state,
-                denial_code="EXECUTION_GATE_FAILURE",
-                denial_reason="Execution gate halted the request.",
-                retry_eligible=False,
-                required_change_for_retry="Execution gate failure requires governed re-entry.",
-                escalation_allowed=True,
-                fallback_action_allowed=False,
-                safe_state_required=True,
-            )
+            if state.get("decision") not in {"DENY", "ESCALATE"}:
+                state = build_deny_feedback(
+                    state,
+                    denial_code="EXECUTION_GATE_FAILURE",
+                    denial_reason="Execution gate halted the request.",
+                    retry_eligible=False,
+                    required_change_for_retry="Execution gate failure requires governed re-entry.",
+                    escalation_allowed=True,
+                    fallback_action_allowed=False,
+                    safe_state_required=True,
+                )
+                state["decision"] = "DENY"
+            return state
 
         state = _finalize_audit(state)
-
         _append_hash_chain(
             state,
             "audit",
             {
                 "audit_hash": state.get("audit_hash"),
-                "ledger_entries": state.get("audit_ledger"),
+                "ledger_entries": len(state.get("audit_ledger", [])),
             },
         )
 
-        return state
-
+        return {
+ 
