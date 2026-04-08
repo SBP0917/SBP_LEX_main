@@ -1,76 +1,152 @@
-from typing import Dict, Any
+from __future__ import annotations
 
-from sbp_lex.aurion15.candidate.candidate_generator import generate_candidates
-from sbp_lex.aurion15.candidate.candidate_ranker import rank_candidates
-from sbp_lex.aurion15.candidate.runtime_constraint_controller import apply_runtime_constraints
-from sbp_lex.aurion15.candidate.candidate_selector import select_candidate
-from sbp_lex.aurion15.candidate.candidate_search_controller import candidate_search_required
-from sbp_lex.governance.procedural_truth import compute_safety_tier
+from typing import Dict, Any, List, Optional
 
+
+# ─────────────────────────────────────────────
+# SBP-LEX V6 — AURION RUNTIME (LOCKED)
+# ─────────────────────────────────────────────
+
+AURION_PASS = "pass"
+AURION_FAIL = "fail"
+AURION_ESCALATE = "escalate"
+AURION_REQUIRE_NEXT = "require_next_candidate"
+
+
+# ─────────────────────────────────────────────
+# ENTRY
+# ─────────────────────────────────────────────
 
 def run_aurion15(state: Dict[str, Any]) -> Dict[str, Any]:
-    state.setdefault("aurion15_trace", [])
+    """
+    Deterministic pathway resolution loop (single step).
+    """
+
+    state.setdefault("aurion_trace", [])
+    state.setdefault("candidate_queue", [])
     state.setdefault("candidate_attempt_count", 0)
-    state.setdefault("safety_profile", {
-        "human_safety": 0,
-        "irreversibility": 0,
-        "cascading_impact": 0,
-        "financial_operational": 0,
-        "computed_tier": None,
-    })
 
-    if not state.get("candidate_pathways"):
-        state = generate_candidates(state)
+    # ensure candidates exist
+    if not state["candidate_queue"]:
+        state["candidate_queue"] = _generate_candidates(state)
 
-    state = apply_runtime_constraints(state)
-    state = rank_candidates(state)
-    state = select_candidate(state)
-
-    candidate = state.get("current_candidate")
+    candidate = _get_next_candidate(state)
 
     if not candidate:
-        state["aurion15_result"] = "require_next_candidate"
-        state["aurion15_trace"].append({
-            "result": "require_next_candidate",
-            "attempt": state.get("candidate_attempt_count", 0),
-            "tier": state.get("safety_profile", {}).get("computed_tier"),
-        })
+        return _fail(state, "no_candidates_available")
+
+    state["current_candidate"] = candidate
+    state["candidate_attempt_count"] += 1
+
+    evaluation = _evaluate_candidate(state, candidate)
+
+    state["aurion_trace"].append(
+        {
+            "candidate": candidate,
+            "evaluation": evaluation,
+        }
+    )
+
+    # decision mapping
+    if evaluation["result"] == "pass":
+        state["aurion15_result"] = AURION_PASS
         return state
 
-    tier_recomputed = False
+    if evaluation["result"] == "escalate":
+        state["aurion15_result"] = AURION_ESCALATE
+        state["aurion_reason"] = evaluation["reason"]
+        return state
 
-    mode = candidate.get("mode")
-    if mode == "fallback":
-        state["safety_profile"]["cascading_impact"] = max(
-            int(state["safety_profile"].get("cascading_impact", 0)), 2
-        )
-        tier_recomputed = True
+    if _has_remaining_candidates(state):
+        state["aurion15_result"] = AURION_REQUIRE_NEXT
+        return state
 
-    if mode == "safe":
-        state["safety_profile"]["irreversibility"] = max(
-            int(state["safety_profile"].get("irreversibility", 0)), 1
-        )
-        tier_recomputed = True
+    return _fail(state, evaluation["reason"])
 
-    if tier_recomputed:
-        state = compute_safety_tier(state)
 
-    state["aurion15_trace"].append({
-        "candidate": candidate,
-        "result": "pass",
-        "attempt": state.get("candidate_attempt_count", 0),
-        "tier": state.get("safety_profile", {}).get("computed_tier"),
-        "tier_recomputed": tier_recomputed,
-    })
+# ─────────────────────────────────────────────
+# CANDIDATE GENERATION
+# ─────────────────────────────────────────────
 
-    state["best_candidate"] = candidate
-    state["aurion15_result"] = "pass"
+def _generate_candidates(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Deterministic candidate generation.
+    """
 
-    if candidate_search_required(state):
-        state["aurion15_trace"].append({
-            "result": "search_exhausted",
-            "attempt": state.get("candidate_attempt_count", 0),
-            "tier": state.get("safety_profile", {}).get("computed_tier"),
-        })
+    base_action = state.get("action")
+    payload = state.get("payload", {})
 
+    candidates = [
+        {"type": "direct", "action": base_action, "payload": payload},
+        {"type": "restricted", "action": base_action, "payload": payload},
+        {"type": "minimal", "action": base_action, "payload": {}},
+    ]
+
+    return candidates
+
+
+def _get_next_candidate(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not state["candidate_queue"]:
+        return None
+    return state["candidate_queue"].pop(0)
+
+
+def _has_remaining_candidates(state: Dict[str, Any]) -> bool:
+    return len(state.get("candidate_queue", [])) > 0
+
+
+# ─────────────────────────────────────────────
+# CANDIDATE EVALUATION
+# ─────────────────────────────────────────────
+
+def _evaluate_candidate(state: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Deterministic evaluation based on:
+    - domain result
+    - governance
+    - risk signals
+    """
+
+    # governance must already be allow
+    if state.get("governance_result") != "ALLOW":
+        return {"result": "fail", "reason": "governance_not_allow"}
+
+    # domain must be pass
+    if state.get("domain_result") != "pass":
+        return {"result": "fail", "reason": "domain_not_pass"}
+
+    # risk check
+    signals = state.get("collective_signals", {})
+    risk = signals.get("risk_potential_signal", 1.0)
+
+    try:
+        risk_value = float(risk)
+    except Exception:
+        return {"result": "fail", "reason": "invalid_risk_signal"}
+
+    if risk_value >= 0.95:
+        return {"result": "escalate", "reason": "extreme_risk_detected"}
+
+    # candidate type filtering
+    ctype = candidate.get("type")
+
+    if ctype == "direct" and risk_value < 0.7:
+        return {"result": "pass", "reason": "direct_path_valid"}
+
+    if ctype == "restricted" and risk_value < 0.85:
+        return {"result": "pass", "reason": "restricted_path_valid"}
+
+    if ctype == "minimal":
+        return {"result": "pass", "reason": "minimal_safe_path"}
+
+    return {"result": "fail", "reason": "candidate_not_admissible"}
+
+
+# ─────────────────────────────────────────────
+# FAIL HANDLER
+# ─────────────────────────────────────────────
+
+def _fail(state: Dict[str, Any], reason: str) -> Dict[str, Any]:
+    state["aurion15_result"] = AURION_FAIL
+    state["aurion_reason"] = reason
     return state
