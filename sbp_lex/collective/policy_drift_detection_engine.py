@@ -21,4 +21,23 @@ def policy_drift_detection_engine(payload: dict) -> EngineResult:
     drift_detected = current_hash != baseline_hash
 
     record = {
-        "action":
+        "action": action,
+        "current_policy_hash": current_hash,
+        "baseline_policy_hash": baseline_hash,
+        "drift_detected": drift_detected,
+    }
+
+    if drift_detected:
+        return EngineResult(
+            ok=False,
+            name="policy_drift_detection",
+            detail="Policy drift detected",
+            data={"policy_drift": record},
+        )
+
+    return EngineResult(
+        ok=True,
+        name="policy_drift_detection",
+        detail="No policy drift detected",
+        data={"policy_drift": record},
+    )

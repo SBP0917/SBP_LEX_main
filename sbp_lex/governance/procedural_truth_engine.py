@@ -50,7 +50,7 @@ percentage for downstream governance and execution engines.
 import time
 from .base_engine import BaseEngine
 from .registry import register
-from ...types import EngineResult
+from sbp_lex.types import EngineResult
 
 # PTODF thresholds
 PTODF_CRITICAL_TRUE_THRESHOLD = 0.99999   # 99.999%
@@ -208,3 +208,15 @@ class ProceduralTruthEngine(BaseEngine):
             detail="ptodf_threshold_not_met_for_assurance_tier",
             data={"procedural_truth": record},
         )
+
+
+def evaluate_procedural_truth(state: dict) -> dict:
+    result = procedural_truth_engine(state)
+    procedural_truth = result.data.get("procedural_truth", {})
+
+    state["procedural_truth"] = procedural_truth
+    state["procedural_truth_result"] = "PASS" if result.ok else "FAIL"
+    state["procedural_truth_reason"] = result.detail
+    state["procedural_truth_status"] = procedural_truth.get("procedural_truth_status")
+    state["procedural_truth_tier"] = procedural_truth.get("procedural_truth_tier")
+    return state

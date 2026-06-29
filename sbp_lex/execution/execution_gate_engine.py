@@ -1,41 +1,13 @@
 """
 Execution Gate Engine
 
-Purpose
--------
 Determines whether an action is permitted to execute based on the
 procedural truth state produced by the PTODF engine.
-
-Decision Logic
---------------
-true
-    Full execution permission.
-
-conclusive
-    Conditional execution with reduced autonomy ceiling.
-
-general_pass
-    Allowed only for low-risk general workflow actions.
-
-false
-    Execution denied.
-
-Autonomy Control
-----------------
-true → 100% autonomy
-conclusive → 50% autonomy ceiling
-general_pass → limited general workflow autonomy
-false → 0% autonomy
-
-Critical Action Protection
---------------------------
-Actions classified as financial, safety-critical, evidentiary,
-or transport control require a "true" five-nines truth state.
 """
 
 from .base_engine import BaseEngine
 from .registry import register
-from ...types import EngineResult
+from sbp_lex.types import EngineResult
 
 
 @register("execution_gate_engine")
@@ -67,153 +39,106 @@ class ExecutionGateEngine(BaseEngine):
         action_class = self._get_action_class(context)
 
         if truth_state == "true":
-            return EngineResult(
+            return self._result(
                 ok=True,
-                name=self.name,
                 detail="execution_allowed_five_nines_truth",
-                data={
-                    "execution_gate": {
-                        "execution_state": "approved",
-                        "autonomy_ceiling": 1.0,
-                        "verification": verified,
-                        "uncertainty": uncertainty,
-                        "truth_state": truth_state,
-                        "assurance_tier": assurance_tier,
-                    }
-                },
+                execution_state="approved",
+                autonomy_ceiling=1.0,
+                verified=verified,
+                uncertainty=uncertainty,
+                truth_state=truth_state,
+                assurance_tier=assurance_tier,
             )
 
         if truth_state == "conclusive":
-            if action_class in ["financial", "critical", "transport", "evidentiary", "safety_critical"]:
-                return EngineResult(
+            if action_class in [
+                "financial",
+                "critical",
+                "transport",
+                "evidentiary",
+                "safety_critical",
+            ]:
+                return self._result(
                     ok=False,
-                    name=self.name,
                     detail="execution_blocked_conclusive_state_for_critical_action",
-                    data={
-                        "execution_gate": {
-                            "execution_state": "denied",
-                            "autonomy_ceiling": 0.0,
-                            "verification": verified,
-                            "uncertainty": uncertainty,
-                            "truth_state": truth_state,
-                            "assurance_tier": assurance_tier,
-                        }
-                    },
+                    execution_state="denied",
+                    autonomy_ceiling=0.0,
+                    verified=verified,
+                    uncertainty=uncertainty,
+                    truth_state=truth_state,
+                    assurance_tier=assurance_tier,
                 )
 
-            return EngineResult(
+            return self._result(
                 ok=True,
-                name=self.name,
                 detail="execution_allowed_conclusive_state_with_limited_autonomy",
-                data={
-                    "execution_gate": {
-                        "execution_state": "conditional",
-                        "autonomy_ceiling": 0.5,
-                        "verification": verified,
-                        "uncertainty": uncertainty,
-                        "truth_state": truth_state,
-                        "assurance_tier": assurance_tier,
-                    }
-                },
+                execution_state="conditional",
+                autonomy_ceiling=0.5,
+                verified=verified,
+                uncertainty=uncertainty,
+                truth_state=truth_state,
+                assurance_tier=assurance_tier,
             )
 
         if truth_state == "general_pass":
             if action_class != "general":
-                return EngineResult(
+                return self._result(
                     ok=False,
-                    name=self.name,
                     detail="execution_blocked_general_pass_outside_general_workflow",
-                    data={
-                        "execution_gate": {
-                            "execution_state": "denied",
-                            "autonomy_ceiling": 0.0,
-                            "verification": verified,
-                            "uncertainty": uncertainty,
-                            "truth_state": truth_state,
-                            "assurance_tier": assurance_tier,
-                        }
-                    },
+                    execution_state="denied",
+                    autonomy_ceiling=0.0,
+                    verified=verified,
+                    uncertainty=uncertainty,
+                    truth_state=truth_state,
+                    assurance_tier=assurance_tier,
                 )
 
-            return EngineResult(
+            return self._result(
                 ok=True,
-                name=self.name,
                 detail="execution_allowed_general_workflow_state",
-                data={
-                    "execution_gate": {
-                        "execution_state": "limited_general",
-                        "autonomy_ceiling": 0.5,
-                        "verification": verified,
-                        "uncertainty": uncertainty,
-                        "truth_state": truth_state,
-                        "assurance_tier": assurance_tier,
-                    }
-                },
+                execution_state="limited_general",
+                autonomy_ceiling=0.5,
+                verified=verified,
+                uncertainty=uncertainty,
+                truth_state=truth_state,
+                assurance_tier=assurance_tier,
             )
 
-        return EngineResult(
+        return self._result(
             ok=False,
-            name=self.name,
             detail="execution_blocked_truth_threshold_not_met",
+            execution_state="denied",
+            autonomy_ceiling=0.0,
+            verified=verified,
+            uncertainty=uncertainty,
+            truth_state=truth_state,
+            assurance_tier=assurance_tier,
+        )
+
+    def _result(
+        self,
+        *,
+        ok: bool,
+        detail: str,
+        execution_state: str,
+        autonomy_ceiling: float,
+        verified: str,
+        uncertainty: str,
+        truth_state: str,
+        assurance_tier: str,
+    ) -> EngineResult:
+        return EngineResult(
+            ok=ok,
+            name=self.name,
+            detail=detail,
             data={
                 "execution_gate": {
-                    "execution_state": "denied",
-                    "autonomy_ceiling": 0.0,
+                    "execution_state": execution_state,
+                    "autonomy_ceiling": autonomy_ceiling,
                     "verification": verified,
                     "uncertainty": uncertainty,
                     "truth_state": truth_state,
                     "assurance_tier": assurance_tier,
                 }
-            },
-        )                    "verification": verified,
-                    "uncertainty": uncertainty,
-                    "truth_state": truth_state,
-                    "assurance_tier": assurance_tier,
-                },
-            )
-
-        # GENERAL PASS = only for general workflow
-        if truth_state == "general_pass":
-            if action_class != "general":
-                return EngineResult(
-                    ok=False,
-                    name=self.name,
-                    detail="execution_blocked_general_pass_outside_general_workflow",
-                    data={
-                        "execution_state": "denied",
-                        "autonomy_ceiling": 0.0,
-                        "verification": verified,
-                        "uncertainty": uncertainty,
-                        "truth_state": truth_state,
-                        "assurance_tier": assurance_tier,
-                    },
-                )
-
-            return EngineResult(
-                ok=True,
-                name=self.name,
-                detail="execution_allowed_general_workflow_state",
-                data={
-                    "execution_state": "limited_general",
-                    "autonomy_ceiling": 0.5,
-                    "verification": verified,
-                    "uncertainty": uncertainty,
-                    "truth_state": truth_state,
-                    "assurance_tier": assurance_tier,
-                },
-            )
-
-        # FALSE = deny
-        return EngineResult(
-            ok=False,
-            name=self.name,
-            detail="execution_blocked_truth_threshold_not_met",
-            data={
-                "execution_state": "denied",
-                "autonomy_ceiling": 0.0,
-                "verification": verified,
-                "uncertainty": uncertainty,
-                "truth_state": truth_state,
-                "assurance_tier": assurance_tier,
             },
         )

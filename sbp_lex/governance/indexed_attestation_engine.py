@@ -5,7 +5,6 @@ import json
 import time
 
 
-@indexed = None
 @register("indexed_attestation")
 def indexed_attestation_engine(payload: dict) -> EngineResult:
     action = payload.get("action")
@@ -16,19 +15,21 @@ def indexed_attestation_engine(payload: dict) -> EngineResult:
         return EngineResult(
             ok=False,
             name="indexed_attestation",
-            detail="No indexed attestations provided"
+            detail="No indexed attestations provided",
         )
 
     normalized_attestations = []
 
     for attestation in attestations:
-        normalized_attestations.append({
-            "source_id": attestation.get("source_id"),
-            "source_type": attestation.get("source_type"),
-            "attestation_hash": attestation.get("attestation_hash"),
-            "verified": attestation.get("verified", False),
-            "timestamp": attestation.get("timestamp"),
-        })
+        normalized_attestations.append(
+            {
+                "source_id": attestation.get("source_id"),
+                "source_type": attestation.get("source_type"),
+                "attestation_hash": attestation.get("attestation_hash"),
+                "verified": attestation.get("verified", False),
+                "timestamp": attestation.get("timestamp"),
+            }
+        )
 
     verified_count = sum(
         1 for item in normalized_attestations if item.get("verified") is True
@@ -59,4 +60,12 @@ def indexed_attestation_engine(payload: dict) -> EngineResult:
             ok=False,
             name="indexed_attestation",
             detail="Indexed attestation verification failed",
-            data={"indexed_attestation": record}
+            data={"indexed_attestation": record},
+        )
+
+    return EngineResult(
+        ok=True,
+        name="indexed_attestation",
+        detail="Indexed attestations verified",
+        data={"indexed_attestation": record},
+    )

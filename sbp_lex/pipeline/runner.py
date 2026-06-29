@@ -588,5 +588,19 @@ def run_v6(input_data: Dict[str, Any], pre_context_signals: Dict[str, Any] | Non
             },
         )
 
+        return state
+
+    except Exception as exc:
         return {
- 
+            "decision": "DENY",
+            "execution_result": "HALT",
+            "execution_reason": "pipeline_runtime_error",
+            "error": str(exc),
+        }
+
+
+def run_v6_pipeline(
+    input_data: Dict[str, Any],
+    pre_context_signals: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    return run_v6(input_data, pre_context_signals)
