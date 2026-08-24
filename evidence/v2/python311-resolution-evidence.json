@@ -1,0 +1,206 @@
+{
+  "schema_id": "SBP_LEX_V2_PYTHON311_RESOLUTION_EVIDENCE_V1",
+  "evidence_date": "2026-08-24",
+  "authority_granted": false,
+  "runtime_attachment": "NONE",
+  "canonical_lock_status": "UNSEALED_ACCEPTED_HISTORY_AND_FREEZE_BINDING_UNAVAILABLE",
+  "canonical_lock_path": "python-dependencies.lock.json",
+  "canonical_lock_created": false,
+  "canonical_lock_reason": "The V2 repository is not frozen and no genuine accepted-attempt-history artifact exists. A rollback digest was not fabricated.",
+  "requirements_path": "requirements.txt",
+  "requirements_file_sha512": "7d34bd78e401ceb4843716c27989c4be82bb13b826f0413eebb277fdaa98786fc17af9e149b7f76e541904e27c49c971755f5a37a7a60a7c14ca8fae4a03fd10",
+  "requirements_canonical_sha512": "10babf37d1c1f85696bb322f68b7e5bdb71d7021cc015e20a556207c71b0bb8f2e84256a9fc30f39c6901fda9dbc286f77777bdca904924198fe375c194a59c2",
+  "target_environment": {
+    "implementation": "CPython",
+    "python_version": "3.11.9",
+    "abi_tag": "cpython-311",
+    "platform_tag": "win-amd64"
+  },
+  "interpreter_evidence": {
+    "installer_url": "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe",
+    "installer_md5_published_by_python_org": "e8dcd502e34932eebcaf1be056d5cbcd",
+    "installer_sha256_observed": "5ee42c4eee1e6b4464bb23722f90b45303f79442df63083f05322f1785f5fdde",
+    "python_executable_sha256_observed": "5f7b89a612c9b8af1d6456cdfcd1dbe5ca630849e79aebced9bee9a6694952ec",
+    "pip_version_used_for_resolution": "24.0"
+  },
+  "resolution": {
+    "status": "PASS_UNSEALED_NON_ADMITTING",
+    "wheelhouse": "runtime_artifacts/python311-wheelhouse",
+    "resolver_command_class": "python-3.11.9 -m pip download --only-binary=:all: --requirement requirements.txt",
+    "clean_environment_import": "PASS",
+    "pip_check": "PASS",
+    "package_count": 17
+  },
+  "packages": [
+    {
+      "name": "annotated-doc",
+      "version": "0.0.5",
+      "direct": true,
+      "scopes": ["production"],
+      "dependencies": [],
+      "wheel": "annotated_doc-0.0.5-py3-none-any.whl",
+      "wheel_bytes": 5302,
+      "hashes": ["sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101"]
+    },
+    {
+      "name": "annotated-types",
+      "version": "0.8.0",
+      "direct": true,
+      "scopes": ["production"],
+      "dependencies": [],
+      "wheel": "annotated_types-0.8.0-py3-none-any.whl",
+      "wheel_bytes": 13427,
+      "hashes": ["sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0"]
+    },
+    {
+      "name": "anyio",
+      "version": "4.14.2",
+      "direct": true,
+      "scopes": ["production"],
+      "dependencies": ["idna", "typing-extensions"],
+      "wheel": "anyio-4.14.2-py3-none-any.whl",
+      "wheel_bytes": 125813,
+      "hashes": ["sha256:9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494"]
+    },
+    {
+      "name": "cffi",
+      "version": "2.1.1",
+      "direct": true,
+      "scopes": ["production"],
+      "dependencies": ["pycparser"],
+      "wheel": "cffi-2.1.1-cp311-cp311-win_amd64.whl",
+      "wheel_bytes": 185096,
+      "hashes": ["sha256:42f6930c31dc7f50732c9ae793c2786c7b6b044195967bbdde40bb9be81c4cc0"]
+    },
+    {
+      "name": "click",
+      "version": "8.4.2",
+      "direct": true,
+      "scopes": ["production"],
+      "dependencies": ["colorama"],
+      "wheel": "click-8.4.2-py3-none-any.whl",
+      "wheel_bytes": 119243,
+      "hashes": ["sha256:e6f9f66136c816745b9d65817da91d61d957fb16e02e4dcd0552553c5a197b76"]
+    },
+    {
+      "name": "colorama",
+      "version": "0.4.6",
+      "direct": true,
+      "scopes": ["production"],
+      "dependencies": [],
+      "wheel": "colorama-0.4.6-py2.py3-none-any.whl",
+      "wheel_bytes": 25335,
+      "hashes": ["sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6"]
+    },
+    {
+      "name": "cryptography",
+      "version": "50.0.0",
+      "direct": true,
+      "scopes": ["production"],
+      "dependencies": ["cffi"],
+      "wheel": "cryptography-50.0.0-cp311-abi3-win_amd64.whl",
+      "wheel_bytes": 3840395,
+      "hashes": ["sha256:bd1c592e4d5974f0d08d4888e432157adba757c66da0246918e43677fafa2d30"]
+    },
+    {
+      "name": "fastapi",
+      "version": "0.141.1",
+      "direct": true,
+      "scopes": ["production"],
+      "dependencies": ["annotated-doc", "pydantic", "starlette", "typing-extensions", "typing-inspection"],
+      "wheel": "fastapi-0.141.1-py3-none-any.whl",
+      "wheel_bytes": 131954,
+      "hashes": ["sha256:bfb91aa2d334c61cb35ba9a116fc123b3d3df31640b801cf57a7a78ec3f603b3"]
+    },
+    {
+      "name": "h11",
+      "version": "0.16.0",
+      "direct": true,
+      "scopes": ["production"],
+      "dependencies": [],
+      "wheel": "h11-0.16.0-py3-none-any.whl",
+      "wheel_bytes": 37515,
+      "hashes": ["sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86"]
+    },
+    {
+      "name": "idna",
+      "version": "3.19",
+      "direct": true,
+      "scopes": ["production"],
+      "dependencies": [],
+      "wheel": "idna-3.19-py3-none-any.whl",
+      "wheel_bytes": 68550,
+      "hashes": ["sha256:815e7be7a7806d54abb586dc943addc79e8b2ee16915059658cbeff4b1b43bf4"]
+    },
+    {
+      "name": "pycparser",
+      "version": "3.0",
+      "direct": true,
+      "scopes": ["production"],
+      "dependencies": [],
+      "wheel": "pycparser-3.0-py3-none-any.whl",
+      "wheel_bytes": 48172,
+      "hashes": ["sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992"]
+    },
+    {
+      "name": "pydantic",
+      "version": "2.13.4",
+      "direct": true,
+      "scopes": ["production"],
+      "dependencies": ["annotated-types", "pydantic-core", "typing-extensions", "typing-inspection"],
+      "wheel": "pydantic-2.13.4-py3-none-any.whl",
+      "wheel_bytes": 472262,
+      "hashes": ["sha256:45a282cde31d808236fd7ea9d919b128653c8b38b393d1c4ab335c62924d9aba"]
+    },
+    {
+      "name": "pydantic-core",
+      "version": "2.46.4",
+      "direct": true,
+      "scopes": ["production"],
+      "dependencies": ["typing-extensions"],
+      "wheel": "pydantic_core-2.46.4-cp311-cp311-win_amd64.whl",
+      "wheel_bytes": 2071114,
+      "hashes": ["sha256:6f2eeda33a839975441c86a4119e1383c50b47faf0cbb5176985565c6bb02c33"]
+    },
+    {
+      "name": "starlette",
+      "version": "1.6.0",
+      "direct": true,
+      "scopes": ["production"],
+      "dependencies": ["anyio", "typing-extensions"],
+      "wheel": "starlette-1.6.0-py3-none-any.whl",
+      "wheel_bytes": 75969,
+      "hashes": ["sha256:a86dd39d14bb45f85a3d18525215a9ef0cfd1f192ac793220e72598c90335f0c"]
+    },
+    {
+      "name": "typing-extensions",
+      "version": "4.16.0",
+      "direct": true,
+      "scopes": ["production"],
+      "dependencies": [],
+      "wheel": "typing_extensions-4.16.0-py3-none-any.whl",
+      "wheel_bytes": 45571,
+      "hashes": ["sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8"]
+    },
+    {
+      "name": "typing-inspection",
+      "version": "0.4.4",
+      "direct": true,
+      "scopes": ["production"],
+      "dependencies": ["typing-extensions"],
+      "wheel": "typing_inspection-0.4.4-py3-none-any.whl",
+      "wheel_bytes": 14750,
+      "hashes": ["sha256:65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147"]
+    },
+    {
+      "name": "uvicorn",
+      "version": "0.52.4",
+      "direct": true,
+      "scopes": ["production"],
+      "dependencies": ["click", "h11"],
+      "wheel": "uvicorn-0.52.4-py3-none-any.whl",
+      "wheel_bytes": 79871,
+      "hashes": ["sha256:f86e41a149d7d05a9969337e3946a9c171c06a5d42680896daaba624aeac8da1"]
+    }
+  ]
+}

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import Dict, Any, List, Optional
 
+from .engine_graph import EngineGraphError, run_registered_engine_graph
+
 
 # ─────────────────────────────────────────────
-# SBP-LEX V6 — AURION RUNTIME (LOCKED)
+# SBP-LEX V2 — AURION RUNTIME (LOCKED)
 # ─────────────────────────────────────────────
 
 AURION_PASS = "pass"
@@ -37,6 +39,29 @@ def run_aurion15(state: Dict[str, Any]) -> Dict[str, Any]:
 
     state["current_candidate"] = candidate
     state["candidate_attempt_count"] += 1
+
+    try:
+        state = run_registered_engine_graph(state)
+    except EngineGraphError as exc:
+        state["engine_graph_result"] = "invalid"
+        state["engine_graph_reason"] = str(exc)
+        return _fail(state, "engine_graph_invalid")
+
+    if state.get("engine_graph_result") == "escalate":
+        state["aurion15_result"] = AURION_ESCALATE
+        state["aurion_reason"] = state.get(
+            "engine_graph_reason", "engine_graph_escalation"
+        )
+        return state
+
+    if state.get("engine_graph_result") != "pass":
+        state["aurion_reason"] = state.get(
+            "engine_graph_reason", "engine_graph_did_not_pass"
+        )
+        if _has_remaining_candidates(state):
+            state["aurion15_result"] = AURION_REQUIRE_NEXT
+            return state
+        return _fail(state, state["aurion_reason"])
 
     evaluation = _evaluate_candidate(state, candidate)
 

@@ -1,7 +1,6 @@
 from sbp_lex.types import EngineResult
 from .registry import register
 import hashlib
-import time
 
 
 @register("audit")
@@ -13,14 +12,14 @@ def audit_engine(payload: dict) -> EngineResult:
     attestation = payload.get("attestation")
     anchor_validation = payload.get("anchor_validation")
 
-    timestamp = int(time.time())
+    timestamp = int(payload.get("evaluation_time", 0))
 
     audit_string = (
         f"{timestamp}|{action}|{authority}|{jurisdiction}|"
         f"{precedence}|{attestation}|{anchor_validation}"
     )
 
-    audit_hash = hashlib.sha256(audit_string.encode()).hexdigest()
+    audit_hash = hashlib.sha512(audit_string.encode()).hexdigest()
 
     audit_record = {
         "timestamp": timestamp,

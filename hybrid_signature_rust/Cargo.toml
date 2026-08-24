@@ -1,0 +1,40 @@
+[package]
+name = "sbp-lex-v2-hybrid-signature"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "UNLICENSED"
+publish = false
+description = "Typed SBP-LEX V2 strict ML-DSA-87 AND Ed448 signature boundary"
+
+[workspace]
+resolver = "2"
+
+[lib]
+path = "src/lib.rs"
+
+[[example]]
+name = "generate_rust_vector"
+path = "examples/generate_rust_vector.rs"
+required-features = ["software-signing"]
+
+[features]
+default = []
+software-signing = []
+
+[dependencies]
+ed448-goldilocks-plus = { version = "=0.18.1", default-features = false, features = ["signing", "std"] }
+ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc", "zeroize"] }
+sha2 = "=0.11.0"
+zeroize = "=1.9.0"
+
+[dev-dependencies]
+base64 = "=0.22.1"
+serde_json = "=1.0.151"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"

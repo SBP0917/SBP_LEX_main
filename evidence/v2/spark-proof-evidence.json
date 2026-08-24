@@ -1,0 +1,57 @@
+{
+  "schema_id": "SBP_LEX_V2_SPARK_PROOF_EVIDENCE_V1",
+  "evidence_date": "2026-08-24",
+  "status": "PASS_REPOSITORY_LOCAL_NON_INDEPENDENT",
+  "authority_granted": false,
+  "runtime_attachment": "NONE",
+  "sealed": false,
+  "independent_validation": false,
+  "production_claim": false,
+  "commands": [
+    "alr --non-interactive --no-color build",
+    "alr --non-interactive --no-color gnatprove -P spark_safety_monitor.gpr --mode=all --level=2 --report=all",
+    "bin/spark_safety_monitor.exe",
+    ".venv/Scripts/python.exe tools/run_harness.py"
+  ],
+  "results": {
+    "build": "PASS",
+    "executable_assertions": "PASS",
+    "python_harness": "PASS",
+    "gnatprove": "PASS",
+    "gnatprove_checks_proved": 53,
+    "gnatprove_unproved_checks": 0
+  },
+  "toolchain": {
+    "alire_version": "2.1.1",
+    "alire_source_commit": "fa9a1a9971d159f8cb2b8007dbb73e9e029fc109",
+    "alire_archive_sha256": "863013b1f94da6f3b7d0d5a74022ac3370424eeea9a470ebdb33d188d61b9125",
+    "gnatprove_version": "FSF 16.1.0",
+    "why3_version": "1.8.2+git",
+    "alt_ergo_version": "2.6.1",
+    "cvc5_version": "1.3.2",
+    "z3_version": "4.15.4",
+    "gnatls_version": "16.1.0",
+    "gprbuild_declared_lock_version": "26.0.1",
+    "gprbuild_reported_version": "26.0.0 (2026-04-15-gpr2)"
+  },
+  "sha512": {
+    "spark_safety_monitor/src/sbp_lex_safety_monitor.ads": "0a637d2dcd30b843666abf774e2828cc6f35c5b5ff6aa26b82135a52ab2ed723be8d48f7613f84eaded05696bdb23b2af0451e6906096958b20b3bb3f67c410c",
+    "spark_safety_monitor/src/sbp_lex_safety_monitor.adb": "aa216623d17bcd7f5bf529be60347fd24558a1e5045cef50e3b33601d0cc17ef41203031e5d74396951e9980e7eb68af09e7eb7ccad8ca33343f8f6b09f434dc",
+    "spark_safety_monitor/src/spark_safety_monitor.adb": "c6444b7aec3487b790b9d110c2d7053d80b4f779cdbd229bb32de3f58a20c39af4adff8918122690eea3d4a5fadc9424cd3a4fa774fa59c0c82fc669cd850bc4",
+    "spark_safety_monitor/spark_safety_monitor.gpr": "6d35c67c51bbdbb7d3eb96388a02db63cced7cc09ec5f31e40cb8e741af4bbce77c1cec0b482df75bb63e6e02d24adf33933398bc73157ede2705169a5c9738e",
+    "spark_safety_monitor/alire.toml": "53f87984a653758568725f7379898ebeeae9179f8f5f7fa5fbbf50ebb8df630aa9647594885e9d02dc13310be67be614db36cee239a6713895c94d24b852bb37",
+    "spark_safety_monitor/alire/alire.lock": "ed59fac4402e96c40b08d91bbe3a847226963337cf8c9c2e62924d41ae5d218b9ffbc556f899bff13e2bb69ba56e3a29b08700f8ece9015d74937bb68846ec1b",
+    "spark_safety_monitor/obj/gnatprove/gnatprove.out": "a31b705f4354305388ce35f52e027abb79a3603b1ee43358e8451a754b882400230907749d1cebe0d2e53a6c388b5baf42305baf3d97ba8e5d0d7c79c802696c",
+    "spark_safety_monitor/bin/spark_safety_monitor.exe": "05eb7b1a040d764a63788fdc8aa57842e744fd21397fb5ef7aa852c75b8a6a936da1cefb83b66e694c29f45b544b419836278432a3701fa779e0771d567a17c0"
+  },
+  "assurance_boundary": {
+    "proved": "The 53 reported SPARK checks for the measured source completed under the recorded repository-local toolchain.",
+    "not_proved": [
+      "real HSM or TPM existence, custody, freshness, or non-exportability",
+      "independent physical or service safety-inhibit existence and effectiveness",
+      "truth or cryptographic validity of typed external inputs",
+      "production routing, non-bypass, storage, deployment, or live-effect safety",
+      "independent university or third-party validation"
+    ]
+  }
+}

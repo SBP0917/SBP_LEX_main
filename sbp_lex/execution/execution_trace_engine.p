@@ -15,7 +15,7 @@ def execution_trace_engine(payload: dict) -> EngineResult:
     timestamp = int(time.time())
 
     trace_material = f"{action}|{jurisdiction}|{authority}|{decision_token}|{audit_record}|{timestamp}"
-    trace_hash = hashlib.sha256(trace_material.encode()).hexdigest()
+    trace_hash = hashlib.sha512(trace_material.encode()).hexdigest()
 
     record = {
         "timestamp": timestamp,

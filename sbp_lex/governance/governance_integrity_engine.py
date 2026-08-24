@@ -21,7 +21,7 @@ def governance_integrity_engine(payload: dict) -> EngineResult:
         "decision_token": decision_token
     }
 
-    integrity_hash = hashlib.sha256(
+    integrity_hash = hashlib.sha512(
         json.dumps(integrity_material, sort_keys=True).encode()
     ).hexdigest()
 

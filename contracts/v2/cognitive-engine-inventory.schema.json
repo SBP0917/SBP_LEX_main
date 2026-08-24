@@ -1,0 +1,288 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sbp.local/contracts/v2/cognitive-engine-inventory.schema.json",
+  "title": "SBP-LEX V2 cognitive engine source inventory",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "inventory_status",
+    "authority_effect",
+    "runtime_activation",
+    "layer_order",
+    "layers"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "sbp.v2.cognitive-engine-inventory/1"
+    },
+    "inventory_status": {
+      "const": "IMPLEMENTATION_DEFINED_V2_SOURCE_INVENTORY"
+    },
+    "authority_effect": {
+      "const": "NONE"
+    },
+    "runtime_activation": {
+      "const": false
+    },
+    "layer_order": {
+      "const": ["AURION_15", "CKC", "NGK"]
+    },
+    "layers": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "prefixItems": [
+        { "$ref": "#/$defs/aurionLayer" },
+        { "$ref": "#/$defs/ckcLayer" },
+        { "$ref": "#/$defs/ngkLayer" }
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "engineName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*_engine$"
+    },
+    "engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonical_name",
+        "module",
+        "class_name",
+        "implementation_type",
+        "status",
+        "stage",
+        "dependencies",
+        "counted"
+      ],
+      "properties": {
+        "canonical_name": { "$ref": "#/$defs/engineName" },
+        "module": {
+          "type": "string",
+          "pattern": "^sbp_lex\\.[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+$"
+        },
+        "class_name": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Za-z0-9]*Engine$"
+        },
+        "implementation_type": {
+          "const": "AURION_ENGINE_CLASS"
+        },
+        "status": {
+          "const": "PROVISIONAL_CURRENT"
+        },
+        "stage": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 6
+        },
+        "dependencies": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/engineName" }
+        },
+        "counted": {
+          "const": true
+        }
+      }
+    },
+    "aurionLayer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "layer_id",
+        "status",
+        "filed_count",
+        "admitted_count",
+        "authoritative_complete_naming_list_available",
+        "unavailable_name_count",
+        "unavailable_sets",
+        "engines",
+        "aliases",
+        "external_dependencies",
+        "legacy_counting_policy",
+        "authority_granted",
+        "runtime_activation"
+      ],
+      "properties": {
+        "layer_id": { "const": "AURION_15" },
+        "status": { "const": "PROVISIONAL_CURRENT" },
+        "filed_count": { "const": 38 },
+        "admitted_count": { "const": 31 },
+        "authoritative_complete_naming_list_available": { "const": false },
+        "unavailable_name_count": { "const": 7 },
+        "unavailable_sets": {
+          "const": ["SEVEN_CANONICAL_ENGINE_NAMES"]
+        },
+        "engines": {
+          "type": "array",
+          "minItems": 31,
+          "maxItems": 31,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/engine" }
+        },
+        "aliases": {
+          "const": [
+            {
+              "alias": "legitimacy_engine",
+              "target": "legitimacy_verification_engine",
+              "status": "NON_COUNTING",
+              "counted": false
+            },
+            {
+              "alias": "jurisdiction_determination_engine",
+              "target": "jurisdiction_engine",
+              "status": "NON_COUNTING",
+              "counted": false
+            }
+          ]
+        },
+        "external_dependencies": {
+          "const": [
+            {
+              "name": "attestation_engine",
+              "implementation_type": "EXTERNAL_ENGINE_DEPENDENCY",
+              "status": "NON_COUNTING",
+              "counted": false
+            },
+            {
+              "name": "escalation_engine",
+              "implementation_type": "EXTERNAL_ENGINE_DEPENDENCY",
+              "status": "NON_COUNTING",
+              "counted": false
+            },
+            {
+              "name": "execution_gate_engine",
+              "implementation_type": "EXTERNAL_ENGINE_DEPENDENCY",
+              "status": "NON_COUNTING",
+              "counted": false
+            },
+            {
+              "name": "jurisdiction_engine",
+              "implementation_type": "EXTERNAL_ENGINE_DEPENDENCY",
+              "status": "NON_COUNTING",
+              "counted": false
+            },
+            {
+              "name": "output_discipline_engine",
+              "implementation_type": "EXTERNAL_ENGINE_DEPENDENCY",
+              "status": "NON_COUNTING",
+              "counted": false
+            },
+            {
+              "name": "procedural_truth_engine",
+              "implementation_type": "EXTERNAL_ENGINE_DEPENDENCY",
+              "status": "NON_COUNTING",
+              "counted": false
+            }
+          ]
+        },
+        "legacy_counting_policy": { "const": "EXCLUDED_SHADOW_ONLY" },
+        "authority_granted": { "const": false },
+        "runtime_activation": { "const": false }
+      }
+    },
+    "unavailableLayerCommon": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "layer_id",
+        "status",
+        "filed_count",
+        "admitted_count",
+        "authoritative_complete_naming_list_available",
+        "unavailable_name_count",
+        "unavailable_sets",
+        "horizon_years",
+        "engines",
+        "aliases",
+        "external_dependencies",
+        "legacy_counting_policy",
+        "authority_granted",
+        "runtime_activation"
+      ],
+      "properties": {
+        "layer_id": {
+          "enum": ["CKC", "NGK"]
+        },
+        "status": { "const": "AUTHORITATIVE_SOURCE_UNAVAILABLE" },
+        "filed_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "admitted_count": { "const": 0 },
+        "authoritative_complete_naming_list_available": { "const": false },
+        "unavailable_name_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "unavailable_sets": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "horizon_years": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["minimum", "maximum"],
+          "properties": {
+            "minimum": { "type": "integer", "minimum": 1 },
+            "maximum": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "engines": { "type": "array", "maxItems": 0 },
+        "aliases": { "type": "array", "maxItems": 0 },
+        "external_dependencies": { "type": "array", "maxItems": 0 },
+        "legacy_counting_policy": { "const": "EXCLUDED_SHADOW_ONLY" },
+        "authority_granted": { "const": false },
+        "runtime_activation": { "const": false }
+      }
+    },
+    "ckcLayer": {
+      "allOf": [
+        { "$ref": "#/$defs/unavailableLayerCommon" },
+        {
+          "properties": {
+            "layer_id": { "const": "CKC" },
+            "filed_count": { "const": 26 },
+            "unavailable_name_count": { "const": 26 },
+            "unavailable_sets": {
+              "const": [
+                "ALL_26_CANONICAL_ENGINE_NAMES",
+                "FOUR_NAMED_LONG_HORIZON_FUNCTION_NAMES"
+              ]
+            },
+            "horizon_years": {
+              "const": { "minimum": 25, "maximum": 150 }
+            }
+          }
+        }
+      ]
+    },
+    "ngkLayer": {
+      "allOf": [
+        { "$ref": "#/$defs/unavailableLayerCommon" },
+        {
+          "properties": {
+            "layer_id": { "const": "NGK" },
+            "filed_count": { "const": 32 },
+            "unavailable_name_count": { "const": 32 },
+            "unavailable_sets": {
+              "const": [
+                "ALL_32_CANONICAL_ENGINE_NAMES",
+                "CONDITIONAL_TAG_AND_CLASSIFICATION_VOCABULARY"
+              ]
+            },
+            "horizon_years": {
+              "const": { "minimum": 50, "maximum": 500 }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

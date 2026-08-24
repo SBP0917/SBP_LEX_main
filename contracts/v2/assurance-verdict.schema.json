@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sbp.local/contracts/v2/assurance-verdict.schema.json",
+  "title": "SBP-LEX V2 veto-verifier verdict",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "verifier_version",
+    "accepted",
+    "reason_code"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "sbp.v2.assurance-verdict/1"
+    },
+    "verifier_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "accepted": {
+      "type": "boolean"
+    },
+    "reason_code": {
+      "enum": [
+        "VERIFIED",
+        "INPUT_TOO_LARGE",
+        "MALFORMED_ENVELOPE",
+        "UNSUPPORTED_VERSION",
+        "INVALID_REQUEST_FINGERPRINT",
+        "INVALID_CHECKPOINT",
+        "INVALID_PREVIOUS_DIGEST",
+        "INVALID_BASE64",
+        "NON_CANONICAL_BASE64",
+        "STATE_DIGEST_MISMATCH",
+        "INVALID_CANONICAL_STATE",
+        "FLOAT_FORBIDDEN",
+        "NON_CANONICAL_STATE",
+        "INTERNAL_VERIFIER_ERROR"
+      ]
+    },
+    "request_fingerprint": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{128}$"
+    },
+    "checkpoint": {
+      "type": ["string", "null"],
+      "maxLength": 64
+    },
+    "observed_state_sha512": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{128}$"
+    },
+    "envelope_sha512": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{128}$"
+    }
+  }
+}

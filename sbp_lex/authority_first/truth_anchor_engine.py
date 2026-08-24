@@ -25,7 +25,7 @@ def truth_anchor_engine(payload: dict) -> EngineResult:
         "timestamp": int(time.time())
     }
 
-    anchor_hash = hashlib.sha256(
+    anchor_hash = hashlib.sha512(
         json.dumps(anchor_material, sort_keys=True).encode()
     ).hexdigest()
 
@@ -33,12 +33,14 @@ def truth_anchor_engine(payload: dict) -> EngineResult:
         "action": action,
         "attestation_count": len(attestations),
         "truth_anchor_hash": anchor_hash,
-        "truth_anchor_created": True
+        "truth_anchor_created": True,
+        "timestamp": anchor_material["timestamp"],
+        "expires_in": 300,
     }
 
     return EngineResult(
         ok=True,
         name="truth_anchor",
         detail="Truth anchor generated from indexed attestations",
-        data={"truth_anchor": record}
+        data=record
     )

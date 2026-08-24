@@ -1,0 +1,29 @@
+{
+  "schema_id": "SBP_LEX_V2_PLATFORM_PROVIDER_READINESS_V1",
+  "captured_on": "2026-08-24",
+  "admission_state": "NOT_ADMITTED",
+  "authority_granted": false,
+  "operation": "NCryptOpenStorageProvider only",
+  "provider_name": "Microsoft Platform Crypto Provider",
+  "probe_results": [
+    {
+      "context": "non_elevated_current_user",
+      "open_status_signed": -2146893776,
+      "open_status_hex": "0x80090030",
+      "open_status_name": "NTE_DEVICE_NOT_READY",
+      "handle_nonzero": false
+    },
+    {
+      "context": "elevated_read_only_probe",
+      "open_status_signed": 0,
+      "open_status_hex": "0x00000000",
+      "open_status_name": "SUCCESS",
+      "handle_nonzero": true
+    }
+  ],
+  "algorithm_enumeration": "NOT_ATTEMPTED",
+  "key_enumeration": "NOT_ATTEMPTED",
+  "provisioning_attempted": false,
+  "signing_attempted": false,
+  "interpretation": "Elevation changes provider-open availability, but an open handle alone does not establish key availability, key format, non-exportability, ML-DSA-87 mapping, Ed448 mapping, custody, signing capability, or production authority. No key enumeration, provisioning, signing, or algorithm operation was attempted."
+}

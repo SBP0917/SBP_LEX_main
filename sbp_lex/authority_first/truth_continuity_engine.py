@@ -33,7 +33,7 @@ def truth_continuity_engine(payload: dict) -> EngineResult:
         "timestamp": int(time.time())
     }
 
-    continuity_hash = hashlib.sha256(
+    continuity_hash = hashlib.sha512(
         json.dumps(continuity_material, sort_keys=True).encode()
     ).hexdigest()
 

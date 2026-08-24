@@ -1,0 +1,17 @@
+[package]
+name = "sbp-lex-authority-wire-v2"
+version = "0.2.0"
+edition = "2021"
+publish = false
+license = "UNLICENSED"
+description = "Independent dependency-free SBP-LEX authority evidence wire v2"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+sbp-lex-v2-hybrid-signature = { path = "../../../hybrid_signature_rust" }
+sha2 = '0.10.9'
+
+[dev-dependencies]
+sbp-lex-v2-hybrid-signature = { path = "../../../hybrid_signature_rust", features = ["software-signing"] }

@@ -1,15 +1,53 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
+from sbp_lex.compliance.australian_minor_access import (
+    AUSTRALIAN_MINOR_ACCESS_STAGE,
+)
+from sbp_lex.governance.filed_lifecycle import (
+    FILED_LIFECYCLE_ORDER,
+    FILED_LIFECYCLE_ORDER_AUTHORITY,
+    FILED_LIFECYCLE_STAGES,
+)
+from sbp_lex.governance.filed_governance_integrity import (
+    FILED_GOVERNANCE_INTEGRITY_ORDER,
+    FILED_GOVERNANCE_INTEGRITY_ORDER_AUTHORITY,
+    FILED_GOVERNANCE_INTEGRITY_STAGES,
+)
+from sbp_lex.identity.impersonation_protection import (
+    IMPERSONATION_PROTECTION_STAGE,
+)
+from sbp_lex.identity.sovereign_identity import IDENTITY_ADMISSION_STAGE
+
 
 # ─────────────────────────────────────────────
-# V6 PIPELINE CONFIG (LOCKED)
+# V2 SINGLE-PIPELINE CONFIG (LOCKED)
 # ─────────────────────────────────────────────
 
-PIPELINE_NAME = "SBP_LEX_V6"
+PIPELINE_NAME = "SBP_LEX_V2"
 PIPELINE_MODE = "FAIL_CLOSED"
+PIPELINE_TOPOLOGY = "SINGLE_PIPELINE"
 PIPELINE_EXTERNALITY = "STRUCTURALLY_EXTERNAL"
 PIPELINE_SUPERIORITY = "HIERARCHICALLY_SUPERIOR"
 PIPELINE_NON_BYPASS = True
+
+APPLICATION_INTEGRITY_STARTUP_STAGE = "application_integrity:startup"
+DIGITAL_PROVENANCE_STAGE = "digital_provenance:lineage_authentication"
+AUTHORITY_BOUNDARY_ADMISSION_STAGE = "authority_boundary:participant_request"
+FOUNDATIONAL_BASELINE_AGGREGATE_STAGE = "foundational_baseline"
+AUTHORITY_PROVENANCE_STAGE = "authority_provenance:admission"
+FOUNDATIONAL_BASELINE_ORDER_AUTHORITY = (
+    "IMPLEMENTATION_DEFINED_V2_ORDER_NOT_EXPRESSLY_FILED_RUNTIME_ORDER"
+)
+FOUNDATIONAL_BASELINE_ORDER = [
+    DIGITAL_PROVENANCE_STAGE,
+    IDENTITY_ADMISSION_STAGE,
+    AUTHORITY_BOUNDARY_ADMISSION_STAGE,
+    IMPERSONATION_PROTECTION_STAGE,
+    AUSTRALIAN_MINOR_ACCESS_STAGE,
+]
+STARTUP_REQUIRED_STAGES = [APPLICATION_INTEGRITY_STARTUP_STAGE]
 
 
 # ─────────────────────────────────────────────
@@ -17,19 +55,47 @@ PIPELINE_NON_BYPASS = True
 # ─────────────────────────────────────────────
 
 PIPELINE_ORDER = [
+    APPLICATION_INTEGRITY_STARTUP_STAGE,
     "entry",
     "state_construction",
+    *FOUNDATIONAL_BASELINE_ORDER,
+    FOUNDATIONAL_BASELINE_AGGREGATE_STAGE,
+    AUTHORITY_PROVENANCE_STAGE,
     "collective_attach",
     "root_of_trust",
+    "filed_licence:root_binding",
+    "skg_authority:constitutional_authority_substrate",
+    "procedural_truth",
+    "filed_framework:ptodf",
     "classification",
+    "filed_licence:validation",
     "licensing",
+    "filed_framework:aj_saaf",
+    "governance:determination",
+    "filed_framework:gala",
+    "filed_framework:abegf",
+    *[FILED_LIFECYCLE_STAGES[engine] for engine in FILED_LIFECYCLE_ORDER],
+    *[
+        FILED_GOVERNANCE_INTEGRITY_STAGES[governance_function]
+        for governance_function in FILED_GOVERNANCE_INTEGRITY_ORDER
+    ],
     "governance",
     "grc",
     "domain_wrap",
     "aurion_candidate",
     "aurion_runtime",
+    "filed_licence:revalidation",
     "execution_gate",
     "audit",
+]
+
+GOVERNANCE_TRAVERSAL_ORDER = [
+    "AJ-SAAF",
+    "governance_engine",
+    "GALA",
+    "ABEGF",
+    *FILED_LIFECYCLE_ORDER,
+    *FILED_GOVERNANCE_INTEGRITY_ORDER,
 ]
 
 
@@ -45,7 +111,6 @@ ROOT_OF_TRUST_STAGES = [
     "truth_continuity",
     "truth_expiry",
     "truth_revocation",
-    "procedural_truth",
 ]
 
 
@@ -134,7 +199,22 @@ VALID_POST_DENIAL_ACTIONS = [
 # ─────────────────────────────────────────────
 
 EXECUTION_GATE_REQUIRED_CHECKS = [
-    "hash_chain_presence",
+    "hash_chain_presence_and_integrity",
+    "application_integrity_current_and_valid",
+    "digital_provenance_authenticated",
+    "sovereign_identity_current_and_valid",
+    "authority_boundary_current_and_valid",
+    "impersonation_protection_current_and_valid",
+    "australian_minor_access_current_and_valid",
+    "foundational_request_controls_current_and_valid",
+    "foundational_baseline_digest_current_and_valid",
+    "authority_provenance_current_and_valid",
+    "three_p_core_constitutional_constraint",
+    "skg_authority_complete_and_valid",
+    "filed_four_tier_licence_current_and_valid",
+    "filed_frameworks_complete_and_valid",
+    "filed_lifecycle_complete_and_valid",
+    "filed_governance_integrity_complete_and_valid",
     "governance_allow",
     "procedural_truth_pass",
     "corroboration_threshold_satisfied",
@@ -157,14 +237,34 @@ EXECUTION_GATE_REQUIRED_CHECKS = [
 # ─────────────────────────────────────────────
 
 HASH_CHAIN_REQUIRED_STAGES = [
+    APPLICATION_INTEGRITY_STARTUP_STAGE,
+    "state_construction",
+    *FOUNDATIONAL_BASELINE_ORDER,
+    FOUNDATIONAL_BASELINE_AGGREGATE_STAGE,
+    AUTHORITY_PROVENANCE_STAGE,
     "collective_attach",
     "root_of_trust",
+    "filed_licence:root_binding",
+    "skg_authority:constitutional_authority_substrate",
+    "procedural_truth",
+    "filed_framework:ptodf",
     "classification",
+    "filed_licence:validation",
     "licensing",
+    "filed_framework:aj_saaf",
+    "governance:determination",
+    "filed_framework:gala",
+    "filed_framework:abegf",
+    *[FILED_LIFECYCLE_STAGES[engine] for engine in FILED_LIFECYCLE_ORDER],
+    *[
+        FILED_GOVERNANCE_INTEGRITY_STAGES[governance_function]
+        for governance_function in FILED_GOVERNANCE_INTEGRITY_ORDER
+    ],
     "governance",
     "domain_wrap",
     "aurion_candidate",
     "aurion_runtime",
+    "filed_licence:revalidation",
     "execution_gate",
     "audit",
 ]
@@ -178,6 +278,7 @@ def build_pipeline_identity() -> dict:
     return {
         "name": PIPELINE_NAME,
         "mode": PIPELINE_MODE,
+        "topology": PIPELINE_TOPOLOGY,
         "externality": PIPELINE_EXTERNALITY,
         "superiority": PIPELINE_SUPERIORITY,
         "non_bypass": PIPELINE_NON_BYPASS,
@@ -188,7 +289,22 @@ def build_pipeline_order() -> dict:
     return {
         "order": list(PIPELINE_ORDER),
         "root_of_trust_stages": list(ROOT_OF_TRUST_STAGES),
+        "governance_traversal_order": list(GOVERNANCE_TRAVERSAL_ORDER),
+        "lifecycle_implementation_order_authority": (
+            FILED_LIFECYCLE_ORDER_AUTHORITY
+        ),
+        "governance_integrity_implementation_order_authority": (
+            FILED_GOVERNANCE_INTEGRITY_ORDER_AUTHORITY
+        ),
         "hash_chain_required_stages": list(HASH_CHAIN_REQUIRED_STAGES),
+        "startup_required_stages": deepcopy(STARTUP_REQUIRED_STAGES),
+        "foundational_baseline_order": deepcopy(FOUNDATIONAL_BASELINE_ORDER),
+        "foundational_baseline_order_authority": deepcopy(
+            FOUNDATIONAL_BASELINE_ORDER_AUTHORITY
+        ),
+        "foundational_baseline_aggregate_stage": deepcopy(
+            FOUNDATIONAL_BASELINE_AGGREGATE_STAGE
+        ),
     }
 
 

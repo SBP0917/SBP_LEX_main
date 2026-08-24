@@ -1,7 +1,6 @@
 from sbp_lex.types import EngineResult
 from .registry import register
 import hashlib
-import time
 
 
 @register("authority_attestation")
@@ -17,10 +16,10 @@ def authority_attestation_engine(payload: dict) -> EngineResult:
             detail="Authority chain missing"
         )
 
-    timestamp = int(time.time())
+    timestamp = int(payload.get("evaluation_time", 0))
 
     attestation_string = f"{authority_chain}|{jurisdiction}|{action}|{timestamp}"
-    attestation_hash = hashlib.sha256(attestation_string.encode()).hexdigest()
+    attestation_hash = hashlib.sha512(attestation_string.encode()).hexdigest()
 
     record = {
         "timestamp": timestamp,

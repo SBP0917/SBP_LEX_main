@@ -1,44 +1,59 @@
-from typing import Dict, Any
+from __future__ import annotations
 
-from sbp_lex.shared.state_builder import build_state
-from sbp_lex.classification.engine import ClassificationEngine
-from sbp_lex.licensing.engine import LicensingEngine
-from sbp_lex.governance.engine import GovernanceEngine
-from sbp_lex.domains.runner import run_domain_wrap
-from sbp_lex.aurion15.runtime.runner import run_aurion15
-from sbp_lex.execution.engine import ExecutionEngine
-from sbp_lex.response_controller.controller import stop
+"""Compatibility entry point routed through the complete V2 traversal."""
 
+from typing import Any, Dict
 
-classification_engine = ClassificationEngine()
-licensing_engine = LicensingEngine()
-governance_engine = GovernanceEngine()
-execution_engine = ExecutionEngine()
+from sbp_lex.execution.controlled_local_adapter import EffectAdapter
+from sbp_lex.governance.filed_frameworks import FiledFrameworkEvaluator
+from sbp_lex.governance.filed_lifecycle import FiledLifecycleEvaluator
+from sbp_lex.governance.skg_authority import SKGAuthorityEvaluator
+from sbp_lex.governance.three_p_doctrine import ThreePCoreEvaluator
+from sbp_lex.licensing.filed_licensing import FiledLicenceEvaluator
+from sbp_lex.pipeline.runner import run_v2
+from sbp_lex.security.signature_provider import SignatureProvider
 
 
-def run_pipeline(input_data: Dict[str, Any]) -> Dict[str, Any]:
-    state = build_state(input_data)
+def run_pipeline(
+    input_data: Dict[str, Any],
+    pre_context_signals: Dict[str, Any] | None = None,
+    *,
+    signature_provider: SignatureProvider | None = None,
+    three_p_evaluator: ThreePCoreEvaluator | None = None,
+    three_p_attestation_provider: SignatureProvider | None = None,
+    skg_evaluator: SKGAuthorityEvaluator | None = None,
+    skg_attestation_provider: SignatureProvider | None = None,
+    filed_framework_evaluator: FiledFrameworkEvaluator | None = None,
+    filed_framework_attestation_provider: SignatureProvider | None = None,
+    filed_licence_evaluator: FiledLicenceEvaluator | None = None,
+    filed_licence_attestation_provider: SignatureProvider | None = None,
+    filed_lifecycle_evaluator: FiledLifecycleEvaluator | None = None,
+    filed_lifecycle_attestation_provider: SignatureProvider | None = None,
+    effect_adapter: EffectAdapter | None = None,
+    effect_permit_ttl_ms: int | None = None,
+) -> Dict[str, Any]:
+    """Run the complete single pipeline; no compatibility shortcut exists."""
 
-    state = classification_engine.execute(state)
-    if state.get("classification_result") != "ALLOW":
-        return stop(state)
-
-    state = licensing_engine.execute(state)
-    if state.get("licensing_result") != "ALLOW":
-        return stop(state)
-
-    state = governance_engine.execute(state)
-    if state.get("governance_result") != "ALLOW":
-        return stop(state)
-
-    state = run_domain_wrap(state)
-    if state.get("domain_result") != "pass":
-        return stop(state)
-
-    state = run_aurion15(state)
-    if state.get("aurion15_result") != "pass":
-        return stop(state)
-
-    state = execution_engine.execute(state)
-
-    return state
+    return run_v2(
+        input_data,
+        pre_context_signals,
+        signature_provider=signature_provider,
+        three_p_evaluator=three_p_evaluator,
+        three_p_attestation_provider=three_p_attestation_provider,
+        skg_evaluator=skg_evaluator,
+        skg_attestation_provider=skg_attestation_provider,
+        filed_framework_evaluator=filed_framework_evaluator,
+        filed_framework_attestation_provider=(
+            filed_framework_attestation_provider
+        ),
+        filed_licence_evaluator=filed_licence_evaluator,
+        filed_licence_attestation_provider=(
+            filed_licence_attestation_provider
+        ),
+        filed_lifecycle_evaluator=filed_lifecycle_evaluator,
+        filed_lifecycle_attestation_provider=(
+            filed_lifecycle_attestation_provider
+        ),
+        effect_adapter=effect_adapter,
+        effect_permit_ttl_ms=effect_permit_ttl_ms,
+    )

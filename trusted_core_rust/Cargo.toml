@@ -1,0 +1,14 @@
+[package]
+name = "trusted-authority-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+license = "UNLICENSED"
+publish = false
+description = "Minimal dependency-free trusted authority state machine"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+

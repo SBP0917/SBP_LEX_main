@@ -1,0 +1,109 @@
+{
+  "schema_id": "SBP_LEX_V2_READINESS_VALIDATION_OBSERVATION_V1",
+  "observation_date": "2026-08-24",
+  "scope": "CURRENT_DIRTY_WORKTREE_LOCAL_VALIDATION_ONLY",
+  "admission_state": "NOT_ADMITTED",
+  "authority_granted": false,
+  "production_ready": false,
+  "source_observation": {
+    "head_oid": "015d9009bc58d0e22cb3e32f1bf4d5d9003a7cbf",
+    "branch": "codex/v2-import-sbp-engines",
+    "worktree_status": "DIRTY",
+    "status_entry_count": 113,
+    "p_binding": "NOT_CREATED"
+  },
+  "tool_versions": {
+    "python": "3.12.13 MSC v.1944 64 bit AMD64",
+    "pytest": "9.1.1",
+    "cargo": "1.97.1 c980f4866 2026-06-30",
+    "rustc": "1.97.1 8bab26f4f68e0e26f0bb7960be334d5b520ea452 x86_64-pc-windows-msvc",
+    "msvc_link_file_version": "14.44.35228.0",
+    "git": "2.55.0.windows.3",
+    "java": "Temurin 21.0.12.1 LTS"
+  },
+  "python_validation": {
+    "non_evidence_attempts": [
+      {
+        "command": "C:/Users/LeighMC/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe -m pytest -p no:cacheprovider tests",
+        "result": "REJECTED_ENVIRONMENT_MISMATCH",
+        "detail": "Five collection errors because this interpreter lacks FastAPI."
+      },
+      {
+        "command": ".venv\\Scripts\\python.exe -m pytest -q -p no:cacheprovider --tb=short --junitxml=runtime_artifacts\\readiness_deferred_final_pytest_20260824.xml tests",
+        "report_sha512": "5183da5797e61d0ed74abc2bd1b692a2803d6b9c96b522edb60d5a349d2bc3a02b3e9e4c2f6ddbaf6ee175bd3dd96314bc14f27c4756491fe32b98fb9ad4c241",
+        "result": "REJECTED_TEST_ISOLATION",
+        "detail": "660 cases collected; 64 setup errors caused by access denial to the shared Windows pytest temporary directory; no assertion failures."
+      }
+    ],
+    "accepted_current_worktree_reports": [
+      {
+        "command": ".venv\\Scripts\\python.exe -m pytest -q -p no:cacheprovider --tb=short --basetemp=runtime_artifacts\\readiness_pytest_tmp_20260824 --junitxml=runtime_artifacts\\readiness_deferred_final_pytest_workspace_temp_20260824.xml tests",
+        "report": "runtime_artifacts/readiness_deferred_final_pytest_workspace_temp_20260824.xml",
+        "report_sha512": "1852b0e3f5950802d31f24c99bf3278feb39dba4528e283b386b12c6af2112738884119f3d8ee2839eb54779b0b3ea2da125cc667d38d8f3b57cf223e20401f9",
+        "tests": 660,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "seconds": 812.94
+      },
+      {
+        "command": ".venv\\Scripts\\python.exe -m pytest -q -p no:cacheprovider --tb=short --basetemp=runtime_artifacts\\readiness_authority_route_tmp_20260824 --junitxml=runtime_artifacts\\readiness_authority_route_20260824.xml tests\\test_fastapi_entrypoint.py tests\\test_foundational_public_pipeline.py tests\\test_rust_authority_client.py tests\\test_controlled_local_adapter.py tests\\test_execution_skg_lifecycle_integration.py tests\\test_hybrid_signature_provider.py",
+        "report": "runtime_artifacts/readiness_authority_route_20260824.xml",
+        "report_sha512": "f8dc404fb71abe1839e27ad4b42d7c0e07f69ada0d5823193cf102e797a626c4bf1705fc374410ca71114ef2cba10ab669ee8c9f2589941a06506b9cd4efe965",
+        "tests": 127,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "seconds": 279.192
+      },
+      {
+        "command": ".venv\\Scripts\\python.exe -m pytest -q -p no:cacheprovider --tb=short --basetemp=runtime_artifacts\\readiness_cross_language_tmp_20260824 --junitxml=runtime_artifacts\\readiness_cross_language_20260824.xml wire_protocol\\v2\\python\\test_contract.py cross_language_reconciliation\\test_reconciliation.py cross_language_reconciliation\\test_detached_semantic_verifier.py",
+        "report": "runtime_artifacts/readiness_cross_language_20260824.xml",
+        "report_sha512": "65f065561b22e41f71956a4457888d1e6ae1af3b22f5580d9db5f1eba16107f66c445371f59a01023b2ba3621a2a8d32b7b627e5f99b9a93e03f33b20f81a980",
+        "tests": 67,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "seconds": 266.091
+      }
+    ]
+  },
+  "msvc_rust_validation": {
+    "toolchain_prefix": "cargo +stable-x86_64-pc-windows-msvc",
+    "preliminary_non_code_failure": {
+      "command": "cargo +stable-x86_64-pc-windows-msvc test --manifest-path independent_verifier_rust/Cargo.toml --features software-signing --locked",
+      "result": "REJECTED_COMMAND_ARGUMENT",
+      "detail": "The independent-verifier package defines no package-level software-signing feature. The corrected command omits that feature; its dev dependency enables the fixture feature."
+    },
+    "matrix": [
+      {"manifest": "security_core/Cargo.toml", "commands": ["test --manifest-path security_core/Cargo.toml --locked", "check --manifest-path security_core/Cargo.toml --all-targets --locked", "fmt --manifest-path security_core/Cargo.toml -- --check", "clippy --manifest-path security_core/Cargo.toml --all-targets --locked -- -D warnings"], "test_count": 35, "result": "PASS"},
+      {"manifest": "hybrid_signature_rust/Cargo.toml", "commands": ["test --manifest-path hybrid_signature_rust/Cargo.toml --features software-signing --locked", "check --manifest-path hybrid_signature_rust/Cargo.toml --all-targets --features software-signing --locked", "fmt --manifest-path hybrid_signature_rust/Cargo.toml -- --check", "clippy --manifest-path hybrid_signature_rust/Cargo.toml --all-targets --features software-signing --locked -- -D warnings"], "test_count": 7, "result": "PASS"},
+      {"manifest": "rust_authority_service/Cargo.toml", "commands": ["test --manifest-path rust_authority_service/Cargo.toml --all-targets --features evidence-only-fixtures --locked", "check --manifest-path rust_authority_service/Cargo.toml --all-targets --features evidence-only-fixtures --locked", "fmt --manifest-path rust_authority_service/Cargo.toml -- --check", "clippy --manifest-path rust_authority_service/Cargo.toml --all-targets --features evidence-only-fixtures --locked -- -D warnings"], "test_count": 44, "result": "PASS"},
+      {"manifest": "wire_protocol/v2/rust/Cargo.toml", "commands": ["test --manifest-path wire_protocol/v2/rust/Cargo.toml --locked", "check --manifest-path wire_protocol/v2/rust/Cargo.toml --all-targets --locked", "fmt --manifest-path wire_protocol/v2/rust/Cargo.toml -- --check", "clippy --manifest-path wire_protocol/v2/rust/Cargo.toml --all-targets --locked -- -D warnings"], "test_count": 35, "result": "PASS"},
+      {"manifest": "polyglot/rust/v2_assurance_kernel/Cargo.toml", "commands": ["test --manifest-path polyglot/rust/v2_assurance_kernel/Cargo.toml --locked", "check --manifest-path polyglot/rust/v2_assurance_kernel/Cargo.toml --all-targets --locked", "fmt --manifest-path polyglot/rust/v2_assurance_kernel/Cargo.toml -- --check", "clippy --manifest-path polyglot/rust/v2_assurance_kernel/Cargo.toml --all-targets --locked -- -D warnings"], "test_count": 4, "result": "PASS"},
+      {"manifest": "trusted_core_rust/Cargo.toml", "commands": ["test --manifest-path trusted_core_rust/Cargo.toml --locked", "check --manifest-path trusted_core_rust/Cargo.toml --all-targets --locked", "fmt --manifest-path trusted_core_rust/Cargo.toml -- --check", "clippy --manifest-path trusted_core_rust/Cargo.toml --all-targets --locked -- -D warnings"], "test_count": 40, "result": "PASS"},
+      {"manifest": "independent_verifier_rust/Cargo.toml", "commands": ["test --manifest-path independent_verifier_rust/Cargo.toml --locked", "check --manifest-path independent_verifier_rust/Cargo.toml --all-targets --locked", "fmt --manifest-path independent_verifier_rust/Cargo.toml -- --check", "clippy --manifest-path independent_verifier_rust/Cargo.toml --all-targets --locked -- -D warnings"], "test_count": 23, "result": "PASS"},
+      {"manifest": "wire_protocol/rust/Cargo.toml", "commands": ["test --manifest-path wire_protocol/rust/Cargo.toml --locked", "check --manifest-path wire_protocol/rust/Cargo.toml --all-targets --locked", "fmt --manifest-path wire_protocol/rust/Cargo.toml -- --check", "clippy --manifest-path wire_protocol/rust/Cargo.toml --all-targets --locked -- -D warnings"], "test_count": 5, "result": "PASS"}
+    ],
+    "test_total": 193,
+    "quality_lane_result": "PASS"
+  },
+  "provider_readiness": {
+    "operation": "NCryptOpenStorageProvider only",
+    "non_elevated_current_user": {"status_hex": "0x80090030", "status_name": "NTE_DEVICE_NOT_READY", "handle_nonzero": false},
+    "elevated_read_only_probe": {"status_hex": "0x00000000", "status_name": "SUCCESS", "handle_nonzero": true},
+    "key_enumeration": "NOT_ATTEMPTED",
+    "provisioning": "NOT_ATTEMPTED",
+    "signing": "NOT_ATTEMPTED",
+    "custody": "NOT_PROVEN"
+  },
+  "snapshot_attempt": {
+    "command": "pwsh.exe -NoProfile -ExecutionPolicy Bypass -File tools/build_sha512_handover_snapshot.ps1",
+    "result": "NOT_RUN_TO_COMPLETION",
+    "detail": "The script correctly refused to overwrite its existing runtime_artifacts/sha512_handover repository_state.txt record. No prior snapshot material was removed or overwritten."
+  },
+  "nonclaims": [
+    "No source commit, P object, SBOM, release, signature custody, TPM/HSM authority, university validation or production deployment is admitted by this record.",
+    "Current-worktree reports are not full-byte PTDE lane transcripts and cannot bind a future release commit."
+  ]
+}

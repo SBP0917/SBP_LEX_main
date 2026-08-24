@@ -23,6 +23,7 @@ class ProceduralValidationEngine(AurionEngine):
             return state
 
         state["status"] = "pass"
+        state["candidate_result"] = "allow"
         return state
 
 

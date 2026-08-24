@@ -1,0 +1,98 @@
+{
+  "schema_id": "SBP_LEX_V2_UNSEALED_CANDIDATE_RELEASE_MANIFEST_V1",
+  "observation_date": "2026-08-24",
+  "candidate_scope": "CURRENT_WORKTREE_OBSERVATION_ONLY",
+  "admission_state": "UNSEALED_NOT_ADMITTED",
+  "authority_granted": false,
+  "production_ready": false,
+  "source_binding": {
+    "observed_head_oid": "015d9009bc58d0e22cb3e32f1bf4d5d9003a7cbf",
+    "observed_branch": "codex/v2-import-sbp-engines",
+    "worktree_status": "DIRTY",
+    "observed_status_entry_count": 113,
+    "p_object_binding": "NOT_CREATED",
+    "release_commit_binding": "PENDING_ACTUAL_RELEASE_COMMIT",
+    "rule": "No current-worktree value is a committed P binding, release identity, or admission result."
+  },
+  "hash_algorithm": "SHA-512",
+  "sbom_candidate_inputs": {
+    "python": {
+      "requirements_txt": {
+        "path": "requirements.txt",
+        "bytes": 298,
+        "sha512": "7d34bd78e401ceb4843716c27989c4be82bb13b826f0413eebb277fdaa98786fc17af9e149b7f76e541904e27c49c971755f5a37a7a60a7c14ca8fae4a03fd10"
+      },
+      "requirements_lock": {
+        "path": "requirements.lock",
+        "bytes": 676,
+        "sha512": "139bb3292f4570ce2c1756a5ace050e73de4f875dc6acece500b67108dd94fdc935c44f5a94c3bc153c78caa5842f785256760042f2c78063157a6d4e0ab8c5d"
+      },
+      "resolution_evidence": {
+        "path": "evidence/v2/python311-resolution-evidence.json",
+        "bytes": 7574,
+        "sha512": "d33ce80349d419a0c159fc759f654ebd99ae320469b850c94e0f00149f00f716a305e107e8efee46cc19e855f0adb1c67cb8c32f26bb23ed1976f7594d225a7a",
+        "package_count": 17,
+        "status": "PASS_UNSEALED_NON_ADMITTING"
+      },
+      "canonical_python_lock": {
+        "path": "python-dependencies.lock.json",
+        "status": "MISSING",
+        "reason": "A canonical lock with accepted-history rollback binding must not be fabricated before the final release P object and out-of-band accepted-attempt-history pin exist."
+      }
+    },
+    "rust": [
+      {"manifest": "hybrid_signature_rust/Cargo.toml", "manifest_sha512": "a4200e041a57e09bc23360d6524614d518f8e7cb1ab9d05e34dce3c9b98b409b3d5fb0911cb3c5637ef8efdc49eb6821aded13d56bd74c419aee75723ada442f", "lock": "hybrid_signature_rust/Cargo.lock", "lock_sha512": "7c4b4f09190ddc3da2f64c9084bf9f11a42bd9c949b44416efb1b1a3c5a4b4a2d9b7aeeb2f3627a227449a8dcd886233ee5cfe5f1568f52d4d0477c5cd84d297"},
+      {"manifest": "independent_verifier_rust/Cargo.toml", "manifest_sha512": "35f12d8cde3b33097b4c9e7d4abcf549cc5bab9a2468997f30e9c335272987f7db9f75a48879053ddfff546744d2caec56613db5ff646d24952b0fbc876a380d", "lock": "independent_verifier_rust/Cargo.lock", "lock_sha512": "13572bc6f3f09b60329f824584c7b2fe95fd73e1a96293d1e4ef7686c1230588f1c453e7b241df56ad13543152040d87765f29c1ba8b88a8d4c185e0ffe8902a"},
+      {"manifest": "polyglot/rust/v2_assurance_kernel/Cargo.toml", "manifest_sha512": "7915fcbbe9794e3f08d81371f7248efa9bdd822c4210ddfc888048439a0ef76254e79bac1461755f63f031a2cf63891d810afe933c9e191e31f3f368b0b20cf7", "lock": "polyglot/rust/v2_assurance_kernel/Cargo.lock", "lock_sha512": "0c2005c0f9d2f2e2acf9afd9bf0dcf91d7d164fd74d8b15c233377cfa2e907dc4dc0cf683edf0e0c220f2c8bd58156d1157b289a8dbc8591f06f12f0c46abfa8"},
+      {"manifest": "rust_authority_service/Cargo.toml", "manifest_sha512": "10fbe2e4f41a370944ec5be8f2bf12bb1420074135095383fbdacffe0d2bfbf007f500a1c6c4eba4b3e3c1a4add5dfaf9f717585a52c3416fa615bbea04cb2bf", "lock": "rust_authority_service/Cargo.lock", "lock_sha512": "b7530f6fd9992a76630424cf8484c1d37f5a1f4420f240b6a49a806601e6d1bce4532fe97ade20e08ae8280aa1b648ebde81171c5a30dcbedaf3ce102add223e"},
+      {"manifest": "security_core/Cargo.toml", "manifest_sha512": "ae58f1e5017648daf8d18a610b0d97a370a46b947eb4443761c406e1d8d77578d3c530ef27e6036bb839645cffb6b1603a06ed68a78e76ab684fe4ffc3f2349d", "lock": "security_core/Cargo.lock", "lock_sha512": "df119bd8c9f6da049efcb63b3228d2e63d5b12162bc2485dc48bdafb68de95ea208cd08272a45391030fde76c086e7ac5257c5250ece0d7031136ac031b61fa8"},
+      {"manifest": "trusted_core_rust/Cargo.toml", "manifest_sha512": "8b3020b5df0c3ceb18b0e07bda4006187961f078c6f694888922682b09bef546aac461c1b8691709ace4472bee3629315c436a15a1ea385dc6b7adfe96d73cda", "lock": "trusted_core_rust/Cargo.lock", "lock_sha512": "e64e22c12a65993402eeda9f614fe55eb801ecb9ebe3f330cb869067e5ca9ed719b4470df87753be383ca433c414e153d84d428398f8250dfe4102b18ee25320"},
+      {"manifest": "wire_protocol/rust/Cargo.toml", "manifest_sha512": "5351c4cd3ed836fa13577717126fb7842f71f64dee3ddba7711483b96a1fe21c5e87e3a71ba429743f3f603bc5de8fd7ce6063aa0e3b940732debd30d9a89f4a", "lock": "wire_protocol/rust/Cargo.lock", "lock_sha512": "4c6400dc8c2fc789a30b57e881a9672269f103ac758e700747d7b3a18232963de9cf47d8ff89f547cbea184c42051c8b3a929a8c72b1dcdb71db6df7365c25e9"},
+      {"manifest": "wire_protocol/v2/rust/Cargo.toml", "manifest_sha512": "17db55b3018538c8ff0dd645e12d967c8b6872a769fae60bf778719383a5123b2136d576245c81f3d5fca2c94d311e85af25225c44073351110eeff9e0f4f867", "lock": "wire_protocol/v2/rust/Cargo.lock", "lock_sha512": "cccfbf4614f36095448129a0aa3f6bfac61078d064765a814daa1b5547a1fc8bb05bcb60a311cf84c484011de8a25e5dccde6f0f6c5fbe621df27a0cd69fda4b"}
+    ]
+  },
+  "out_of_band_pin_material": {
+    "git_executable": {"path": "C:/Program Files/Git/cmd/git.exe", "sha512": "6cb22ca658c00c82158b8ea4538808e5f7e28e31e67896f7c1616937ef080c71eb78043630e01aca5c67b54b7e025bba4ccdf87ee857845cdbf4e00cd7a3a46a"},
+    "cargo_executable": {"path": "C:/Users/LeighMC/.cargo/bin/cargo.exe", "sha512": "20c8eeecb2bbd7132b418b415d860d1df4ae8711a303de66f15a050d0c58db7d7868ac8f0389fb03d1078688173de94bcd13e07377e971caa1b6cfde9c50d75e"},
+    "rustc_msvc_executable": {"path": "C:/Users/LeighMC/.rustup/toolchains/stable-x86_64-pc-windows-msvc/bin/rustc.exe", "sha512": "d6d78ebcacba9a61f3668721c9310b5814538b436e8b19e21319f05f5d6b7432fd1f48c87b52eb3f3b89e62644b04a33890f4d4113c55b5c1229285dc84b8c54"},
+    "msvc_linker": {"path": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/link.exe", "sha512": "6efc6068fec722ab0bbcc6149a3b618bf60ca4ff3c4032b2d23a0bbac4bc58a86742387c90c456d5d60999a54cd777e417f3c1ef1f6ed516a9133bbcb6895b6b"},
+    "java_21": {"path": "C:/Program Files/Eclipse Adoptium/jdk-21.0.12.101-hotspot/bin/java.exe", "sha512": "ffb212c4a727b04b6ce7fd08c111aca5d55100631b39419ca111d93b5ec05173e53a62f17a6de04894ced013fdfded4ba815e44083b0a83d604b64fee2d8b1d1"},
+    "required_before_ptde_p_binding": [
+      "An owner-supplied final release P commit OID delivered independently of the candidate worktree.",
+      "A separately pinned bare object database containing that exact P object.",
+      "A genuine accepted-attempt-history document and independently supplied SHA-512 pin.",
+      "Re-measurement of every executable pin at the point of use."
+    ]
+  },
+  "current_worktree_validation_observations": [
+    {
+      "command": ".venv\\Scripts\\python.exe -m pytest -q -p no:cacheprovider --tb=short --basetemp=runtime_artifacts\\readiness_pytest_tmp_20260824 --junitxml=runtime_artifacts\\readiness_deferred_final_pytest_workspace_temp_20260824.xml tests",
+      "report": "runtime_artifacts/readiness_deferred_final_pytest_workspace_temp_20260824.xml",
+      "report_sha512": "1852b0e3f5950802d31f24c99bf3278feb39dba4528e283b386b12c6af2112738884119f3d8ee2839eb54779b0b3ea2da125cc667d38d8f3b57cf223e20401f9",
+      "result": {"tests": 660, "failures": 0, "errors": 0, "skipped": 0, "seconds": 812.94}
+    },
+    {
+      "command": ".venv\\Scripts\\python.exe -m pytest -q -p no:cacheprovider --tb=short --basetemp=runtime_artifacts\\readiness_authority_route_tmp_20260824 --junitxml=runtime_artifacts\\readiness_authority_route_20260824.xml tests\\test_fastapi_entrypoint.py tests\\test_foundational_public_pipeline.py tests\\test_rust_authority_client.py tests\\test_controlled_local_adapter.py tests\\test_execution_skg_lifecycle_integration.py tests\\test_hybrid_signature_provider.py",
+      "report": "runtime_artifacts/readiness_authority_route_20260824.xml",
+      "report_sha512": "f8dc404fb71abe1839e27ad4b42d7c0e07f69ada0d5823193cf102e797a626c4bf1705fc374410ca71114ef2cba10ab669ee8c9f2589941a06506b9cd4efe965",
+      "result": {"tests": 127, "failures": 0, "errors": 0, "skipped": 0, "seconds": 279.192}
+    },
+    {
+      "command": ".venv\\Scripts\\python.exe -m pytest -q -p no:cacheprovider --tb=short --basetemp=runtime_artifacts\\readiness_cross_language_tmp_20260824 --junitxml=runtime_artifacts\\readiness_cross_language_20260824.xml wire_protocol\\v2\\python\\test_contract.py cross_language_reconciliation\\test_reconciliation.py cross_language_reconciliation\\test_detached_semantic_verifier.py",
+      "report": "runtime_artifacts/readiness_cross_language_20260824.xml",
+      "report_sha512": "65f065561b22e41f71956a4457888d1e6ae1af3b22f5580d9db5f1eba16107f66c445371f59a01023b2ba3621a2a8d32b7b627e5f99b9a93e03f33b20f81a980",
+      "result": {"tests": 67, "failures": 0, "errors": 0, "skipped": 0, "seconds": 266.091}
+    }
+  ],
+  "validation_scope_rule": "These reports validate the current worktree only. They are not full-byte PTDE lane transcripts, cannot bind a future P object, and cannot establish a release or admission result.",
+  "whole_worktree_snapshot": {
+    "status": "NOT_REFRESHED",
+    "detail": "tools/build_sha512_handover_snapshot.ps1 correctly refused to overwrite the existing runtime_artifacts/sha512_handover snapshot. No existing evidence was removed or overwritten."
+  },
+  "limitations": [
+    "This is candidate input material only; it is not a P/T/D/E artifact, signed release, SBOM admission, or university-validation evidence.",
+    "The current worktree is dirty and cannot be described as committed, clean, sealed, reproducible, or release-ready.",
+    "External custody, durable replay/revocation/audit services, physical-effect non-bypass, and independent validation remain external dependencies.",
+    "A fresh immutable full-source snapshot or final P object is still required; this candidate manifest does not substitute for either."
+  ]
+}

@@ -1,6 +1,5 @@
 from sbp_lex.types import EngineResult
 from .registry import register
-import time
 
 
 @register("decision_expiry")
@@ -10,7 +9,7 @@ def decision_expiry_engine(payload: dict) -> EngineResult:
 
     issued_at = decision_token.get("timestamp")
     expires_in = decision_token.get("expires_in", 300)
-    now = int(time.time())
+    now = int(payload.get("evaluation_time", 0))
 
     record = {
         "action": action,

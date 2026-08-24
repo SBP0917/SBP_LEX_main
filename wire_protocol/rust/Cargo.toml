@@ -1,0 +1,13 @@
+[package]
+name = "sbp-lex-wire-contract"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "UNLICENSED"
+description = "Independent dependency-free SBP-LEX authority wire contract"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+

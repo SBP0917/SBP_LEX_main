@@ -4,7 +4,7 @@ from typing import Dict, Any
 
 
 # ─────────────────────────────────────────────
-# LOCKED V6 THRESHOLDS
+# LOCKED V2 THRESHOLDS
 # ─────────────────────────────────────────────
 
 LOW_TIER = "LOW"
@@ -63,7 +63,7 @@ def clamp_factor(value: Any) -> int:
 
 def compute_financial_operational_factor(amount: Any) -> int:
     """
-    Map financial amount to the locked V6 financial/operational factor.
+    Map financial amount to the locked V2 financial/operational factor.
     """
     try:
         amount_value = float(amount)

@@ -1,0 +1,31 @@
+[package]
+name = "sbp-lex-rust-authority-service"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+license = "UNLICENSED"
+publish = false
+description = "Fail-closed process boundary around the SBP-LEX trusted authority core"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "sbp-lex-authority"
+path = "src/main.rs"
+
+[[bin]]
+name = "sbp-lex-authority-evidence"
+path = "src/evidence_main.rs"
+required-features = ["evidence-only-fixtures"]
+
+[features]
+default = []
+evidence-only-fixtures = ["sbp-lex-v2-hybrid-signature/software-signing"]
+
+[dependencies]
+sbp-lex-v2-hybrid-signature = { path = "../hybrid_signature_rust" }
+trusted-authority-core = { path = "../trusted_core_rust" }
+sbp-lex-wire-contract = { path = "../wire_protocol/rust" }
+sbp-lex-authority-wire-v2 = { path = "../wire_protocol/v2/rust" }
+sha2 = "0.10.9"

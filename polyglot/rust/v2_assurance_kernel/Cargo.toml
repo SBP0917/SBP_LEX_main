@@ -1,0 +1,19 @@
+[package]
+name = "sbp-v2-assurance-kernel"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+base64 = "=0.23.1"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_jcs = "=0.2.0"
+serde_json = "=1.0.151"
+sha2 = "=0.11.0"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+overflow-checks = true
+panic = "abort"
+strip = "symbols"

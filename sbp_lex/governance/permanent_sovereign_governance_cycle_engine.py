@@ -1,6 +1,5 @@
 from sbp_lex.types import EngineResult
 from .registry import register
-import time
 
 
 @register("permanent_sovereign_governance_cycle")
@@ -12,7 +11,7 @@ def permanent_sovereign_governance_cycle_engine(payload: dict) -> EngineResult:
     decision_token = payload.get("decision_token")
 
     cycle_record = {
-        "timestamp": int(time.time()),
+        "timestamp": int(payload.get("evaluation_time", 0)),
         "action": action,
         "jurisdiction_present": jurisdiction is not None,
         "authority_present": authority is not None,

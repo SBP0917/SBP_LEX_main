@@ -1,0 +1,73 @@
+{
+  "schema_id": "SBP_LEX_V2_HOST_READINESS_INVENTORY_V1",
+  "captured_on": "2026-08-24",
+  "admission_state": "NOT_ADMITTED",
+  "authority_granted": false,
+  "runtime_attachment": "NONE",
+  "host": {
+    "processor": "12th Gen Intel(R) Core(TM) i7-1265U",
+    "architecture": "x64",
+    "address_width": 64
+  },
+  "toolchain": {
+    "visual_studio": {
+      "product": "Visual Studio Community 2022",
+      "version": "17.14.37614.0",
+      "installation_path": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community",
+      "status": "REGISTERED_COMPLETE",
+      "cpp_workload": "MSVC_COMPONENT_REGISTERED",
+      "windows_sdk_include": "C:\\Program Files (x86)\\Windows Kits\\10\\Include\\10.0.26100.0",
+      "hostx64_x64_link_exe": {
+        "path": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe",
+        "sha512": "6efc6068fec722ab0bbcc6149a3b618bf60ca4ff3c4032b2d23a0bbac4bc58a86742387c90c456d5d60999a54cd777e417f3c1ef1f6ed516a9133bbcb6895b6b"
+      }
+    },
+    "rust": {
+      "active_toolchain": "stable-x86_64-pc-windows-msvc",
+      "gnu_toolchain_available": true,
+      "status": "MSVC_TOOLCHAIN_SELECTED_LINKER_OBSERVED"
+    },
+    "java": {
+      "required_major_version": 21,
+      "path": "C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.12.101-hotspot\\bin\\java.exe",
+      "version": "21.0.12.101",
+      "sha512": "ffb212c4a727b04b6ce7fd08c111aca5d55100631b39419ca111d93b5ec05173e53a62f17a6de04894ced013fdfded4ba815e44083b0a83d604b64fee2d8b1d1",
+      "status": "REGISTERED_JDK_21",
+      "tla_execution_status": "NOT_RUN"
+    },
+    "git": {
+      "path": "C:\\Program Files\\Git\\cmd\\git.exe",
+      "sha512": "6cb22ca658c00c82158b8ea4538808e5f7e28e31e67896f7c1616937ef080c71eb78043630e01aca5c67b54b7e025bba4ccdf87ee857845cdbf4e00cd7a3a46a",
+      "status": "OBSERVED_HOST_PIN_NOT_YET_BOUND_TO_A_FINAL_P_OBJECT"
+    }
+  },
+  "windows_crypto_provider_inventory": {
+    "microsoft_platform_crypto_provider": "PRESENT_IN_CERTUTIL_ENUMERATION",
+    "microsoft_platform_crypto_provider_open": "NON_ELEVATED_NTE_DEVICE_NOT_READY_0x80090030__ELEVATED_OPEN_SUCCESS_0x00000000",
+    "platform_provider_raw_capture": "evidence/v2/host-readiness-platform-provider-20260824.json",
+    "microsoft_pluton_crypto_provider": "ENUMERATED_NOT_IMPLEMENTED",
+    "get_tpm": {
+      "status": "CAPTURED_READINESS_ONLY",
+      "tpm_present": true,
+      "tpm_ready": true,
+      "tpm_enabled": true,
+      "tpm_activated": true,
+      "manufacturer_id_text": "STM ",
+      "manufacturer_version": "1.258.0.0",
+      "managed_auth_level": 4,
+      "owner_clear_disabled": false,
+      "raw_capture": "evidence/v2/host-readiness-tpm-raw-20260824.json"
+    },
+    "provisioned_key": "NONE_OBSERVED",
+    "non_exportability": "NOT_DEMONSTRATED",
+    "ml_dsa_87_ed448_provider_mapping": "NOT_DEMONSTRATED",
+    "production_signing": "NOT_ATTEMPTED",
+    "provider_open_interpretation": "An elevated read-only open succeeded, while a non-elevated open failed. This does not demonstrate an admitted key, any supported signature algorithm, non-exportability, custody, or production signing."
+  },
+  "interpretation": {
+    "tpm_custody_claim": false,
+    "production_provider_claim": false,
+    "production_readiness_claim": false,
+    "required_follow_up": "After final P binding, use a separately authorised production-custody validation plan to verify an admitted provider/key, purpose separation, non-exportability, actual ML-DSA-87 and Ed448 representation, rotation and revocation."
+  }
+}

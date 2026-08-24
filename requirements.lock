@@ -1,0 +1,22 @@
+# Resolved and import-checked under CPython 3.11.9 / cpython-311 / win-amd64
+# on 24 August 2026. Target wheel hashes and active dependency edges are in
+# evidence/v2/python311-resolution-evidence.json. The separate canonical
+# python-dependencies.lock.json remains intentionally unsealed until a genuine
+# accepted-attempt history and the user-authorized V2 freeze both exist.
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.14.2
+cffi==2.1.1
+click==8.4.2
+colorama==0.4.6
+cryptography==50.0.0
+fastapi==0.141.1
+h11==0.16.0
+idna==3.19
+pycparser==3.0
+pydantic==2.13.4
+pydantic-core==2.46.4
+starlette==1.6.0
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+uvicorn==0.52.4

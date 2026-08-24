@@ -1,0 +1,109 @@
+{
+  "schema_id": "SBP_LEX_V2_TLA_MODEL_EVIDENCE_V1",
+  "evidence_date": "2026-08-24",
+  "status": "PASS_REPOSITORY_LOCAL_NON_INDEPENDENT",
+  "authority_granted": false,
+  "runtime_attachment": "NONE",
+  "sealed": false,
+  "independent_validation": false,
+  "production_claim": false,
+  "toolchain": {
+    "java": "Microsoft OpenJDK 21.0.12.1+1 LTS x86_64",
+    "jdk_archive_sha256": "192441a9d27da813bada974bb88b4cf64d37a9589ed37f204374d411ca5ce07f",
+    "jdk_archive_sha256_matches_publisher": true,
+    "tlc": "TLC2 2.19 of 08 August 2024 (rev 5a47802)",
+    "tla2tools_release": "v1.7.4 stable",
+    "tla2tools_jar_sha1": "bee4a54f3ee3d4afc347c3240ec2d9e93b075104",
+    "tla2tools_jar_sha1_matches_release_page": true,
+    "tla2tools_jar_sha256_observed": "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88",
+    "rejected_pre_release_artifact": {
+      "path": "runtime_artifacts/toolchains/tla2tools-v1.8.0-unverified-checksum-mismatch.jar",
+      "observed_sha1": "0e4cfdb976f04522d218ec62c6046bbee5098377",
+      "release_page_sha1": "ae09269f0f74b9a7f69ac8b1e79f1514328082c6",
+      "used_for_evidence": false,
+      "reason": "The downloaded mutable v1.8.0 pre-release asset did not match the checksum shown on its release page."
+    }
+  },
+  "source_sha512": {
+    "formal/SBPLexAuthority.tla": "a343065175f692aafb0e74f6b4569ffa262c0efd4fd9d46dd2bbff8e4d5ba1bfba4e1dc27a1a91f544546315bf211d8dcb06cd1300dae2c12a558ebe2b54aacf",
+    "formal/SBPLexAuthority.cfg": "259fa5cfbe34136571b2052792357cc2d3d142dc8d393acfeeca066855ca8492a427bf7e65afef877b5bbdb4fc5489b45510db6bfb62091191e779513d79e8d6",
+    "formal/tla/SBPLEXV2.tla": "d10b529554acb783c0035ee1cc15438e435df6190fea66195c9651b40f440b89da40fa37c955180a667a113ae05e788ab1d794140cc398d9bc601bd12702de28",
+    "formal/tla/SBPLEXV2.cfg": "56d8f2fd153432221a9b4958e51e3e3214e504740603acf81275ea541b5d074bd9889a3b36106fd0a98dfada15dc3cdbc0afd792fdfedf04de47f28d5eb0c51f",
+    "formal/tla/SBPLEXV2_TPM_ADMITTED_NONVACUITY.cfg": "3d5db8332b034388a6214b65f3f2e6ab5dc7343642e0dcd31e6734898fbc7e93da1d85fb6b5150f346625b26aa2060986fd7db65e2add1a22a76bafad0e3714d"
+  },
+  "runs": [
+    {
+      "run_id": "SBPLEXV2_HOST_TPM_FALSE",
+      "configuration": "formal/tla/SBPLEXV2.cfg",
+      "host_tpm_model_assumption": false,
+      "result": "PASS_NO_ERROR",
+      "fingerprint_index": 28,
+      "seed": 8885991410109057448,
+      "workers": 12,
+      "initial_states": 2,
+      "generated_states": 17298,
+      "distinct_states": 8904,
+      "states_left_on_queue": 0,
+      "complete_graph_depth": 32,
+      "checked_invariants": 23,
+      "non_vacuity_claim": false,
+      "metadata_path": "runtime_artifacts/tlc_runs/v2_host_false_20260824"
+    },
+    {
+      "run_id": "SBPLEXV2_TPM_ASSUMED_NONVACUITY",
+      "configuration": "formal/tla/SBPLEXV2_TPM_ADMITTED_NONVACUITY.cfg",
+      "host_tpm_model_assumption": true,
+      "host_tpm_physical_evidence": false,
+      "result": "PASS_NO_ERROR",
+      "fingerprint_index": 125,
+      "seed": -5507092425655269482,
+      "workers": 12,
+      "initial_states": 2,
+      "generated_states": 20968,
+      "distinct_states": 10788,
+      "states_left_on_queue": 0,
+      "complete_graph_depth": 35,
+      "checked_invariants": 23,
+      "non_vacuity_claim": "MODEL_EFFECT_PATH_ONLY",
+      "metadata_path": "runtime_artifacts/tlc_runs/v2_tpm_assumed_nonvacuity_20260824"
+    },
+    {
+      "run_id": "MINIMAL_AUTHORITY_PROTOCOL",
+      "configuration": "formal/SBPLexAuthority.cfg",
+      "result": "PASS_NO_ERROR",
+      "fingerprint_index": 90,
+      "seed": 2523808768654869035,
+      "workers": 12,
+      "initial_states": 1,
+      "generated_states": 674713,
+      "distinct_states": 198651,
+      "states_left_on_queue": 0,
+      "complete_graph_depth": 21,
+      "checked_invariants": 18,
+      "metadata_path": "runtime_artifacts/tlc_runs/minimal_authority_20260824"
+    },
+    {
+      "run_id": "MINIMAL_AUTHORITY_PYTHON_EXPLORER",
+      "command": ".venv/Scripts/python.exe formal/check_model.py",
+      "result": "PASS",
+      "production_claim": false,
+      "states": 198651,
+      "transitions": 319466,
+      "max_depth": 20,
+      "frontier_truncated": false,
+      "checked_invariants": 18,
+      "all_required_coverage_checks": true
+    }
+  ],
+  "assurance_boundary": {
+    "established": "No listed invariant violation was found inside the measured finite models and declared bounds.",
+    "not_established": [
+      "unbounded correctness or liveness",
+      "implementation conformance",
+      "real TPM or HSM availability, custody, or non-exportability",
+      "real safety-inhibit independence or effectiveness",
+      "durable production storage, routing, non-bypass, or trusted time",
+      "independent university or third-party validation"
+    ]
+  }
+}

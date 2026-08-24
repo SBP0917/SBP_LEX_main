@@ -1,5 +1,12 @@
 # SBP_LEX_MAIN Repository Inspection Report
 
+> **HISTORICAL / SUPERSEDED SNAPSHOT — 25 JUNE 2026.** This report records the
+> repository, commit, runtime and observations identified below at that date. It
+> is not current V2 traversal, test, dependency, launcher, deployment or handover
+> evidence. Later work deliberately deleted `sbp_lex/security/pqc.py`, which was
+> a fake placeholder rather than a post-quantum implementation. Nothing in this
+> historical report supports a current PQC implementation or security claim.
+
 ## 1. Repository Inspected
 
 - Repository requested: `SBP0917/SBP_LEX_MAIN`
@@ -268,7 +275,8 @@ Present components:
 - Aurion-15 runtime and candidate modules.
 - Execution gate.
 - Audit engine and in-memory audit ledger concepts.
-- Token stack and PQC placeholder structure.
+- Token stack and a then-present digest/sign/verify placeholder that was later
+  deliberately deleted because it was not a PQC implementation.
 - Hash-chain/state-hash fields.
 - Collective concept modules including SKG/DTN-related files.
 

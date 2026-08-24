@@ -4,7 +4,7 @@ from typing import Dict, Any, List
 
 
 # ─────────────────────────────────────────────
-# SBP-LEX V6 DOMAIN WRAP RUNNER (LOCKED)
+# SBP-LEX V2 DOMAIN WRAP RUNNER (LOCKED)
 # ─────────────────────────────────────────────
 
 DOMAIN_ORDER: List[str] = [

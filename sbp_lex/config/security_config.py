@@ -1,13 +1,28 @@
 from __future__ import annotations
 
+from sbp_lex.security.hybrid_signature import (
+    STRICT_DUAL_SIGNATURE_SUITE_ID,
+    STRICT_DUAL_SIGNATURE_SUITE_VERSION,
+    STRICT_DUAL_SIGNATURE_TRANSITION_POLICY,
+    STRICT_DUAL_SIGNATURE_VERIFICATION_RULE,
+)
+
 
 # ─────────────────────────────────────────────
-# V6 SECURITY CONFIG (LOCKED)
+# V2 SECURITY CONFIG (FAIL-CLOSED PRE-ADMISSION)
 # ─────────────────────────────────────────────
 
-PQC_ENABLED = True
-PQC_PROVIDER_NAME = "LATTICE_BINDABLE"
-PQC_STRICT_FAIL_CLOSED = True
+SIGNATURE_PROVIDER_REQUIRED = True
+DEFAULT_SIGNATURE_PROVIDER = None
+DEFAULT_SIGNATURE_ALGORITHM = STRICT_DUAL_SIGNATURE_SUITE_ID
+DEFAULT_SIGNATURE_CUSTODY_CLASS = None
+DEFAULT_SIGNATURE_EFFECT_AUTHORITY = False
+SIGNATURE_SUITE_VERSION = STRICT_DUAL_SIGNATURE_SUITE_VERSION
+SIGNATURE_VERIFICATION_RULE = STRICT_DUAL_SIGNATURE_VERIFICATION_RULE
+SIGNATURE_REQUIRED_LANES = ("ML-DSA-87", "Ed448")
+SIGNATURE_LANE_INDEPENDENT_CUSTODY_REQUIRED = True
+SIGNATURE_SOFTWARE_SIGNING_PRODUCTION_ADMITTED = False
+SIGNATURE_SUITE_TRANSITION_POLICY = STRICT_DUAL_SIGNATURE_TRANSITION_POLICY
 
 SIGNATURE_REQUIRED = True
 DIGEST_REQUIRED = True
@@ -34,16 +49,17 @@ HALT_ON_COLLECTIVE_SIGNAL_FAILURE = True
 AUDIT_HASH_REQUIRED = True
 AUDIT_LEDGER_REQUIRED = True
 
-DEFAULT_SIGNATURE_ALGORITHM = "LATTICE_PQC_PLACEHOLDER"
-DEFAULT_SIGNATURE_ENCODING = "BASE64_PLACEHOLDER"
-
 DEFAULT_COLLECTIVE_SIGNAL_MAX_AGE_SECONDS = 300
 
 REQUIRED_CORE_TOKENS = [
     "authority",
     "procedural_truth",
+    "ptodf",
     "classification",
     "licensing",
+    "aj_saaf",
+    "gala",
+    "abegf",
     "governance",
     "domain",
     "aurion",
@@ -64,13 +80,24 @@ CONDITIONAL_THRESHOLD_TOKENS = [
 # BUILDERS
 # ─────────────────────────────────────────────
 
-def build_pqc_config() -> dict:
+def build_signature_provider_config() -> dict:
     return {
-        "enabled": PQC_ENABLED,
-        "provider_name": PQC_PROVIDER_NAME,
-        "strict_fail_closed": PQC_STRICT_FAIL_CLOSED,
+        "required": SIGNATURE_PROVIDER_REQUIRED,
+        "provider_name": DEFAULT_SIGNATURE_PROVIDER,
         "signature_algorithm": DEFAULT_SIGNATURE_ALGORITHM,
-        "signature_encoding": DEFAULT_SIGNATURE_ENCODING,
+        "signature_suite_version": SIGNATURE_SUITE_VERSION,
+        "verification_rule": SIGNATURE_VERIFICATION_RULE,
+        "required_lanes": list(SIGNATURE_REQUIRED_LANES),
+        "independent_lane_custody_required": (
+            SIGNATURE_LANE_INDEPENDENT_CUSTODY_REQUIRED
+        ),
+        "software_signing_production_admitted": (
+            SIGNATURE_SOFTWARE_SIGNING_PRODUCTION_ADMITTED
+        ),
+        "suite_transition_policy": SIGNATURE_SUITE_TRANSITION_POLICY,
+        "custody_class": DEFAULT_SIGNATURE_CUSTODY_CLASS,
+        "effect_authority": DEFAULT_SIGNATURE_EFFECT_AUTHORITY,
+        "fallback_provider": None,
     }
 
 
@@ -114,7 +141,7 @@ def build_audit_security() -> dict:
 
 def build_security_config() -> dict:
     return {
-        "pqc": build_pqc_config(),
+        "signature_provider": build_signature_provider_config(),
         "tokens": build_token_requirements(),
         "collective_signals": build_collective_signal_security(),
         "execution_gate": build_execution_gate_security(),

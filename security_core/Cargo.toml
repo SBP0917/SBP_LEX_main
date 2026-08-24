@@ -1,0 +1,34 @@
+[package]
+name = "sbp-lex-v2-security-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "UNLICENSED"
+publish = false
+description = "Isolated fail-closed security boundary for SBP-LEX V2"
+
+[workspace]
+resolver = "2"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+base64 = "0.23.1"
+sbp-lex-v2-hybrid-signature = { path = "../hybrid_signature_rust" }
+serde_json = { version = "1.0.151", features = ["arbitrary_precision"] }
+sha2 = "0.11.0"
+unicode-normalization = "0.1.25"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+
+[dev-dependencies]
+sbp-lex-v2-hybrid-signature = { path = "../hybrid_signature_rust", features = ["software-signing"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"

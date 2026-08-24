@@ -1,0 +1,17 @@
+name = "spark_safety_monitor"
+description = "SPARK monitor for the SBP-LEX authority/effect protocol"
+version = "0.1.0-dev"
+licenses = "Apache-2.0"
+authors = ["SBP-LEX successor assurance programme"]
+maintainers = ["SBP-LEX successor assurance programme <assurance@example.invalid>"]
+maintainers-logins = ["local-assurance"]
+executables = ["spark_safety_monitor"]
+
+[[depends-on]]
+gnatprove = "=16.1.0"
+
+[[depends-on]]
+gnat_native = "=16.1.0"
+
+[[depends-on]]
+gprbuild = "=26.0.1"

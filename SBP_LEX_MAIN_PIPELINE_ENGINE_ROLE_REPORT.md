@@ -1,5 +1,13 @@
 # SBP_LEX_MAIN Pipeline Engine and File Role Report
 
+> **HISTORICAL / SUPERSEDED SNAPSHOT — 25 JUNE 2026.** This report describes the
+> repository, launcher and pipeline observed during the minimum run-restoration
+> pass identified below. It is not current V2 traversal, test, dependency,
+> launcher, deployment or handover evidence. Later work deliberately deleted
+> `sbp_lex/security/pqc.py`, which was a fake placeholder rather than a
+> post-quantum implementation. Nothing in this historical report supports a
+> current PQC implementation or security claim.
+
 ## Purpose
 
 This report explains the observed role of every repository file and engine in `SBP0917/SBP_LEX_MAIN` after the minimum run-restoration pass.
@@ -93,7 +101,7 @@ Current observed behavior:
 | File | Role | Pipeline status |
 | --- | --- | --- |
 | `sbp_lex/config/pipeline_config.py` | Central constants for governance, procedural truth, classification, licensing, Aurion, execution result names, pipeline order, and configuration builders. | `ACTIVE` |
-| `sbp_lex/config/security_config.py` | Security policy constants and builders for PQC placeholder settings, token requirements, collective signal security, execution-gate security, audit security, and fail-closed behavior. | `ACTIVE` |
+| `sbp_lex/config/security_config.py` | Security policy constants and builders that, in this historical snapshot, included placeholder algorithm labels alongside token requirements, collective signal security, execution-gate security, audit security, and fail-closed behavior. The labels did not establish PQC. | `ACTIVE` |
 | `sbp_lex/config/thresholds.py` | Computes safety tier, financial factor, consequentiality tier, corroboration requirement, and threshold snapshots. | `ACTIVE` |
 
 ## Authority-First Root-of-Trust Files
@@ -280,7 +288,7 @@ The active audit path only executes if the pipeline reaches successful execution
 
 | File | Role | Pipeline status |
 | --- | --- | --- |
-| `sbp_lex/security/pqc.py` | Placeholder digest/sign/verify helpers for PQC-style signed objects. Used by token stack. | `ACTIVE_SUPPORT` |
+| `sbp_lex/security/pqc.py` | Historical fake digest/sign/verify placeholder, later deliberately deleted. It was not a PQC implementation and provides no current security evidence or claim. | `HISTORICAL_DELETED_NON_EVIDENCE` |
 | `sbp_lex/security/token_stack.py` | Issues and verifies governance/execution tokens, token digests, signatures, request fingerprint binding, state hash binding, and threshold-token requirements. | `ACTIVE` |
 
 ## Response Controller Files

@@ -1,0 +1,18 @@
+﻿{
+    "schema_id":  "SBP_LEX_V2_TPM_READINESS_RAW_V1",
+    "captured_on":  "2026-08-24",
+    "admission_state":  "NOT_ADMITTED",
+    "authority_granted":  false,
+    "provisioning_attempted":  false,
+    "signing_attempted":  false,
+    "get_tpm":  {
+                    "TpmPresent":  true,
+                    "TpmReady":  true,
+                    "TpmEnabled":  true,
+                    "TpmActivated":  true,
+                    "ManufacturerIdTxt":  "STM ",
+                    "ManufacturerVersion":  "1.258.0.0\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000",
+                    "ManagedAuthLevel":  4,
+                    "OwnerClearDisabled":  false
+                }
+}

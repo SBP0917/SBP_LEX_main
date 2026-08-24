@@ -2,6 +2,22 @@ from __future__ import annotations
 
 from typing import Dict, Any, List
 
+from sbp_lex.baseline.application_startup import (
+    APPLICATION_STARTUP_STATE_FIELDS,
+    ApplicationIntegrityRuntimeBundle,
+    verify_and_project_application_startup,
+)
+from sbp_lex.baseline.foundational_baseline import (
+    verify_foundational_baseline,
+)
+from sbp_lex.baseline.request_controls import (
+    FoundationalRequestDependencies,
+    verify_digital_provenance_state,
+    verify_foundational_request_controls,
+)
+from sbp_lex.compliance.australian_minor_access import (
+    verify_australian_minor_access,
+)
 from sbp_lex.config.pipeline_config import (
     GOVERNANCE_ALLOW,
     PROCEDURAL_TRUTH_PASS,
@@ -17,6 +33,37 @@ from sbp_lex.security.token_stack import (
     verify_required_tokens,
     get_required_threshold_tokens,
 )
+from sbp_lex.security.signature_provider import (
+    HybridVerificationContext,
+    SignatureProvider,
+)
+from sbp_lex.security.integrity import verify_hash_chain_entries
+from sbp_lex.governance.three_p_doctrine import verify_three_p_core
+from sbp_lex.governance.authority_provenance import (
+    verify_authority_provenance,
+)
+from sbp_lex.identity.sovereign_identity import verify_sovereign_identity
+from sbp_lex.interface.authority_boundary import verify_authority_boundary
+from sbp_lex.governance.skg_authority import (
+    SKGAuthorityEvaluator,
+    verify_skg_authority,
+)
+from sbp_lex.governance.filed_frameworks import (
+    FiledFrameworkEvaluator,
+    verify_filed_frameworks,
+)
+from sbp_lex.governance.filed_lifecycle import (
+    FiledLifecycleEvaluator,
+    verify_filed_lifecycle,
+)
+from sbp_lex.governance.filed_governance_integrity import (
+    FiledGovernanceIntegrityEvaluator,
+    verify_filed_governance_integrity,
+)
+from sbp_lex.licensing.filed_licensing import (
+    FiledLicenceEvaluator,
+    verify_filed_licence,
+)
 
 
 # ─────────────────────────────────────────────
@@ -24,31 +71,10 @@ from sbp_lex.security.token_stack import (
 # ─────────────────────────────────────────────
 
 def verify_hash_chain(state: Dict[str, Any]) -> bool:
-    chain = state.get("hash_chain", [])
-    if not chain:
-        return False
-
-    previous_hash = "GENESIS"
-
-    for entry in chain:
-        if entry.get("previous_hash") != previous_hash:
-            return False
-
-        if not entry.get("stage"):
-            return False
-
-        if not entry.get("payload_hash"):
-            return False
-
-        if not entry.get("hash"):
-            return False
-
-        previous_hash = entry["hash"]
-
-    if state.get("state_hash") != chain[-1].get("hash"):
-        return False
-
-    return True
+    return verify_hash_chain_entries(
+        state.get("hash_chain"),
+        state.get("state_hash"),
+    )
 
 
 # ─────────────────────────────────────────────
@@ -130,16 +156,12 @@ def verify_collective_signal_consistency(state: Dict[str, Any]) -> bool:
 
 def verify_execution_boundary_clear(state: Dict[str, Any]) -> bool:
     token = state.get("tokens", {}).get("execution_boundary", {})
-    payload = token.get("payload", {})
-    token_payload = payload.get("payload", {})
-    return token_payload.get("boundary_clear") is True
+    return token.get("payload", {}).get("boundary_clear") is True
 
 
 def verify_execution_attestation_clear(state: Dict[str, Any]) -> bool:
     token = state.get("tokens", {}).get("execution_attestation", {})
-    payload = token.get("payload", {})
-    token_payload = payload.get("payload", {})
-    return token_payload.get("attested_for_execution") is True
+    return token.get("payload", {}).get("attested_for_execution") is True
 
 
 # ─────────────────────────────────────────────
@@ -173,11 +195,202 @@ def _halt(
     return state
 
 
+def _application_integrity_current_and_unchanged(
+    state: Dict[str, Any],
+    *,
+    bundle: ApplicationIntegrityRuntimeBundle | None,
+    result: dict[str, Any] | None,
+) -> bool:
+    if (
+        type(bundle) is not ApplicationIntegrityRuntimeBundle
+        or type(result) is not dict
+    ):
+        return False
+    before = tuple(
+        (field in state, state.get(field))
+        for field in APPLICATION_STARTUP_STATE_FIELDS
+    )
+    verify_and_project_application_startup(
+        state,
+        bundle=bundle,
+        result=result,
+    )
+    after = tuple(
+        (field in state, state.get(field))
+        for field in APPLICATION_STARTUP_STATE_FIELDS
+    )
+    return before == after
+
+
+def _impersonation_control_current_and_valid(
+    state: Dict[str, Any],
+    dependencies: FoundationalRequestDependencies | None,
+) -> bool:
+    return (
+        isinstance(dependencies, FoundationalRequestDependencies)
+        and verify_foundational_request_controls(
+            state,
+            dependencies=dependencies,
+        )
+    )
+
+
+def _run_foundational_execution_checks(
+    state: Dict[str, Any],
+    *,
+    application_integrity_bundle: ApplicationIntegrityRuntimeBundle | None,
+    application_integrity_result: dict[str, Any] | None,
+    foundational_request_dependencies: FoundationalRequestDependencies | None,
+) -> Dict[str, Any] | None:
+    dependencies = foundational_request_dependencies
+    checks = (
+        (
+            "application_integrity_current_and_valid",
+            lambda: _application_integrity_current_and_unchanged(
+                state,
+                bundle=application_integrity_bundle,
+                result=application_integrity_result,
+            ),
+        ),
+        (
+            "digital_provenance_authenticated",
+            lambda: (
+                isinstance(dependencies, FoundationalRequestDependencies)
+                and verify_digital_provenance_state(
+                    state,
+                    dependencies=dependencies,
+                )
+            ),
+        ),
+        (
+            "sovereign_identity_current_and_valid",
+            lambda: (
+                isinstance(dependencies, FoundationalRequestDependencies)
+                and verify_sovereign_identity(
+                    state,
+                    evaluator=dependencies.sovereign_identity_evaluator,
+                    attestation_provider=(
+                        dependencies.sovereign_identity_attestation_provider
+                    ),
+                    attestation_trust_context=(
+                        dependencies.sovereign_identity_trust_context
+                    ),
+                    owner_pinned_context_digest=(
+                        dependencies.sovereign_identity_owner_pinned_context_digest
+                    ),
+                    require_hash_binding=True,
+                )
+            ),
+        ),
+        (
+            "authority_boundary_current_and_valid",
+            lambda: (
+                isinstance(dependencies, FoundationalRequestDependencies)
+                and verify_authority_boundary(
+                    state,
+                    evaluator=dependencies.authority_boundary_evaluator,
+                    attestation_provider=(
+                        dependencies.authority_boundary_attestation_provider
+                    ),
+                    attestation_trust_context=(
+                        dependencies.authority_boundary_trust_context
+                    ),
+                    owner_pinned_context_digest=(
+                        dependencies.authority_boundary_owner_pinned_context_digest
+                    ),
+                    require_hash_binding=True,
+                )
+            ),
+        ),
+        (
+            "impersonation_protection_current_and_valid",
+            lambda: _impersonation_control_current_and_valid(
+                state,
+                dependencies,
+            ),
+        ),
+        (
+            "australian_minor_access_current_and_valid",
+            lambda: verify_australian_minor_access(state),
+        ),
+        (
+            "foundational_request_controls_current_and_valid",
+            lambda: (
+                isinstance(dependencies, FoundationalRequestDependencies)
+                and verify_foundational_request_controls(
+                    state,
+                    dependencies=dependencies,
+                )
+            ),
+        ),
+        (
+            "foundational_baseline_digest_current_and_valid",
+            lambda: verify_foundational_baseline(
+                state,
+                require_hash_binding=True,
+            ),
+        ),
+    )
+    for check, verifier in checks:
+        try:
+            passed = verifier() is True
+        except Exception:
+            passed = False
+        failure_reason = f"{check}_failure"
+        _append_trace(
+            state,
+            check,
+            passed,
+            None if passed else failure_reason,
+        )
+        if not passed:
+            return _halt(state, failure_reason)
+    return None
+
+
 # ─────────────────────────────────────────────
 # EXECUTION GATE
 # ─────────────────────────────────────────────
 
-def run_execution_gate(state: Dict[str, Any]) -> Dict[str, Any]:
+def run_execution_gate(
+    state: Dict[str, Any],
+    *,
+    signature_provider: SignatureProvider | None = None,
+    signature_trust_context: HybridVerificationContext | None = None,
+    signature_owner_pinned_context_digest: str | None = None,
+    three_p_attestation_provider: SignatureProvider | None = None,
+    three_p_attestation_trust_context: HybridVerificationContext | None = None,
+    three_p_owner_pinned_context_digest: str | None = None,
+    skg_evaluator: SKGAuthorityEvaluator | None = None,
+    skg_attestation_provider: SignatureProvider | None = None,
+    skg_attestation_trust_context: HybridVerificationContext | None = None,
+    skg_owner_pinned_context_digest: str | None = None,
+    filed_framework_evaluator: FiledFrameworkEvaluator | None = None,
+    filed_framework_attestation_provider: SignatureProvider | None = None,
+    filed_framework_attestation_trust_context: HybridVerificationContext | None = None,
+    filed_framework_owner_pinned_context_digest: str | None = None,
+    filed_licence_evaluator: FiledLicenceEvaluator | None = None,
+    filed_licence_attestation_provider: SignatureProvider | None = None,
+    filed_licence_attestation_trust_context: HybridVerificationContext | None = None,
+    filed_licence_owner_pinned_context_digest: str | None = None,
+    filed_lifecycle_evaluator: FiledLifecycleEvaluator | None = None,
+    filed_lifecycle_attestation_provider: SignatureProvider | None = None,
+    filed_lifecycle_attestation_trust_context: HybridVerificationContext | None = None,
+    filed_lifecycle_owner_pinned_context_digest: str | None = None,
+    filed_governance_integrity_evaluator: (
+        FiledGovernanceIntegrityEvaluator | None
+    ) = None,
+    filed_governance_integrity_attestation_provider: (
+        SignatureProvider | None
+    ) = None,
+    filed_governance_integrity_attestation_trust_context: (
+        HybridVerificationContext | None
+    ) = None,
+    filed_governance_integrity_owner_pinned_context_digest: str | None = None,
+    application_integrity_bundle: ApplicationIntegrityRuntimeBundle | None = None,
+    application_integrity_result: dict[str, Any] | None = None,
+    foundational_request_dependencies: FoundationalRequestDependencies | None = None,
+) -> Dict[str, Any]:
     state.setdefault("execution_trace", [])
 
     # 1. hash-chain presence + integrity
@@ -190,6 +403,169 @@ def run_execution_gate(state: Dict[str, Any]) -> Dict[str, Any]:
     )
     if not hash_chain_ok:
         return _halt(state, "hash_chain_failure", decision=EXECUTION_ESCALATED)
+
+    foundational_failure = _run_foundational_execution_checks(
+        state,
+        application_integrity_bundle=application_integrity_bundle,
+        application_integrity_result=application_integrity_result,
+        foundational_request_dependencies=foundational_request_dependencies,
+    )
+    if foundational_failure is not None:
+        return foundational_failure
+
+    authority_provenance_ok = (
+        isinstance(
+            foundational_request_dependencies,
+            FoundationalRequestDependencies,
+        )
+        and verify_authority_provenance(
+            state,
+            dependencies=(
+                foundational_request_dependencies.authority_provenance_dependencies
+            ),
+            require_hash_binding=True,
+        )
+    )
+    _append_trace(
+        state,
+        "authority_provenance_current_and_valid",
+        authority_provenance_ok,
+        None
+        if authority_provenance_ok
+        else "authority_provenance_current_and_valid_failure",
+    )
+    if not authority_provenance_ok:
+        return _halt(
+            state, "authority_provenance_current_and_valid_failure"
+        )
+
+    # Constitutional prerequisite: no downstream result can replace the 3P Core.
+    three_p_ok = verify_three_p_core(
+        state,
+        attestation_provider=three_p_attestation_provider,
+        trust_context=three_p_attestation_trust_context,
+        owner_pinned_context_digest=three_p_owner_pinned_context_digest,
+        require_hash_binding=True,
+    )
+    _append_trace(
+        state,
+        "three_p_core_constitutional_constraint",
+        three_p_ok,
+        None if three_p_ok else "3P Core is absent, failed, mutated, or unbound.",
+    )
+    if not three_p_ok:
+        return _halt(state, "three_p_core_failure")
+
+    skg_ok = verify_skg_authority(
+        state,
+        evaluator=skg_evaluator,
+        attestation_provider=skg_attestation_provider,
+        attestation_trust_context=skg_attestation_trust_context,
+        owner_pinned_context_digest=skg_owner_pinned_context_digest,
+        require_hash_binding=True,
+    )
+    _append_trace(
+        state,
+        "skg_authority_complete_and_valid",
+        skg_ok,
+        None
+        if skg_ok
+        else "SKG authority is absent, failed, mutated, untrusted, or unbound.",
+    )
+    if not skg_ok:
+        return _halt(state, "skg_authority_failure")
+
+    filed_licence_ok = verify_filed_licence(
+        state,
+        evaluator=filed_licence_evaluator,
+        attestation_provider=filed_licence_attestation_provider,
+        trust_context=filed_licence_attestation_trust_context,
+        owner_pinned_context_digest=filed_licence_owner_pinned_context_digest,
+        require_revalidation=True,
+        require_hash_binding=True,
+    )
+    _append_trace(
+        state,
+        "filed_four_tier_licence_current_and_valid",
+        filed_licence_ok,
+        None
+        if filed_licence_ok
+        else (
+            "The filed licence tier, five bindings, invalidation state, or "
+            "live revocation evidence is invalid."
+        ),
+    )
+    if not filed_licence_ok:
+        return _halt(state, "filed_licence_failure")
+
+    filed_frameworks_ok = verify_filed_frameworks(
+        state,
+        evaluator=filed_framework_evaluator,
+        attestation_provider=filed_framework_attestation_provider,
+        attestation_trust_context=filed_framework_attestation_trust_context,
+        owner_pinned_context_digest=filed_framework_owner_pinned_context_digest,
+        require_hash_binding=True,
+    )
+    _append_trace(
+        state,
+        "filed_frameworks_complete_and_valid",
+        filed_frameworks_ok,
+        None
+        if filed_frameworks_ok
+        else "AJ-SAAF, PTODF, GALA, and ABEGF are incomplete, invalid, or out of order.",
+    )
+    if not filed_frameworks_ok:
+        return _halt(state, "filed_framework_traversal_failure")
+
+    filed_lifecycle_ok = verify_filed_lifecycle(
+        state,
+        evaluator=filed_lifecycle_evaluator,
+        attestation_provider=filed_lifecycle_attestation_provider,
+        attestation_trust_context=filed_lifecycle_attestation_trust_context,
+        owner_pinned_context_digest=filed_lifecycle_owner_pinned_context_digest,
+        require_hash_binding=True,
+    )
+    _append_trace(
+        state,
+        "filed_lifecycle_complete_and_valid",
+        filed_lifecycle_ok,
+        None
+        if filed_lifecycle_ok
+        else (
+            "The three filed lifecycle contracts are incomplete, invalid, "
+            "untrusted, unbound, or out of implementation-defined order."
+        ),
+    )
+    if not filed_lifecycle_ok:
+        return _halt(state, "filed_lifecycle_failure")
+
+    filed_governance_integrity_ok = verify_filed_governance_integrity(
+        state,
+        evaluator=filed_governance_integrity_evaluator,
+        attestation_provider=(
+            filed_governance_integrity_attestation_provider
+        ),
+        attestation_trust_context=(
+            filed_governance_integrity_attestation_trust_context
+        ),
+        owner_pinned_context_digest=(
+            filed_governance_integrity_owner_pinned_context_digest
+        ),
+        require_hash_binding=True,
+    )
+    _append_trace(
+        state,
+        "filed_governance_integrity_complete_and_valid",
+        filed_governance_integrity_ok,
+        None
+        if filed_governance_integrity_ok
+        else (
+            "The five filed governance-integrity functions are incomplete, "
+            "negative, invalid, untrusted, revoked, unbound, or reordered."
+        ),
+    )
+    if not filed_governance_integrity_ok:
+        return _halt(state, "filed_governance_integrity_failure")
 
     # 2. governance allow
     governance_ok = state.get("governance_result") == GOVERNANCE_ALLOW
@@ -248,7 +624,14 @@ def run_execution_gate(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # 7–12. token verification bundle
     required_threshold_tokens = get_required_threshold_tokens(state)
-    state = verify_required_tokens(state, required_threshold_tokens=required_threshold_tokens)
+    state = verify_required_tokens(
+        state,
+        required_threshold_tokens=required_threshold_tokens,
+        provider=signature_provider,
+        require_effect_authority=True,
+        trust_context=signature_trust_context,
+        owner_pinned_context_digest=signature_owner_pinned_context_digest,
+    )
 
     required_tokens_present_ok = len(state.get("token_verification_failures", [])) == 0
     _append_trace(

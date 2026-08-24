@@ -2,7 +2,6 @@ from sbp_lex.types import EngineResult
 from .registry import register
 import hashlib
 import json
-import time
 
 
 @register("indexed_attestation")
@@ -39,10 +38,10 @@ def indexed_attestation_engine(payload: dict) -> EngineResult:
         "action": action,
         "output": output,
         "indexed_attestations": normalized_attestations,
-        "timestamp": int(time.time()),
+        "timestamp": int(payload.get("evaluation_time", 0)),
     }
 
-    record_hash = hashlib.sha256(
+    record_hash = hashlib.sha512(
         json.dumps(record_material, sort_keys=True).encode()
     ).hexdigest()
 

@@ -1,7 +1,6 @@
 from sbp_lex.types import EngineResult
 from .registry import register
 import hashlib
-import time
 
 
 @register("governance_immutability")
@@ -10,10 +9,10 @@ def governance_immutability_engine(payload: dict) -> EngineResult:
     attestation = payload.get("attestation")
     audit_record = payload.get("audit_record")
 
-    timestamp = int(time.time())
+    timestamp = int(payload.get("evaluation_time", 0))
 
     immutability_material = f"{decision_token}|{attestation}|{audit_record}|{timestamp}"
-    immutability_hash = hashlib.sha256(immutability_material.encode()).hexdigest()
+    immutability_hash = hashlib.sha512(immutability_material.encode()).hexdigest()
 
     record = {
         "timestamp": timestamp,

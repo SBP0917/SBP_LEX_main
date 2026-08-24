@@ -16,7 +16,7 @@ class LegalDomain(DomainEngine):
         if not jurisdiction or not authority:
             return self._finalise_result(state, "escalate")
 
-        # basic deterministic legal checks (non-placeholder)
+        # Basic deterministic legal checks.
         if "illegal" in str(candidate).lower():
             return self._finalise_result(state, "escalate")
 

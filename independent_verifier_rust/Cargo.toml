@@ -1,0 +1,20 @@
+[package]
+name = "sbp-lex-independent-verifier"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Independent, node-free verifier for canonical SBP-LEX evidence traces"
+
+[lib]
+name = "sbp_lex_independent_verifier"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sbp-lex-independent-verify"
+path = "src/main.rs"
+
+[dependencies]
+sbp-lex-v2-hybrid-signature = { path = "../hybrid_signature_rust" }
+
+[dev-dependencies]
+sbp-lex-v2-hybrid-signature = { path = "../hybrid_signature_rust", features = ["software-signing"] }

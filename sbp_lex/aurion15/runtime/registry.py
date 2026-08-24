@@ -1,5 +1,7 @@
 ENGINE_REGISTRY = {}
 
+from sbp_lex.aurion15.core.registry import aurion_registry
+
 
 def register(name: str):
     def decorator(fn):
@@ -7,3 +9,6 @@ def register(name: str):
         return fn
 
     return decorator
+
+
+__all__ = ["ENGINE_REGISTRY", "aurion_registry", "register"]
