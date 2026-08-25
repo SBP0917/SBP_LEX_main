@@ -229,6 +229,34 @@ def _e_inputs(arguments: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def _result_report(
+    arguments: argparse.Namespace,
+    document: dict[str, Any],
+    persisted_output_document_sha512: str,
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "admission_state": "NOT_ADMITTED",
+        "authority_granted": False,
+        "no_authority": document["no_authority"],
+        "output": str(Path(arguments.output)),
+        "persisted_output_document_sha512": (
+            persisted_output_document_sha512
+        ),
+    }
+    if arguments.command == "p-candidate":
+        report["p_selection_state"] = document["p_selection_state"]
+        report["p_packet_internal_sha512"] = document["packet_sha512"]
+    else:
+        report["validated_p_packet_internal_sha512"] = (
+            arguments.expected_p_packet_sha512
+        )
+        if arguments.command == "e-inputs":
+            report["e_input_skeleton_internal_sha512"] = document[
+                "skeleton_sha512"
+            ]
+    return report
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     arguments = parser.parse_args(argv)
@@ -245,12 +273,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(
             json.dumps(
-                {
-                    "admission_state": "NOT_ADMITTED",
-                    "authority_granted": False,
-                    "output": str(Path(arguments.output)),
-                    "output_sha512": output_digest,
-                },
+                _result_report(arguments, document, output_digest),
                 ensure_ascii=True,
                 separators=(",", ":"),
                 sort_keys=True,

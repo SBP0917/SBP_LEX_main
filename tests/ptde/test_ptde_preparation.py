@@ -61,6 +61,7 @@ from sbp_ptde.trust import (
     AcceptedAttemptHistory,
     accepted_attempt_history_from_document,
 )
+from tools.prepare_v2_ptde_inputs import main as prepare_v2_ptde_inputs_main
 
 
 def _run(*arguments: str, cwd: Path | None = None) -> None:
@@ -910,3 +911,216 @@ def test_e_preparation_rejects_d_descriptor_delta_mutation(tmp_path: Path) -> No
             campaign="campaign-preparation-1",
             **fixture.downstream_arguments(),
         )
+
+
+def test_cli_reports_internal_and_persisted_digests_without_ambiguity(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fixture = PreparationFixture(tmp_path)
+    ptde_history_path = tmp_path / "ptde-history.json"
+    local_history_path = tmp_path / "local-history.json"
+    local_context_path = tmp_path / "local-context.json"
+    t_inputs_path = tmp_path / "t-inputs.json"
+    fingerprints_path = tmp_path / "fingerprints.json"
+    packet_for_assignments = fixture.packet()
+    for path, document in (
+        (ptde_history_path, fixture.ptde_history.as_dict()),
+        (local_history_path, fixture.local_history),
+        (local_context_path, fixture.local_context),
+        (
+            t_inputs_path,
+            {
+                "test_profile_id": "v2-cli-digest-profile",
+                "inventory_assignments": fixture.assignments(
+                    packet_for_assignments
+                ),
+                "lanes": fixture.lanes(),
+            },
+        ),
+        (fingerprints_path, fixture.fingerprints()),
+    ):
+        write_canonical_document_exclusive(document, path)
+
+    def external_arguments(*, include_expected_p_oid: bool) -> list[str]:
+        result = [
+            "--ptde-accepted-attempt-history",
+            str(ptde_history_path),
+            "--expected-ptde-accepted-attempt-history-sha512",
+            fixture.ptde_digest,
+            "--local-trust-accepted-package-history",
+            str(local_history_path),
+            "--local-trust-history-context",
+            str(local_context_path),
+            "--owner-pinned-local-trust-history-context-sha512",
+            fixture.context_digest,
+            "--expected-local-trust-repository-identity-sha512",
+            fixture.repository_identity_digest,
+            "--expected-local-trust-accepted-package-history-sequence",
+            "0",
+            "--expected-local-trust-accepted-package-history-sha512",
+            fixture.local_digest,
+            "--expected-python-dependency-prior-lock-sha512",
+            "GENESIS",
+        ]
+        if include_expected_p_oid:
+            result = ["--expected-p-oid", fixture.p_oid, *result]
+        return result
+
+    def common_arguments(output: Path) -> list[str]:
+        return [
+            "--object-database",
+            str(fixture.bare),
+            "--git-executable",
+            fixture.git,
+            "--expected-git-executable-sha512",
+            fixture.git_sha512,
+            "--output",
+            str(output),
+        ]
+
+    def invoke(arguments: list[str]) -> tuple[int, dict[str, Any]]:
+        result = prepare_v2_ptde_inputs_main(arguments)
+        report = json.loads(capsys.readouterr().out)
+        assert isinstance(report, dict)
+        return result, report
+
+    p_output = tmp_path / "p-packet.json"
+    result, p_report = invoke(
+        [
+            "p-candidate",
+            *common_arguments(p_output),
+            "--repository",
+            str(fixture.work),
+            "--candidate-oid",
+            fixture.p_oid,
+            *external_arguments(include_expected_p_oid=False),
+        ]
+    )
+    assert result == 0
+    p_packet = json.loads(p_output.read_bytes())
+    p_internal_digest = p_packet["packet_sha512"]
+    p_persisted_digest = hashlib.sha512(p_output.read_bytes()).hexdigest()
+    assert p_internal_digest != p_persisted_digest
+    assert p_report == {
+        "admission_state": "NOT_ADMITTED",
+        "authority_granted": False,
+        "no_authority": NO_AUTHORITY,
+        "output": str(p_output),
+        "p_packet_internal_sha512": p_internal_digest,
+        "p_selection_state": "NOT_SELECTED",
+        "persisted_output_document_sha512": p_persisted_digest,
+    }
+
+    t_output = tmp_path / "t-profile.json"
+    t_arguments = [
+        "t-profile",
+        *common_arguments(t_output),
+        *external_arguments(include_expected_p_oid=True),
+        "--p-packet",
+        str(p_output),
+        "--expected-p-packet-sha512",
+        p_internal_digest,
+        "--t-inputs",
+        str(t_inputs_path),
+    ]
+    result, t_report = invoke(t_arguments)
+    assert result == 0
+    assert t_report == {
+        "admission_state": "NOT_ADMITTED",
+        "authority_granted": False,
+        "no_authority": NO_AUTHORITY,
+        "output": str(t_output),
+        "persisted_output_document_sha512": hashlib.sha512(
+            t_output.read_bytes()
+        ).hexdigest(),
+        "validated_p_packet_internal_sha512": p_internal_digest,
+    }
+
+    rejected_t_output = tmp_path / "t-profile-persisted-digest.json"
+    rejected_arguments = list(t_arguments)
+    output_value_index = rejected_arguments.index(str(t_output))
+    rejected_arguments[output_value_index] = str(rejected_t_output)
+    pin_option_index = rejected_arguments.index("--expected-p-packet-sha512")
+    rejected_arguments[pin_option_index + 1] = p_persisted_digest
+    result, rejection = invoke(rejected_arguments)
+    assert result == 2
+    assert rejection == {
+        "error_code": "PTDE_P_PREPARATION_PACKET_CONTRACT_INVALID"
+    }
+    assert not rejected_t_output.exists()
+
+    t_profile = json.loads(t_output.read_bytes())
+    t_oid = _commit_document(
+        fixture,
+        "ptde_subjects/T_TEST_BUILD_PROFILE.json",
+        t_profile,
+        "T profile from CLI",
+    )
+    d_output = tmp_path / "d-descriptor.json"
+    result, d_report = invoke(
+        [
+            "d-descriptor",
+            *common_arguments(d_output),
+            *external_arguments(include_expected_p_oid=True),
+            "--p-packet",
+            str(p_output),
+            "--expected-p-packet-sha512",
+            p_internal_digest,
+            "--t-oid",
+            t_oid,
+            "--campaign-id",
+            "cli-digest-campaign",
+            "--external-fingerprints",
+            str(fingerprints_path),
+        ]
+    )
+    assert result == 0
+    assert d_report == {
+        "admission_state": "NOT_ADMITTED",
+        "authority_granted": False,
+        "no_authority": NO_AUTHORITY,
+        "output": str(d_output),
+        "persisted_output_document_sha512": hashlib.sha512(
+            d_output.read_bytes()
+        ).hexdigest(),
+        "validated_p_packet_internal_sha512": p_internal_digest,
+    }
+
+    d_descriptor = json.loads(d_output.read_bytes())
+    d_oid = _commit_document(
+        fixture,
+        "ptde_subjects/D_RUNTIME_DESCRIPTOR.json",
+        d_descriptor,
+        "D descriptor from CLI",
+    )
+    e_output = tmp_path / "e-inputs.json"
+    result, e_report = invoke(
+        [
+            "e-inputs",
+            *common_arguments(e_output),
+            *external_arguments(include_expected_p_oid=True),
+            "--p-packet",
+            str(p_output),
+            "--expected-p-packet-sha512",
+            p_internal_digest,
+            "--t-oid",
+            t_oid,
+            "--d-oid",
+            d_oid,
+            "--campaign-id",
+            "cli-digest-campaign",
+        ]
+    )
+    assert result == 0
+    e_inputs = json.loads(e_output.read_bytes())
+    e_persisted_digest = hashlib.sha512(e_output.read_bytes()).hexdigest()
+    assert e_inputs["skeleton_sha512"] != e_persisted_digest
+    assert e_report == {
+        "admission_state": "NOT_ADMITTED",
+        "authority_granted": False,
+        "e_input_skeleton_internal_sha512": e_inputs["skeleton_sha512"],
+        "no_authority": NO_AUTHORITY,
+        "output": str(e_output),
+        "persisted_output_document_sha512": e_persisted_digest,
+        "validated_p_packet_internal_sha512": p_internal_digest,
+    }

@@ -151,6 +151,34 @@ def _prepare_request(
     )
 
 
+def _run_ptde_genesis_cli(
+    envelope_output: Path,
+    raw_history_output: Path,
+    *,
+    history_id: str = "owner-cli-ptde-history",
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(TOOL),
+            "ptde-genesis",
+            "--history-id",
+            history_id,
+            "--output",
+            str(envelope_output),
+            "--raw-history-output",
+            str(raw_history_output),
+        ],
+        cwd=REPOSITORY_ROOT,
+        check=False,
+        shell=False,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
 def test_ptde_genesis_is_unsigned_unpinned_and_owner_action_only(
     tmp_path: Path,
 ) -> None:
@@ -494,28 +522,64 @@ def test_cli_builds_both_preparation_documents_only(
     custody_path.write_bytes(canonical_json_document_bytes(custody))
 
     ptde_output = (tmp_path / "ptde-preparation.json").resolve()
-    ptde = subprocess.run(
-        [
-            sys.executable,
-            str(TOOL),
-            "ptde-genesis",
-            "--history-id",
-            "owner-cli-ptde-history",
-            "--output",
-            str(ptde_output),
-        ],
-        cwd=REPOSITORY_ROOT,
-        check=False,
-        shell=False,
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-        timeout=30,
+    raw_ptde_output = (tmp_path / "ptde-accepted-attempt-history.json").resolve()
+    ptde = _run_ptde_genesis_cli(
+        ptde_output,
+        raw_ptde_output,
     )
     assert ptde.returncode == 0, ptde.stderr
     ptde_status = json.loads(ptde.stdout)
     assert ptde_status["status"] == OWNER_ACTION_REQUIRED
     assert ptde_status["pin_state"] == NOT_INDEPENDENTLY_PINNED
+    assert ptde_status["admitted"] is False
+    assert ptde_status["authority_granted"] is False
+    assert ptde_status["output"] == str(ptde_output)
+    assert ptde_status["raw_history_output"] == str(raw_ptde_output)
+
+    envelope_bytes = ptde_output.read_bytes()
+    raw_history_bytes = raw_ptde_output.read_bytes()
+    envelope = json.loads(envelope_bytes)
+    raw_history = json.loads(raw_history_bytes)
+    parsed_history = accepted_attempt_history_from_document(raw_history_bytes)
+    assert raw_history_bytes == canonical_json_document_bytes(
+        envelope["accepted_attempt_history"]
+    )
+    assert raw_history == envelope["accepted_attempt_history"]
+    assert parsed_history.sequence == 0
+    assert parsed_history.records == ()
+    assert parsed_history.sha512() == ptde_status[
+        "accepted_attempt_history_sha512"
+    ]
+    assert ptde_status["accepted_attempt_history_sha512"] == envelope[
+        "accepted_attempt_history_sha512"
+    ]
+    assert ptde_status["raw_history_output_sha512"] == hashlib.sha512(
+        raw_history_bytes
+    ).hexdigest()
+    assert ptde_status["envelope_output_sha512"] == hashlib.sha512(
+        envelope_bytes
+    ).hexdigest()
+    assert ptde_status["accepted_attempt_history_sha512"] != ptde_status[
+        "raw_history_output_sha512"
+    ]
+    assert ptde_status["raw_history_output_sha512"] != ptde_status[
+        "envelope_output_sha512"
+    ]
+    assert ptde_status["digest_domains"] == {
+        "accepted_attempt_history_sha512": (
+            "CANONICAL_JSON_WITHOUT_TERMINAL_LF"
+        ),
+        "document_sha512": "CANONICAL_JSON_DOCUMENT_WITH_TERMINAL_LF",
+    }
+
+    mutated_history = deepcopy(raw_history)
+    mutated_history["history_id"] = "mutated-owner-history"
+    assert canonical_sha512(mutated_history) != ptde_status[
+        "accepted_attempt_history_sha512"
+    ]
+    assert hashlib.sha512(
+        canonical_json_document_bytes(mutated_history)
+    ).hexdigest() != ptde_status["raw_history_output_sha512"]
 
     local_output = (tmp_path / "local-request.json").resolve()
     local = subprocess.run(
@@ -553,3 +617,58 @@ def test_cli_builds_both_preparation_documents_only(
     local_document = json.loads(local_output.read_text(encoding="utf-8"))
     assert local_document["history_validation_state"] == NOT_A_VALID_HISTORY
     assert "signatures" not in local_document["unsigned_history"]
+
+
+@pytest.mark.parametrize("existing", ("envelope", "raw"))
+def test_ptde_cli_never_overwrites_either_output(
+    tmp_path: Path, existing: str
+) -> None:
+    envelope = (tmp_path / f"{existing}-envelope.json").resolve()
+    raw = (tmp_path / f"{existing}-raw.json").resolve()
+    occupied = envelope if existing == "envelope" else raw
+    occupied.write_bytes(b"sentinel")
+
+    result = _run_ptde_genesis_cli(envelope, raw)
+
+    assert result.returncode == 1
+    assert json.loads(result.stdout) == {
+        "admitted": False,
+        "authority_granted": False,
+        "failure": "HISTORY_PREPARATION_OUTPUT_ALREADY_EXISTS",
+        "status": "FAIL",
+    }
+    assert occupied.read_bytes() == b"sentinel"
+    other = raw if existing == "envelope" else envelope
+    assert not other.exists()
+
+
+def test_ptde_cli_rejects_same_output_before_creation(tmp_path: Path) -> None:
+    shared = (tmp_path / "shared-output.json").resolve()
+
+    result = _run_ptde_genesis_cli(shared, shared)
+
+    assert result.returncode == 1
+    assert json.loads(result.stdout)["failure"] == (
+        "HISTORY_PREPARATION_OUTPUT_PATHS_NOT_DISTINCT"
+    )
+    assert not shared.exists()
+
+
+def test_ptde_cli_rejects_parent_alias_before_creation(tmp_path: Path) -> None:
+    real_parent = tmp_path / "real-output-parent"
+    real_parent.mkdir()
+    alias_parent = tmp_path / "alias-output-parent"
+    try:
+        alias_parent.symlink_to(real_parent, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlink creation is unavailable")
+    real_output = (real_parent / "shared-output.json").absolute()
+    alias_output = (alias_parent / "shared-output.json").absolute()
+
+    result = _run_ptde_genesis_cli(real_output, alias_output)
+
+    assert result.returncode == 1
+    assert json.loads(result.stdout)["failure"] == (
+        "HISTORY_PREPARATION_OUTPUT_PARENT_INVALID"
+    )
+    assert not real_output.exists()
