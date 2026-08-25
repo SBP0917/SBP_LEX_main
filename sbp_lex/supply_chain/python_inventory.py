@@ -191,7 +191,7 @@ def _require_text(value: Any, *, code: str) -> str:
 def _validate_target_environment(
     value: Any,
     *,
-    expected_environment: Mapping[str, str] | None,
+    expected_environment: Mapping[str, str],
 ) -> dict[str, str]:
     environment = exact_fields(
         value,
@@ -211,7 +211,12 @@ def _validate_target_environment(
         or environment["installed_scope"] != "assurance"
     ):
         raise reject("SUPPLY_CHAIN_PYTHON_LOCK_ENVIRONMENT_INVALID")
-    if expected_environment is not None and environment != dict(expected_environment):
+    if (
+        not isinstance(expected_environment, Mapping)
+        or dict(expected_environment) != GOVERNED_PYTHON_ENVIRONMENT
+    ):
+        raise reject("SUPPLY_CHAIN_PYTHON_LOCK_EXPECTED_ENVIRONMENT_INVALID")
+    if environment != dict(expected_environment):
         raise reject("SUPPLY_CHAIN_PYTHON_LOCK_ENVIRONMENT_MISMATCH")
     return environment
 
@@ -283,7 +288,7 @@ def validate_python_lock_document(
     requirements: list[dict[str, str]],
     production_hash_lock_content: bytes,
     assurance_hash_lock_content: bytes,
-    expected_environment: Mapping[str, str] | None = None,
+    expected_environment: Mapping[str, str],
     expected_ptde_accepted_attempt_history_sequence: int,
     expected_ptde_accepted_attempt_history_sha512: str,
     expected_local_trust_accepted_package_history_sequence: int,
@@ -480,7 +485,7 @@ def evaluate_python_dependency_evidence(
     assurance_hash_lock_content: bytes | None,
     lock_document: Any | None,
     *,
-    expected_environment: Mapping[str, str] | None = None,
+    expected_environment: Mapping[str, str],
     expected_ptde_accepted_attempt_history_sequence: int,
     expected_ptde_accepted_attempt_history_sha512: str,
     expected_local_trust_accepted_package_history_sequence: int,

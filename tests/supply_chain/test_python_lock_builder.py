@@ -5,7 +5,9 @@ import shutil
 import tempfile
 import unittest
 import zipfile
+from copy import deepcopy
 from pathlib import Path
+from typing import cast
 
 from sbp_lex.local_trust.toolchain_guard import _local_python_dependency_evidence
 from sbp_lex.supply_chain.python_inventory import (
@@ -231,6 +233,53 @@ class PythonLockBuilderTests(unittest.TestCase):
         )
         with self.assertRaises(PTDEVerificationError):
             validate_python_lock_document(copied, **common)
+
+    def test_direct_validator_rejects_missing_or_alternate_environment(self) -> None:
+        document = self._build()
+        requirements = [{
+            "identity": "cryptography",
+            "version": "50.0.0",
+            "source_requirement": "cryptography==50.0.0",
+        }]
+        common = {
+            "requirements": requirements,
+            "production_hash_lock_content": (
+                self.root / "requirements-production.lock.txt"
+            ).read_bytes(),
+            "assurance_hash_lock_content": (
+                self.root / "requirements-test.lock.txt"
+            ).read_bytes(),
+            "expected_ptde_accepted_attempt_history_sequence": 0,
+            "expected_ptde_accepted_attempt_history_sha512": self.ptde_digest,
+            "expected_local_trust_accepted_package_history_sequence": 0,
+            "expected_local_trust_accepted_package_history_sha512": self.local_digest,
+            "expected_python_dependency_prior_lock_sha512": "GENESIS",
+        }
+        with self.assertRaises(PTDEVerificationError) as missing:
+            validate_python_lock_document(
+                document,
+                expected_environment=cast(dict[str, str], None),
+                **common,
+            )
+        self.assertEqual(
+            missing.exception.code,
+            "SUPPLY_CHAIN_PYTHON_LOCK_EXPECTED_ENVIRONMENT_INVALID",
+        )
+
+        alternate = dict(GOVERNED_PYTHON_ENVIRONMENT)
+        alternate["python_version"] = "3.12.12"
+        alternate_document = deepcopy(document)
+        alternate_document["target_environment"] = alternate
+        with self.assertRaises(PTDEVerificationError) as substituted:
+            validate_python_lock_document(
+                alternate_document,
+                expected_environment=alternate,
+                **common,
+            )
+        self.assertEqual(
+            substituted.exception.code,
+            "SUPPLY_CHAIN_PYTHON_LOCK_EXPECTED_ENVIRONMENT_INVALID",
+        )
 
     def test_built_lock_passes_both_supply_chain_and_local_trust_contracts(self) -> None:
         document = self._build()
