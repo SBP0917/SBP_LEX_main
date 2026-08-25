@@ -11,7 +11,12 @@ from sbp_ptde.constants import NO_AUTHORITY
 from sbp_ptde.git_objects import CommitObject, GitObjectDatabase, TreeBlob
 from sbp_ptde.trust import AcceptedAttemptHistory, validate_accepted_attempt_history
 
-from .constants import MAX_SOURCE_BLOBS, MAX_SOURCE_TOTAL_BYTES, P_BINDING_SCHEMA_ID, UNSIGNED_NOT_ADMITTED
+from .constants import (
+    MAX_SOURCE_BLOBS,
+    MAX_SOURCE_TOTAL_BYTES,
+    P_BINDING_SCHEMA_ID,
+    UNSIGNED_NOT_ADMITTED,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,9 +26,12 @@ class PObjectBinding:
     database: GitObjectDatabase
     commit: CommitObject
     tree: dict[str, TreeBlob]
-    accepted_attempt_history: AcceptedAttemptHistory
+    ptde_accepted_attempt_history: AcceptedAttemptHistory
     expected_git_executable_sha512: str
-    expected_attempt_history_sha512: str
+    expected_ptde_accepted_attempt_history_sha512: str
+    expected_local_trust_accepted_package_history_sequence: int
+    expected_local_trust_accepted_package_history_sha512: str
+    expected_python_dependency_prior_lock_sha512: str
 
     def document(self) -> dict[str, Any]:
         entries = [self.tree[path].record() for path in sorted(self.tree)]
@@ -36,9 +44,24 @@ class PObjectBinding:
             "p_inventory": entries,
             "p_inventory_sha512": canonical_sha512(entries),
             "expected_git_executable_sha512": self.expected_git_executable_sha512,
-            "accepted_attempt_history_id": self.accepted_attempt_history.history_id,
-            "accepted_attempt_history_sequence": self.accepted_attempt_history.sequence,
-            "expected_attempt_history_sha512": self.expected_attempt_history_sha512,
+            "ptde_accepted_attempt_history_id": (
+                self.ptde_accepted_attempt_history.history_id
+            ),
+            "ptde_accepted_attempt_history_sequence": (
+                self.ptde_accepted_attempt_history.sequence
+            ),
+            "expected_ptde_accepted_attempt_history_sha512": (
+                self.expected_ptde_accepted_attempt_history_sha512
+            ),
+            "expected_local_trust_accepted_package_history_sequence": (
+                self.expected_local_trust_accepted_package_history_sequence
+            ),
+            "expected_local_trust_accepted_package_history_sha512": (
+                self.expected_local_trust_accepted_package_history_sha512
+            ),
+            "expected_python_dependency_prior_lock_sha512": (
+                self.expected_python_dependency_prior_lock_sha512
+            ),
             "no_authority": dict(NO_AUTHORITY),
             "admission_state": UNSIGNED_NOT_ADMITTED,
         }
@@ -51,8 +74,11 @@ def bind_p_object(
     expected_p_oid: str,
     git_executable: str,
     expected_git_executable_sha512: str,
-    accepted_attempt_history: AcceptedAttemptHistory,
-    expected_attempt_history_sha512: str,
+    ptde_accepted_attempt_history: AcceptedAttemptHistory,
+    expected_ptde_accepted_attempt_history_sha512: str,
+    expected_local_trust_accepted_package_history_sequence: int,
+    expected_local_trust_accepted_package_history_sha512: str,
+    expected_python_dependency_prior_lock_sha512: str,
 ) -> PObjectBinding:
     """Read only the supplied, out-of-band pinned P object from a bare Git database."""
 
@@ -80,19 +106,59 @@ def bind_p_object(
 
         raise reject("SUPPLY_CHAIN_P_INVENTORY_LIMIT_EXCEEDED")
     history = validate_accepted_attempt_history(
-        accepted_attempt_history,
+        ptde_accepted_attempt_history,
         oid_hex_length=database.oid_hex_length,
         expected_sha512=require_sha512(
-            expected_attempt_history_sha512, "SUPPLY_CHAIN_EXPECTED_HISTORY_INVALID"
+            expected_ptde_accepted_attempt_history_sha512,
+            "SUPPLY_CHAIN_EXPECTED_PTDE_HISTORY_INVALID",
         ),
     )
+    if (
+        type(expected_local_trust_accepted_package_history_sequence) is not int
+        or expected_local_trust_accepted_package_history_sequence < 0
+    ):
+        from sbp_ptde.errors import reject
+
+        raise reject("SUPPLY_CHAIN_EXPECTED_LOCAL_TRUST_HISTORY_SEQUENCE_INVALID")
+    local_trust_history_sha512 = require_sha512(
+        expected_local_trust_accepted_package_history_sha512,
+        "SUPPLY_CHAIN_EXPECTED_LOCAL_TRUST_HISTORY_INVALID",
+    )
+    if local_trust_history_sha512 == history.sha512():
+        from sbp_ptde.errors import reject
+
+        raise reject("SUPPLY_CHAIN_HISTORY_LANES_NOT_INDEPENDENT")
+    genesis = (
+        history.sequence == 0
+        and expected_local_trust_accepted_package_history_sequence == 0
+    )
+    if genesis:
+        if expected_python_dependency_prior_lock_sha512 != "GENESIS":
+            from sbp_ptde.errors import reject
+
+            raise reject("SUPPLY_CHAIN_EXPECTED_PYTHON_PRIOR_INVALID")
+        expected_prior = "GENESIS"
+    else:
+        expected_prior = require_sha512(
+            expected_python_dependency_prior_lock_sha512,
+            "SUPPLY_CHAIN_EXPECTED_PYTHON_PRIOR_INVALID",
+        )
     return PObjectBinding(
         database=database,
         commit=commit,
         tree=tree,
-        accepted_attempt_history=history,
+        ptde_accepted_attempt_history=history,
         expected_git_executable_sha512=expected_git_executable_sha512,
-        expected_attempt_history_sha512=expected_attempt_history_sha512,
+        expected_ptde_accepted_attempt_history_sha512=(
+            expected_ptde_accepted_attempt_history_sha512
+        ),
+        expected_local_trust_accepted_package_history_sequence=(
+            expected_local_trust_accepted_package_history_sequence
+        ),
+        expected_local_trust_accepted_package_history_sha512=(
+            local_trust_history_sha512
+        ),
+        expected_python_dependency_prior_lock_sha512=expected_prior,
     )
 
 
@@ -116,7 +182,11 @@ def validate_p_binding_document(value: Any) -> dict[str, Any]:
     fields = {
         "schema_id", "p_commit_oid", "p_tree_oid", "p_commit_raw_sha512", "p_tree_raw_sha512",
         "p_inventory", "p_inventory_sha512", "expected_git_executable_sha512",
-        "accepted_attempt_history_id", "accepted_attempt_history_sequence", "expected_attempt_history_sha512",
+        "ptde_accepted_attempt_history_id", "ptde_accepted_attempt_history_sequence",
+        "expected_ptde_accepted_attempt_history_sha512",
+        "expected_local_trust_accepted_package_history_sequence",
+        "expected_local_trust_accepted_package_history_sha512",
+        "expected_python_dependency_prior_lock_sha512",
         "no_authority", "admission_state",
     }
     document = exact_fields(value, fields, code="SUPPLY_CHAIN_P_BINDING")
@@ -130,9 +200,34 @@ def validate_p_binding_document(value: Any) -> dict[str, Any]:
         raise reject("SUPPLY_CHAIN_P_BINDING_ADMISSION_INVALID")
     for field in (
         "p_commit_raw_sha512", "p_tree_raw_sha512", "p_inventory_sha512",
-        "expected_git_executable_sha512", "expected_attempt_history_sha512",
+        "expected_git_executable_sha512",
+        "expected_ptde_accepted_attempt_history_sha512",
+        "expected_local_trust_accepted_package_history_sha512",
     ):
         require_sha512(document[field], f"SUPPLY_CHAIN_{field.upper()}_INVALID")
+    for field in (
+        "ptde_accepted_attempt_history_sequence",
+        "expected_local_trust_accepted_package_history_sequence",
+    ):
+        if type(document[field]) is not int or document[field] < 0:
+            from sbp_ptde.errors import reject
+
+            raise reject(f"SUPPLY_CHAIN_{field.upper()}_INVALID")
+    genesis = (
+        document["ptde_accepted_attempt_history_sequence"] == 0
+        and document[
+            "expected_local_trust_accepted_package_history_sequence"
+        ]
+        == 0
+    )
+    prior = document["expected_python_dependency_prior_lock_sha512"]
+    if genesis:
+        if prior != "GENESIS":
+            from sbp_ptde.errors import reject
+
+            raise reject("SUPPLY_CHAIN_EXPECTED_PYTHON_PRIOR_INVALID")
+    else:
+        require_sha512(prior, "SUPPLY_CHAIN_EXPECTED_PYTHON_PRIOR_INVALID")
     if document["p_inventory_sha512"] != canonical_sha512(document["p_inventory"]):
         from sbp_ptde.errors import reject
 

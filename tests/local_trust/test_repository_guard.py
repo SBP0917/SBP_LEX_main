@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from copy import deepcopy
@@ -11,6 +12,35 @@ from sbp_lex.local_trust import repository_guard
 from sbp_lex.local_trust.repository_guard import verify_repository_guard
 
 ROOT = Path(__file__).resolve().parents[2]
+PTDE_HISTORY_SEQUENCE = 0
+PTDE_HISTORY_DIGEST = "a" * 128
+LOCAL_TRUST_HISTORY_SEQUENCE = 0
+LOCAL_TRUST_HISTORY_DIGEST = "b" * 128
+PRIOR_LOCK_SHA512 = "GENESIS"
+
+
+def _verify(root: Path, *, scope: str = "test") -> dict:
+    return verify_repository_guard(
+        root,
+        scope=scope,
+        expected_ptde_accepted_attempt_history_sequence=PTDE_HISTORY_SEQUENCE,
+        expected_ptde_accepted_attempt_history_digest=PTDE_HISTORY_DIGEST,
+        expected_local_trust_accepted_package_history_sequence=(
+            LOCAL_TRUST_HISTORY_SEQUENCE
+        ),
+        expected_local_trust_accepted_package_history_digest=(
+            LOCAL_TRUST_HISTORY_DIGEST
+        ),
+        expected_python_dependency_prior_lock_sha512=PRIOR_LOCK_SHA512,
+    )
+
+
+def _write_canonical_lock(path: Path, value: dict) -> None:
+    path.write_bytes(
+        (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode(
+            "utf-8"
+        )
+    )
 
 
 def _git(root: Path, *arguments: str) -> None:
@@ -60,6 +90,91 @@ def _repository(tmp_path: Path) -> Path:
         if not destination.exists():
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(f"fixture:{relative}\n".encode())
+    production_lock = repository_guard._parse_lock(
+        root, "requirements-production.lock.txt"
+    )
+    assurance_lock = repository_guard._parse_lock(
+        root, "requirements-test.lock.txt"
+    )
+    dependencies = {
+        "cffi": ["pycparser"],
+        "colorama": [],
+        "cryptography": ["cffi"],
+        "iniconfig": [],
+        "packaging": [],
+        "pluggy": [],
+        "pycparser": [],
+        "pygments": [],
+        "pytest": ["colorama", "iniconfig", "packaging", "pluggy", "pygments"],
+    }
+    packages = []
+    for name, (version, package_hash) in sorted(assurance_lock.items()):
+        scopes = ["assurance"]
+        if name in production_lock:
+            scopes.append("production")
+        direct_scopes = []
+        if name == "cryptography":
+            direct_scopes = ["assurance", "production"]
+        elif name == "pytest":
+            direct_scopes = ["assurance"]
+        packages.append(
+            {
+                "name": name,
+                "version": version,
+                "hashes": [f"sha256:{package_hash}"],
+                "scopes": scopes,
+                "direct_scopes": direct_scopes,
+                "dependencies": dependencies[name],
+            }
+        )
+    requirements = [
+        {
+            "identity": "cryptography",
+            "version": "50.0.0",
+            "source_requirement": "cryptography==50.0.0",
+        }
+    ]
+    (root / "python-dependencies.lock.json").write_bytes(
+        (
+            json.dumps(
+            {
+                "schema_id": "sbp.lex.v2.python-dependency-lock/3",
+                "lock_sequence": 1,
+                "prior_lock_sha512": "GENESIS",
+                "requirements_sha512": repository_guard.digest(requirements),
+                "production_hash_lock_sha512": repository_guard.sha512(
+                    (root / "requirements-production.lock.txt").read_bytes()
+                ).hexdigest(),
+                "assurance_hash_lock_sha512": repository_guard.sha512(
+                    (root / "requirements-test.lock.txt").read_bytes()
+                ).hexdigest(),
+                "target_environment": {
+                    "implementation": "CPython",
+                    "python_version": "3.12.13",
+                    "abi_tag": "cpython-312",
+                    "platform_tag": "win-amd64",
+                    "installed_scope": "assurance",
+                },
+                "rollback_guard": {
+                    "ptde_accepted_attempt_history_sequence": (
+                        PTDE_HISTORY_SEQUENCE
+                    ),
+                    "ptde_accepted_attempt_history_sha512": PTDE_HISTORY_DIGEST,
+                    "local_trust_accepted_package_history_sequence": (
+                        LOCAL_TRUST_HISTORY_SEQUENCE
+                    ),
+                    "local_trust_accepted_package_history_sha512": (
+                        LOCAL_TRUST_HISTORY_DIGEST
+                    ),
+                },
+                "packages": packages,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            )
+            + "\n"
+        ).encode("utf-8"),
+    )
     _git(root, "init", "-q")
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "fixture")
@@ -76,7 +191,7 @@ def test_clean_committed_known_good_repository_passes(
     tmp_path: Path,
     exact_environment: None,
 ) -> None:
-    result = verify_repository_guard(_repository(tmp_path), scope="test")
+    result = _verify(_repository(tmp_path), scope="test")
     assert result["status"] == "PASS", (result["failures"], result["checks"])
     assert result["failures"] == []
     assert result["checks"] == {
@@ -85,6 +200,7 @@ def test_clean_committed_known_good_repository_passes(
         "git_executable_measured": True,
         "known_good_runtime": True,
         "dependency_locks": True,
+        "governed_python_lock_binding": True,
         "installed_environment": True,
         "lifecycle_change_control": True,
     }
@@ -100,7 +216,7 @@ def test_dirty_and_untracked_trees_fail_closed(
     root = _repository(tmp_path)
     (root / "sbp_lex" / "__init__.py").write_text("VERSION = 3\n", encoding="utf-8")
     (root / "untracked-critical.py").write_text("pass\n", encoding="utf-8")
-    result = verify_repository_guard(root)
+    result = _verify(root)
     assert result["status"] == "FAIL"
     assert "working_tree_not_clean" in result["failures"]
     assert "untracked_files_present" in result["failures"]
@@ -118,7 +234,7 @@ def test_malformed_lock_and_environment_drift_fail_closed(
     )
     monkeypatch.setattr(repository_guard, "_installed_versions", lambda: {"pytest": "0.0.0"})
     monkeypatch.setattr(repository_guard, "_pip_check", lambda path: True)
-    result = verify_repository_guard(root)
+    result = _verify(root)
     assert result["status"] == "FAIL"
     assert "dependency_lock_validation_failed" in result["failures"]
     assert "installed_environment_not_exact_lock_closure" in result["failures"]
@@ -133,7 +249,7 @@ def test_change_control_requires_classified_checks_and_rollback(
     invalid = deepcopy(repository_guard.CHANGE_CONTROL_POLICY)
     invalid["change_classes"]["trust_boundary"]["rollback_plan_required"] = False
     monkeypatch.setattr(repository_guard, "CHANGE_CONTROL_POLICY", invalid)
-    result = verify_repository_guard(root)
+    result = _verify(root)
     assert result["status"] == "FAIL"
     assert "lifecycle_change_control_invalid" in result["failures"]
 
@@ -144,10 +260,121 @@ def test_runtime_and_scope_mismatch_fail_closed(
 ) -> None:
     root = _repository(tmp_path)
     (root / "runtime.txt").write_text("python-3.12.12\n", encoding="ascii")
-    result = verify_repository_guard(root, scope="invalid")
+    result = _verify(root, scope="invalid")
     assert result["status"] == "FAIL"
     assert "known_good_runtime_mismatch" in result["failures"]
     assert "verification_scope_invalid" in result["failures"]
+
+
+def test_repository_guard_requires_external_v3_rollback_pins(
+    tmp_path: Path,
+    exact_environment: None,
+) -> None:
+    root = _repository(tmp_path)
+    with pytest.raises(TypeError):
+        verify_repository_guard(root)
+    substituted = verify_repository_guard(
+        root,
+        expected_ptde_accepted_attempt_history_sequence=0,
+        expected_ptde_accepted_attempt_history_digest="f" * 128,
+        expected_local_trust_accepted_package_history_sequence=0,
+        expected_local_trust_accepted_package_history_digest=(
+            LOCAL_TRUST_HISTORY_DIGEST
+        ),
+        expected_python_dependency_prior_lock_sha512=PRIOR_LOCK_SHA512,
+    )
+    assert substituted["checks"]["governed_python_lock_binding"] is False
+    assert "governed_python_lock_binding_invalid" in substituted["failures"]
+
+
+def test_repository_guard_rejects_v2_and_non_genesis_transition(
+    tmp_path: Path,
+    exact_environment: None,
+) -> None:
+    root = _repository(tmp_path)
+    lock_path = root / "python-dependencies.lock.json"
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    lock["schema_id"] = "sbp.lex.v2.python-dependency-lock/2"
+    lock["rollback_guard"] = {
+        "accepted_attempt_history_sequence": 0,
+        "accepted_attempt_history_sha512": PTDE_HISTORY_DIGEST,
+    }
+    lock_path.write_text(json.dumps(lock), encoding="utf-8")
+    legacy = _verify(root)
+    assert legacy["checks"]["governed_python_lock_binding"] is False
+
+    lock["schema_id"] = "sbp.lex.v2.python-dependency-lock/3"
+    lock["lock_sequence"] = 2
+    lock["prior_lock_sha512"] = "GENESIS"
+    lock["rollback_guard"] = {
+        "ptde_accepted_attempt_history_sequence": 1,
+        "ptde_accepted_attempt_history_sha512": PTDE_HISTORY_DIGEST,
+        "local_trust_accepted_package_history_sequence": 0,
+        "local_trust_accepted_package_history_sha512": LOCAL_TRUST_HISTORY_DIGEST,
+    }
+    lock_path.write_text(json.dumps(lock), encoding="utf-8")
+    invalid_transition = verify_repository_guard(
+        root,
+        expected_ptde_accepted_attempt_history_sequence=1,
+        expected_ptde_accepted_attempt_history_digest=PTDE_HISTORY_DIGEST,
+        expected_local_trust_accepted_package_history_sequence=0,
+        expected_local_trust_accepted_package_history_digest=(
+            LOCAL_TRUST_HISTORY_DIGEST
+        ),
+        expected_python_dependency_prior_lock_sha512="c" * 128,
+    )
+    assert invalid_transition["checks"]["governed_python_lock_binding"] is False
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "arbitrary_prior",
+        "fake_source_digest",
+        "fake_hash_lock_digest",
+        "fake_package_graph",
+        "dependency_cycle",
+    ),
+)
+def test_repository_guard_recomputes_entire_governed_lock(
+    tmp_path: Path,
+    exact_environment: None,
+    mutation: str,
+) -> None:
+    root = _repository(tmp_path)
+    lock_path = root / "python-dependencies.lock.json"
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    expected_prior = PRIOR_LOCK_SHA512
+    if mutation == "arbitrary_prior":
+        lock["prior_lock_sha512"] = "c" * 128
+        expected_prior = "c" * 128
+    elif mutation == "fake_source_digest":
+        lock["requirements_sha512"] = "f" * 128
+    elif mutation == "fake_hash_lock_digest":
+        lock["production_hash_lock_sha512"] = "f" * 128
+    elif mutation == "fake_package_graph":
+        cryptography = next(
+            item for item in lock["packages"] if item["name"] == "cryptography"
+        )
+        cryptography["dependencies"] = []
+    else:
+        cffi = next(item for item in lock["packages"] if item["name"] == "cffi")
+        cffi["dependencies"] = ["cryptography"]
+    _write_canonical_lock(lock_path, lock)
+    result = verify_repository_guard(
+        root,
+        expected_ptde_accepted_attempt_history_sequence=PTDE_HISTORY_SEQUENCE,
+        expected_ptde_accepted_attempt_history_digest=PTDE_HISTORY_DIGEST,
+        expected_local_trust_accepted_package_history_sequence=(
+            LOCAL_TRUST_HISTORY_SEQUENCE
+        ),
+        expected_local_trust_accepted_package_history_digest=(
+            LOCAL_TRUST_HISTORY_DIGEST
+        ),
+        expected_python_dependency_prior_lock_sha512=expected_prior,
+    )
+    assert result["checks"]["governed_python_lock_binding"] is False
+    assert "governed_python_lock_binding_invalid" in result["failures"]
 
 
 def test_subprocess_output_overflow_fails_closed(tmp_path: Path) -> None:

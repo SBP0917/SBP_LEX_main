@@ -41,11 +41,12 @@ installed versions and active metadata dependency edges. Its validator reports:
 `PASS: 17 target wheels, hashes, sizes, versions, and active dependency edges
 match`.
 
-The canonical `python-dependencies.lock.json` is intentionally absent. A real
-accepted-attempt/rollback history and the final repository freeze binding do
-not yet exist, and this work did not invent them. The current dependency
-resolution is therefore reproducible evidence, but not a sealed dependency
-admission.
+The canonical `python-dependencies.lock.json` is intentionally absent. This
+historical snapshot predates the strict dual-history schema `/3` builder. A
+genuine PTDE accepted-attempt history, independently signed local-trust
+accepted-package history, exact predecessor pin and final repository freeze
+binding still do not exist, and none has been invented. The dependency
+resolution is reproducible input evidence, not a sealed dependency admission.
 
 ### Rust
 

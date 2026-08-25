@@ -100,10 +100,18 @@ def _validate_build_inputs(
         repository_identity_digest=deployment.repository_identity.identity_digest,
         trust_context=deployment.history_context,
         owner_pinned_context_digest=deployment.owner_pinned_history_context_digest,
-        expected_history_digest=deployment.expected_accepted_history_digest,
-        minimum_sequence=deployment.minimum_accepted_history_sequence,
+        expected_history_digest=(
+            deployment.expected_local_trust_accepted_package_history_digest
+        ),
+        minimum_sequence=(
+            deployment.expected_local_trust_accepted_package_history_sequence
+        ),
     )
-    if history["status"] != PASS:
+    if (
+        history["status"] != PASS
+        or history.get("sequence")
+        != deployment.expected_local_trust_accepted_package_history_sequence
+    ):
         raise DeploymentTrustError("accepted_history_not_current")
 
 
@@ -197,6 +205,24 @@ def build_local_trust_package(
         execution_envelope=envelope,
         signer=signer,
         time_evidence=time_for(6),
+        expected_ptde_accepted_attempt_history_sequence=(
+            deployment.expected_ptde_accepted_attempt_history_sequence
+        ),
+        expected_ptde_accepted_attempt_history_digest=(
+            deployment.expected_ptde_accepted_attempt_history_digest
+        ),
+        expected_local_trust_accepted_package_history_sequence=(
+            deployment.expected_local_trust_accepted_package_history_sequence
+        ),
+        expected_local_trust_accepted_package_history_digest=(
+            deployment.expected_local_trust_accepted_package_history_digest
+        ),
+        expected_python_dependency_prior_lock_sha512=(
+            deployment.expected_python_dependency_prior_lock_sha512
+        ),
+        expected_executable_sha512_pins=(
+            deployment.expected_executable_sha512_pins
+        ),
     )
     artifacts.append(toolchain)
     capstone = build_capstone(
@@ -275,8 +301,12 @@ def validate_local_trust_package(
         repository_identity_digest=deployment.repository_identity.identity_digest,
         trust_context=deployment.history_context,
         owner_pinned_context_digest=deployment.owner_pinned_history_context_digest,
-        expected_history_digest=deployment.expected_accepted_history_digest,
-        minimum_sequence=deployment.minimum_accepted_history_sequence,
+        expected_history_digest=(
+            deployment.expected_local_trust_accepted_package_history_digest
+        ),
+        minimum_sequence=(
+            deployment.expected_local_trust_accepted_package_history_sequence
+        ),
     )
     failures.extend(history["validation_failures"])
     history_digest = history.get("history_digest")
@@ -286,6 +316,8 @@ def validate_local_trust_package(
         type(history_digest) is not str
         or type(history_sequence) is not int
         or type(history_live_head_digest) is not str
+        or history_sequence
+        != deployment.expected_local_trust_accepted_package_history_sequence
     ):
         failures.append("accepted_history_binding_invalid")
         return {"status": FAIL, "validation_failures": sorted(set(failures))}
@@ -380,10 +412,26 @@ def validate_local_trust_package(
             expected_manifest_digest=manifest.get("artifact_digest"),
             expected_envelope_digest=envelope.get("artifact_digest"),
             expected_assurance_evidence=collect_isolated_assurance_evidence(manifest, envelope),
-            expected_accepted_history_sequence=history_sequence,
-            expected_accepted_history_digest=history_digest,
+            expected_ptde_accepted_attempt_history_sequence=(
+                deployment.expected_ptde_accepted_attempt_history_sequence
+            ),
+            expected_ptde_accepted_attempt_history_digest=(
+                deployment.expected_ptde_accepted_attempt_history_digest
+            ),
+            expected_local_trust_accepted_package_history_sequence=(
+                deployment.expected_local_trust_accepted_package_history_sequence
+            ),
+            expected_local_trust_accepted_package_history_digest=(
+                deployment.expected_local_trust_accepted_package_history_digest
+            ),
+            expected_python_dependency_prior_lock_sha512=(
+                deployment.expected_python_dependency_prior_lock_sha512
+            ),
             expected_time_sequence=6,
             expected_prior_time_digest=gates.get("time_evidence_digest"),
+            expected_executable_sha512_pins=(
+                deployment.expected_executable_sha512_pins
+            ),
         ),
         validate_capstone(capstone, prior_artifacts=artifacts[:6], **common),
         validate_release_integrity_bundle(

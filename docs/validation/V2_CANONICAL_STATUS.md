@@ -40,21 +40,27 @@ the canonical source imports: `cryptography==50.0.0`.
 Fresh official PyPI bytes were resolved without source distributions and all
 locked hashes were recomputed. The workspace CPython 3.12.13 environment was
 installed offline under pip hash enforcement. The separate governed
-`python-dependencies.lock.json` is not present because its genuine
-accepted-history and rollback binding do not exist; neither was fabricated.
-Local trust and the P-bound supply-chain validator now enforce the same schema
-`/2` contract, including both committed hash-lock digests, exact
-production/assurance closures, target environment and history sequence/digest.
-The genuine accepted-history snapshot and independent pin must exist first;
-the resulting governed lock must then be committed in the candidate before the
-owner selects that complete commit as P. Fixed T cannot add or repair the lock.
+`python-dependencies.lock.json` is not present because its two genuine,
+independently pinned histories and predecessor binding do not exist; none was
+fabricated. Local trust, the repository guard and the P-bound supply-chain
+validator enforce the same schema `/3` contract. It separately binds the PTDE
+accepted-attempt history and dual-signed local-trust accepted-package history,
+the exact predecessor, both committed hash-lock digests, the exact
+production/assurance closures and the target environment. Schema `/2` is
+rejected. An offline exclusive builder now derives package edges from the exact
+hashed wheel metadata and immediately revalidates its canonical output. Both
+genuine history snapshots and independent pins must exist first; the resulting
+governed lock must then be committed before the owner selects that complete
+commit as P. Fixed T cannot add or repair the lock.
 
-A canonical ignored runtime copy of TLA+ tools v1.7.4 now exists at
+A canonical candidate copy of TLA+ tools v1.7.4 now exists at
 `runtime_artifacts/toolchains/tla2tools.jar`, copied byte-for-byte from the
-previously verified local artifact. Its measured SHA-256 matches the historical
-release-page evidence and TLC reports revision `5a47802`, but this remains a
-local runtime measurement—not an owner-approved external executable pin or a
-P-tree blob.
+official GitHub v1.7.4 release asset. Its SHA-1 matches the publisher's release
+page, its SHA-512 is recorded in
+`docs/validation/TLA2TOOLS_1_7_4_CANDIDATE_PROVENANCE.md`, and TLC reports
+revision `5a47802`. The JAR has no embedded signature. Its inclusion is
+candidate dependency inventory only, not an independently approved trust pin,
+P selection or formal-result admission.
 
 ## PQC state
 
@@ -121,12 +127,18 @@ clean immutable Candidate 10 subject, sealed release, independent second-machine
 reproduction, external IV&V result or university validation.
 
 Historical reports retain their original commands, counts and limitations.
-They are not silently promoted into this current record. The latest completed
-pre-commit regression, before the final bounded static-cleanup edits resumed,
-used CPython 3.12.13 and produced:
+They are not silently promoted into this current record. The clean pre-P
+integration commit `0cb1f47c958a30079d84a18e100770de34416577` was independently
+rechecked and produced:
 
-- complete `tests/` regression: 782 tests and 269 subtests passed in 916.38
-  seconds, with no failures;
+- complete `tests/` regression: 790 tests and 274 subtests passed in 933.34
+  seconds, with no failures and two Windows symlink-privilege skips;
+- independent focused assurance regression: 295 tests and 18 subtests passed,
+  with the same two environmental skips;
+- all eight Rust crates: 199 tests passed, with locked/offline tests, checks,
+  warning-denied Clippy and formatting clean;
+- all eight Rust lockfiles passed RustSec audit against the local 1,225-advisory
+  database;
 - fatal Ruff correctness selection `E9,F63,F7,F82`: clean;
 - Bandit over `sbp_lex` and `main.py`: 37 Low, zero Medium, zero High;
 - broad MyPy over `sbp_lex` and `main.py`: clean, reduced from 608 findings
@@ -170,12 +182,13 @@ owner approval.
 
 ## Remaining blockers
 
-1. Establish a genuine owner-approved accepted-history snapshot, independent
-   digest pin and durable persistence location before generating the governed
-   Python dependency lock.
-2. Generate and validate `python-dependencies.lock.json` schema `/2`, commit it
-   with the complete candidate tree, and only then allow the owner to select
-   that full commit OID as P. Any earlier commit remains pre-P.
+1. Establish the genuine PTDE accepted-attempt history and the independently
+   dual-signed local-trust accepted-package history, including independent
+   digest pins, exact sequences and durable persistence locations.
+2. Run the offline builder to generate and validate
+   `python-dependencies.lock.json` schema `/3` with the exact predecessor pin,
+   commit it with the complete candidate tree, and only then allow the owner to
+   select that full commit OID as P. Any earlier commit remains pre-P.
 3. Generate release-bound raw outputs, exit codes, inventories, hashes, binary
    identities, negative cases, SBOMs and clean-host reproducibility evidence.
 4. Admit and authenticate the required Python-to-Rust authority route without

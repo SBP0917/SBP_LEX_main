@@ -10,14 +10,21 @@ import re
 import shutil
 import stat
 import sys
-import sysconfig
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from .artifact import build_signed_artifact, validate_signed_artifact
 from .command_evidence import validate_full_byte_transcript
-from .constants import COMMAND_POLICY, DEPENDENCY_LOCK_PATHS, FAIL, PASS
+from .constants import (
+    COMMAND_POLICY,
+    DEPENDENCY_LOCK_PATHS,
+    FAIL,
+    PASS,
+    PYTHON_DEPENDENCY_LOCK_SCHEMA,
+    PYTHON_DEPENDENCY_ROLLBACK_FIELDS,
+    PYTHON_DEPENDENCY_TARGET_ENVIRONMENT,
+)
 from .digests import digest, is_sha512
 from .paths import (
     LocalTrustPathError,
@@ -30,7 +37,7 @@ from .signing import HybridSigningContext, HybridVerificationContext
 
 PAYLOAD_SCHEMA = "SBP_LEX_V2_LOCAL_TRUST_TOOLCHAIN_GUARD_PAYLOAD_V1"
 PYTHON_LOCK_PATH = "python-dependencies.lock.json"
-PYTHON_LOCK_SCHEMA = "sbp.lex.v2.python-dependency-lock/2"
+PYTHON_LOCK_SCHEMA = PYTHON_DEPENDENCY_LOCK_SCHEMA
 PYTHON_LOCK_INVALID = "COMMITTED_LOCK_INVALID"
 PYTHON_LOCK_MISSING = "COMMITTED_LOCK_MISSING"
 PYTHON_LOCK_VALID = "COMMITTED_LOCK_VALID"
@@ -234,15 +241,10 @@ def _commands_use_measured_executables(
 
 
 def _expected_python_environment() -> dict[str, str]:
-    abi_tag = sys.implementation.cache_tag
-    platform_tag = sysconfig.get_platform()
-    if type(abi_tag) is not str or not abi_tag or type(platform_tag) is not str or not platform_tag:
-        raise LocalTrustPathError("python_environment_binding_unavailable")
     return {
-        "implementation": platform.python_implementation(),
-        "python_version": platform.python_version(),
-        "abi_tag": abi_tag,
-        "platform_tag": platform_tag,
+        key: value
+        for key, value in PYTHON_DEPENDENCY_TARGET_ENVIRONMENT.items()
+        if key != "installed_scope"
     }
 
 
@@ -298,8 +300,11 @@ def _local_python_dependency_evidence(
     lock: Any | None,
     installed_packages: list[dict[str, str]],
     *,
-    expected_accepted_history_sequence: int | None,
-    expected_accepted_history_digest: str | None,
+    expected_ptde_accepted_attempt_history_sequence: int,
+    expected_ptde_accepted_attempt_history_digest: str,
+    expected_local_trust_accepted_package_history_sequence: int,
+    expected_local_trust_accepted_package_history_digest: str,
+    expected_python_dependency_prior_lock_sha512: str,
 ) -> dict[str, Any]:
     failures: list[str] = []
     requirements: list[dict[str, str]] = []
@@ -362,10 +367,6 @@ def _local_python_dependency_evidence(
             prior = lock["prior_lock_sha512"]
             if lock["schema_id"] != PYTHON_LOCK_SCHEMA or type(sequence) is not int or sequence <= 0:
                 raise ValueError("PYTHON_LOCK_SCHEMA_OR_SEQUENCE_INVALID")
-            if (sequence == 1 and prior != "GENESIS") or (
-                sequence > 1 and (type(prior) is not str or re.fullmatch(r"[0-9a-f]{128}", prior) is None)
-            ):
-                raise ValueError("PYTHON_LOCK_ROLLBACK_EVIDENCE_INVALID")
             if lock["requirements_sha512"] != digest(requirements):
                 raise ValueError("PYTHON_LOCK_REQUIREMENTS_MISMATCH")
             if (
@@ -381,23 +382,72 @@ def _local_python_dependency_evidence(
             }:
                 raise ValueError("PYTHON_LOCK_ENVIRONMENT_MISMATCH")
             rollback = lock["rollback_guard"]
-            if type(rollback) is not dict or set(rollback) != {
-                "accepted_attempt_history_sequence", "accepted_attempt_history_sha512",
-            }:
-                raise ValueError("PYTHON_LOCK_ROLLBACK_GUARD_INVALID")
-            history_sequence = rollback["accepted_attempt_history_sequence"]
-            history_digest = rollback["accepted_attempt_history_sha512"]
             if (
-                type(expected_accepted_history_sequence) is not int
-                or expected_accepted_history_sequence < 0
-                or not is_sha512(expected_accepted_history_digest)
-                or type(history_sequence) is not int
-                or history_sequence < 0
-                or sequence != history_sequence + 1
-                or history_sequence != expected_accepted_history_sequence
-                or history_digest != expected_accepted_history_digest
+                type(rollback) is not dict
+                or set(rollback) != PYTHON_DEPENDENCY_ROLLBACK_FIELDS
             ):
                 raise ValueError("PYTHON_LOCK_ROLLBACK_GUARD_INVALID")
+            ptde_sequence = rollback[
+                "ptde_accepted_attempt_history_sequence"
+            ]
+            ptde_digest = rollback[
+                "ptde_accepted_attempt_history_sha512"
+            ]
+            local_trust_sequence = rollback[
+                "local_trust_accepted_package_history_sequence"
+            ]
+            local_trust_digest = rollback[
+                "local_trust_accepted_package_history_sha512"
+            ]
+            if (
+                type(expected_ptde_accepted_attempt_history_sequence) is not int
+                or expected_ptde_accepted_attempt_history_sequence < 0
+                or not is_sha512(
+                    expected_ptde_accepted_attempt_history_digest
+                )
+                or type(expected_local_trust_accepted_package_history_sequence)
+                is not int
+                or expected_local_trust_accepted_package_history_sequence < 0
+                or not is_sha512(
+                    expected_local_trust_accepted_package_history_digest
+                )
+                or expected_ptde_accepted_attempt_history_digest
+                == expected_local_trust_accepted_package_history_digest
+                or type(ptde_sequence) is not int
+                or ptde_sequence < 0
+                or not is_sha512(ptde_digest)
+                or type(local_trust_sequence) is not int
+                or local_trust_sequence < 0
+                or not is_sha512(local_trust_digest)
+                or ptde_digest == local_trust_digest
+                or ptde_sequence
+                != expected_ptde_accepted_attempt_history_sequence
+                or ptde_digest != expected_ptde_accepted_attempt_history_digest
+                or local_trust_sequence
+                != expected_local_trust_accepted_package_history_sequence
+                or local_trust_digest
+                != expected_local_trust_accepted_package_history_digest
+                or sequence != ptde_sequence + local_trust_sequence + 1
+            ):
+                raise ValueError("PYTHON_LOCK_ROLLBACK_GUARD_INVALID")
+            both_genesis = ptde_sequence == 0 and local_trust_sequence == 0
+            if (
+                both_genesis
+                and (
+                    sequence != 1
+                    or expected_python_dependency_prior_lock_sha512 != "GENESIS"
+                    or prior != expected_python_dependency_prior_lock_sha512
+                )
+            ) or (
+                not both_genesis
+                and (
+                    not is_sha512(
+                        expected_python_dependency_prior_lock_sha512
+                    )
+                    or prior != expected_python_dependency_prior_lock_sha512
+                )
+            ):
+                raise ValueError("PYTHON_LOCK_ROLLBACK_EVIDENCE_INVALID")
             packages = lock["packages"]
             if type(packages) is not list or not packages:
                 raise ValueError("PYTHON_LOCK_PACKAGES_INVALID")
@@ -455,6 +505,31 @@ def _local_python_dependency_evidence(
                 for package in packages for dependency in package["dependencies"]
             ):
                 raise ValueError("PYTHON_LOCK_DEPENDENCY_MISSING")
+            dependency_counts = {
+                identity: len(by_identity[identity]["dependencies"])
+                for identity in identities
+            }
+            dependents: dict[str, list[str]] = {
+                identity: [] for identity in identities
+            }
+            for identity in identities:
+                for dependency in by_identity[identity]["dependencies"]:
+                    dependents[dependency].append(identity)
+            pending_acyclic = [
+                identity
+                for identity, count in dependency_counts.items()
+                if count == 0
+            ]
+            resolved_count = 0
+            while pending_acyclic:
+                resolved = pending_acyclic.pop()
+                resolved_count += 1
+                for dependent in dependents[resolved]:
+                    dependency_counts[dependent] -= 1
+                    if dependency_counts[dependent] == 0:
+                        pending_acyclic.append(dependent)
+            if resolved_count != len(identities):
+                raise ValueError("PYTHON_LOCK_DEPENDENCY_CYCLE")
             expected_production_direct = {
                 item["identity"]: item["version"] for item in requirements
             }
@@ -554,8 +629,11 @@ def _collect_python_dependency_evidence(
     root: Path,
     installed_packages: list[dict[str, str]],
     *,
-    expected_accepted_history_sequence: int | None,
-    expected_accepted_history_digest: str | None,
+    expected_ptde_accepted_attempt_history_sequence: int,
+    expected_ptde_accepted_attempt_history_digest: str,
+    expected_local_trust_accepted_package_history_sequence: int,
+    expected_local_trust_accepted_package_history_digest: str,
+    expected_python_dependency_prior_lock_sha512: str,
 ) -> dict[str, Any]:
     try:
         requirements = _stable_file_bytes(root, "requirements.txt")
@@ -594,8 +672,21 @@ def _collect_python_dependency_evidence(
         assurance_hash_lock,
         lock_document,
         installed_packages,
-        expected_accepted_history_sequence=expected_accepted_history_sequence,
-        expected_accepted_history_digest=expected_accepted_history_digest,
+        expected_ptde_accepted_attempt_history_sequence=(
+            expected_ptde_accepted_attempt_history_sequence
+        ),
+        expected_ptde_accepted_attempt_history_digest=(
+            expected_ptde_accepted_attempt_history_digest
+        ),
+        expected_local_trust_accepted_package_history_sequence=(
+            expected_local_trust_accepted_package_history_sequence
+        ),
+        expected_local_trust_accepted_package_history_digest=(
+            expected_local_trust_accepted_package_history_digest
+        ),
+        expected_python_dependency_prior_lock_sha512=(
+            expected_python_dependency_prior_lock_sha512
+        ),
     )
     evidence["requirements_record"] = requirements_record
     if lock_failure is not None:
@@ -773,9 +864,12 @@ def _isolated_assurance_complete(proofs: list[dict[str, Any]]) -> bool:
 def collect_toolchain_inventory(
     repository_root: str | Path,
     *,
-    expected_accepted_history_sequence: int | None = None,
-    expected_accepted_history_digest: str | None = None,
-    expected_executable_sha512_pins: Mapping[str, str] | None = None,
+    expected_ptde_accepted_attempt_history_sequence: int,
+    expected_ptde_accepted_attempt_history_digest: str,
+    expected_local_trust_accepted_package_history_sequence: int,
+    expected_local_trust_accepted_package_history_digest: str,
+    expected_python_dependency_prior_lock_sha512: str,
+    expected_executable_sha512_pins: Mapping[str, str],
 ) -> dict[str, Any]:
     root = validated_root(repository_root)
     discovered_packages = [
@@ -802,8 +896,21 @@ def collect_toolchain_inventory(
     python_dependency_evidence = _collect_python_dependency_evidence(
         root,
         packages,
-        expected_accepted_history_sequence=expected_accepted_history_sequence,
-        expected_accepted_history_digest=expected_accepted_history_digest,
+        expected_ptde_accepted_attempt_history_sequence=(
+            expected_ptde_accepted_attempt_history_sequence
+        ),
+        expected_ptde_accepted_attempt_history_digest=(
+            expected_ptde_accepted_attempt_history_digest
+        ),
+        expected_local_trust_accepted_package_history_sequence=(
+            expected_local_trust_accepted_package_history_sequence
+        ),
+        expected_local_trust_accepted_package_history_digest=(
+            expected_local_trust_accepted_package_history_digest
+        ),
+        expected_python_dependency_prior_lock_sha512=(
+            expected_python_dependency_prior_lock_sha512
+        ),
     )
     locks: list[dict[str, Any]] = []
     missing: list[str] = []
@@ -844,23 +951,30 @@ def build_toolchain_guard(
     execution_envelope: Mapping[str, Any],
     signer: HybridSigningContext,
     time_evidence: Mapping[str, Any],
-    expected_executable_sha512_pins: Mapping[str, str] | None = None,
+    expected_ptde_accepted_attempt_history_sequence: int,
+    expected_ptde_accepted_attempt_history_digest: str,
+    expected_local_trust_accepted_package_history_sequence: int,
+    expected_local_trust_accepted_package_history_digest: str,
+    expected_python_dependency_prior_lock_sha512: str,
+    expected_executable_sha512_pins: Mapping[str, str],
 ) -> dict[str, Any]:
-    manifest_payload = manifest.get("payload")
-    accepted_history_sequence = (
-        manifest_payload.get("accepted_history_sequence")
-        if isinstance(manifest_payload, Mapping)
-        else None
-    )
-    accepted_history_digest = (
-        manifest_payload.get("accepted_history_digest")
-        if isinstance(manifest_payload, Mapping)
-        else None
-    )
     inventory = collect_toolchain_inventory(
         repository_root,
-        expected_accepted_history_sequence=accepted_history_sequence,
-        expected_accepted_history_digest=accepted_history_digest,
+        expected_ptde_accepted_attempt_history_sequence=(
+            expected_ptde_accepted_attempt_history_sequence
+        ),
+        expected_ptde_accepted_attempt_history_digest=(
+            expected_ptde_accepted_attempt_history_digest
+        ),
+        expected_local_trust_accepted_package_history_sequence=(
+            expected_local_trust_accepted_package_history_sequence
+        ),
+        expected_local_trust_accepted_package_history_digest=(
+            expected_local_trust_accepted_package_history_digest
+        ),
+        expected_python_dependency_prior_lock_sha512=(
+            expected_python_dependency_prior_lock_sha512
+        ),
         expected_executable_sha512_pins=expected_executable_sha512_pins,
     )
     assurance_evidence = collect_isolated_assurance_evidence(manifest, execution_envelope)
@@ -931,15 +1045,18 @@ def validate_toolchain_guard(
     expected_manifest_digest: str,
     expected_envelope_digest: str,
     expected_assurance_evidence: list[dict[str, Any]],
-    expected_accepted_history_sequence: int,
-    expected_accepted_history_digest: str,
+    expected_ptde_accepted_attempt_history_sequence: int,
+    expected_ptde_accepted_attempt_history_digest: str,
+    expected_local_trust_accepted_package_history_sequence: int,
+    expected_local_trust_accepted_package_history_digest: str,
+    expected_python_dependency_prior_lock_sha512: str,
     trust_context: HybridVerificationContext,
     owner_pinned_context_digest: str,
     clock_trust_context: HybridVerificationContext,
     owner_pinned_clock_context_digest: str,
     expected_time_sequence: int,
     expected_prior_time_digest: str,
-    expected_executable_sha512_pins: Mapping[str, str] | None = None,
+    expected_executable_sha512_pins: Mapping[str, str],
 ) -> dict[str, Any]:
     base = validate_signed_artifact(
         guard,
@@ -964,8 +1081,21 @@ def validate_toolchain_guard(
             or payload.get("toolchain_inventory")
             != collect_toolchain_inventory(
                 repository_root,
-                expected_accepted_history_sequence=expected_accepted_history_sequence,
-                expected_accepted_history_digest=expected_accepted_history_digest,
+                expected_ptde_accepted_attempt_history_sequence=(
+                    expected_ptde_accepted_attempt_history_sequence
+                ),
+                expected_ptde_accepted_attempt_history_digest=(
+                    expected_ptde_accepted_attempt_history_digest
+                ),
+                expected_local_trust_accepted_package_history_sequence=(
+                    expected_local_trust_accepted_package_history_sequence
+                ),
+                expected_local_trust_accepted_package_history_digest=(
+                    expected_local_trust_accepted_package_history_digest
+                ),
+                expected_python_dependency_prior_lock_sha512=(
+                    expected_python_dependency_prior_lock_sha512
+                ),
                 expected_executable_sha512_pins=(
                     expected_executable_sha512_pins
                 ),

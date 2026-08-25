@@ -2,18 +2,10 @@
 
 from __future__ import annotations
 
-from sbp_ptde.constants import (
-    MAX_ARTIFACT_FILE_COUNT,
-    MAX_ARTIFACT_TOTAL_BYTE_COUNT,
-    MAX_LANE_TIMEOUT_SECONDS,
-    MAX_STREAM_BYTE_COUNT,
-    NO_AUTHORITY,
-    TIMEOUT_STATUS,
-    TRANSCRIPT_SCHEMA_ID,
-)
+from sbp_ptde.constants import MAX_STREAM_BYTE_COUNT
 
 SCHEMA_ID = "sbp.lex.v2.supply-chain.p-source/1"
-P_BINDING_SCHEMA_ID = "sbp.lex.v2.supply-chain.p-binding/1"
+P_BINDING_SCHEMA_ID = "sbp.lex.v2.supply-chain.p-binding/2"
 HOST_OBSERVATION_SCHEMA_ID = "sbp.lex.v2.supply-chain.host-observation/1"
 UNSIGNED_NOT_ADMITTED = "UNSIGNED_NOT_ADMITTED"
 P_SOURCE_READY_NOT_ADMITTED = "P_SOURCE_READY_NOT_ADMITTED"
@@ -34,8 +26,11 @@ REQUIRED_P_INPUTS = (
     "expected_p_oid",
     "git_executable",
     "expected_git_executable_sha512",
-    "accepted_attempt_history",
-    "expected_attempt_history_sha512",
+    "ptde_accepted_attempt_history",
+    "expected_ptde_accepted_attempt_history_sha512",
+    "expected_local_trust_accepted_package_history_sequence",
+    "expected_local_trust_accepted_package_history_sha512",
+    "expected_python_dependency_prior_lock_sha512",
 )
 
 R2_INVENTORY_CLASSES = (

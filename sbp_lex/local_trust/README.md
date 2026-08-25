@@ -114,13 +114,17 @@ claims that those assets are active in the Python runtime.
 separate hash-pinned production and assurance-test resolver closures. None is
 the assurance dependency lock. The toolchain guard requires the separate canonical
 `python-dependencies.lock.json` artifact before Python dependency assurance can
-be `PASS` / `PRESENT_TESTED`. The lock contract requires exact direct pins,
-SHA-256 artifact hashes, distinct production/test scope, complete reachable
-dependency graphs, exact interpreter/version/ABI/platform binding, and
-accepted-history/sequence rollback evidence. Missing, unpinned, unhashed,
-mismatched, extra, duplicate, case-variant, non-canonical or rollback-invalid
-evidence fails closed. No canonical lock artifact is currently supplied by this
-package.
+be `PASS` / `PRESENT_TESTED`. The schema `/3` lock contract requires exact
+direct pins, SHA-256 artifact hashes, distinct production/test scope, complete
+reachable dependency graphs, exact interpreter/version/ABI/platform binding,
+separate externally pinned PTDE accepted-attempt and local-trust
+accepted-package history pairs, and an exact predecessor-lock pin. Schema `/2`
+and copied history-lane pins are rejected. The offline builder derives
+dependencies from exact hashed wheel metadata, rejects cycles and extra
+wheelhouse contents, creates the canonical output exclusively, and immediately
+self-validates it. Missing, unpinned, unhashed, mismatched, extra, duplicate,
+case-variant, non-canonical or rollback-invalid evidence fails closed. No
+canonical lock artifact is currently supplied by this package.
 
 Filesystem evidence rejects non-canonical, case-ambiguous, ADS, reserved,
 escaping and overlong paths; symlinks, reparse points, hardlinks and special

@@ -19,9 +19,19 @@ from .command_evidence import (
     _windows_creation_flags,
     _WindowsCommandJob,
 )
-from .constants import DEPENDENCY_LOCK_PATHS, MAX_COMMAND_OUTPUT_BYTES
+from .constants import (
+    DEPENDENCY_LOCK_PATHS,
+    MAX_COMMAND_OUTPUT_BYTES,
+)
 from .digests import digest
-from .paths import LocalTrustPathError, measure_file, resolve_safe_path, validated_root
+from .paths import (
+    LocalTrustPathError,
+    measure_file,
+    resolve_safe_path,
+    strict_load_json,
+    validated_root,
+)
+from .toolchain_guard import _local_python_dependency_evidence
 
 GUARD_SCHEMA = "SBP_LEX_V2_REPOSITORY_GUARD_V1"
 EXPECTED_RUNTIME_RECORD = "python-3.12.13"
@@ -350,6 +360,64 @@ def _direct_requirements(root: Path) -> dict[str, str]:
     return result
 
 
+def _python_dependency_lock_bound(
+    root: Path,
+    *,
+    expected_ptde_accepted_attempt_history_sequence: int,
+    expected_ptde_accepted_attempt_history_digest: str,
+    expected_local_trust_accepted_package_history_sequence: int,
+    expected_local_trust_accepted_package_history_digest: str,
+    expected_python_dependency_prior_lock_sha512: str,
+) -> bool:
+    try:
+        requirements_content = _stable_bytes(root, "requirements.txt")
+        production_hash_lock_content = _stable_bytes(
+            root, "requirements-production.lock.txt"
+        )
+        assurance_hash_lock_content = _stable_bytes(
+            root, "requirements-test.lock.txt"
+        )
+        lock = strict_load_json(
+            resolve_safe_path(root, "python-dependencies.lock.json")
+        )
+        packages = lock.get("packages") if type(lock) is dict else None
+        installed_packages: list[dict[str, str]] = []
+        if type(packages) is list:
+            for item in packages:
+                if type(item) is dict:
+                    name = item.get("name")
+                    version = item.get("version")
+                    if type(name) is str and type(version) is str:
+                        installed_packages.append(
+                            {"name": name, "version": version}
+                        )
+        evidence = _local_python_dependency_evidence(
+            requirements_content,
+            production_hash_lock_content,
+            assurance_hash_lock_content,
+            lock,
+            installed_packages,
+            expected_ptde_accepted_attempt_history_sequence=(
+                expected_ptde_accepted_attempt_history_sequence
+            ),
+            expected_ptde_accepted_attempt_history_digest=(
+                expected_ptde_accepted_attempt_history_digest
+            ),
+            expected_local_trust_accepted_package_history_sequence=(
+                expected_local_trust_accepted_package_history_sequence
+            ),
+            expected_local_trust_accepted_package_history_digest=(
+                expected_local_trust_accepted_package_history_digest
+            ),
+            expected_python_dependency_prior_lock_sha512=(
+                expected_python_dependency_prior_lock_sha512
+            ),
+        )
+        return evidence.get("dependency_evidence_status") == "COMPLETE"
+    except (LocalTrustPathError, OSError, TypeError, ValueError):
+        return False
+
+
 def _installed_versions() -> dict[str, str]:
     result: dict[str, str] = {}
     for distribution in importlib.metadata.distributions():
@@ -469,7 +537,16 @@ def _tracked_inventory(root: Path) -> tuple[str, list[dict[str, Any]]]:
     return commit_oid, inventory
 
 
-def verify_repository_guard(repository_root: str | Path, *, scope: str = "test") -> dict[str, Any]:
+def verify_repository_guard(
+    repository_root: str | Path,
+    *,
+    expected_ptde_accepted_attempt_history_sequence: int,
+    expected_ptde_accepted_attempt_history_digest: str,
+    expected_local_trust_accepted_package_history_sequence: int,
+    expected_local_trust_accepted_package_history_digest: str,
+    expected_python_dependency_prior_lock_sha512: str,
+    scope: str = "test",
+) -> dict[str, Any]:
     failures: list[str] = []
     checks: dict[str, bool] = {}
     commit_oid: str | None = None
@@ -531,6 +608,26 @@ def verify_repository_guard(repository_root: str | Path, *, scope: str = "test")
         checks["dependency_locks"] = False
     if not checks["dependency_locks"]:
         failures.append("dependency_lock_validation_failed")
+    checks["governed_python_lock_binding"] = _python_dependency_lock_bound(
+        root,
+        expected_ptde_accepted_attempt_history_sequence=(
+            expected_ptde_accepted_attempt_history_sequence
+        ),
+        expected_ptde_accepted_attempt_history_digest=(
+            expected_ptde_accepted_attempt_history_digest
+        ),
+        expected_local_trust_accepted_package_history_sequence=(
+            expected_local_trust_accepted_package_history_sequence
+        ),
+        expected_local_trust_accepted_package_history_digest=(
+            expected_local_trust_accepted_package_history_digest
+        ),
+        expected_python_dependency_prior_lock_sha512=(
+            expected_python_dependency_prior_lock_sha512
+        ),
+    )
+    if not checks["governed_python_lock_binding"]:
+        failures.append("governed_python_lock_binding_invalid")
     expected_environment = TEST_PACKAGES if scope == "test" else PRODUCTION_PACKAGES
     if scope not in {"production", "test"}:
         checks["installed_environment"] = False

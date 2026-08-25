@@ -14,6 +14,23 @@ DUAL_SIGNATURE_TRANSITION_POLICY = (
 SIGNING_DOMAIN = b"SBP-LEX/V2/LOCAL-TRUST/STRICT-DUAL-SIGNATURE/1\x00"
 GENESIS = "GENESIS"
 SHA512_HEX_LENGTH = 128
+PYTHON_DEPENDENCY_LOCK_SCHEMA = "sbp.lex.v2.python-dependency-lock/3"
+PYTHON_DEPENDENCY_TARGET_ENVIRONMENT = {
+    "implementation": "CPython",
+    "python_version": "3.12.13",
+    "abi_tag": "cpython-312",
+    "platform_tag": "win-amd64",
+    "installed_scope": "assurance",
+}
+PYTHON_DEPENDENCY_ROLLBACK_FIELDS = frozenset(
+    {
+        "ptde_accepted_attempt_history_sequence",
+        "ptde_accepted_attempt_history_sha512",
+        "local_trust_accepted_package_history_sequence",
+        "local_trust_accepted_package_history_sha512",
+    }
+)
+EXTERNAL_EXECUTABLE_PIN_IDS = frozenset({"python", "cargo", "java", "alr", "git"})
 MAX_EVIDENCE_FILES = 20_000
 MAX_FILE_BYTES = 256 * 1024 * 1024
 MAX_COMMAND_OUTPUT_BYTES = 8 * 1024 * 1024

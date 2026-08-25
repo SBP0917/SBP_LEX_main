@@ -43,11 +43,14 @@ and executable pins are in
 1. A user-selected final release commit must exist. Its exact P OID must be
    supplied out-of-band and read from a pinned bare object database. The
    current dirty worktree cannot substitute for it.
-2. A genuine accepted-attempt-history document and its independent SHA-512 pin
-   are missing. They must not be invented from the candidate worktree.
-3. `python-dependencies.lock.json`, the canonical rollback-bound Python lock,
-   is absent. The existing 17-wheel resolution is useful candidate input only
-   until it is re-bound to final P and the genuine history.
+2. A genuine PTDE accepted-attempt-history document and independently
+   dual-signed local-trust accepted-package-history document, with their
+   separate out-of-band SHA-512 pins and durable heads, are missing. They must
+   not be invented from the candidate worktree.
+3. `python-dependencies.lock.json`, the schema `/3` dual-history and
+   predecessor-bound Python lock, is absent. The existing wheel resolution is
+   useful candidate input only until the offline builder binds it to both
+   histories and the resulting artifact is committed before final P selection.
 4. P-bound Python/Rust SBOM documents and clean-machine reproduction evidence
    have not been produced. Current reports are not PTDE full-byte transcripts.
 5. A production ML-DSA-87 + Ed448 custody design/provider is absent. Provider

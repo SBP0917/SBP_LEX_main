@@ -21,13 +21,17 @@ from sbp_lex.supply_chain.build_provenance import execute_host_lane
 from sbp_lex.supply_chain.constants import P_SOURCE_INCOMPLETE, P_SOURCE_READY_NOT_ADMITTED, UNSIGNED_NOT_ADMITTED
 from sbp_lex.supply_chain.package import assemble_p_source_package
 from sbp_lex.supply_chain.python_inventory import (
+    GOVERNED_PYTHON_ENVIRONMENT,
     PYTHON_LOCK_INVALID,
     PYTHON_LOCK_MISSING,
     PYTHON_LOCK_SCHEMA,
     evaluate_python_dependency_evidence,
 )
 from sbp_lex.supply_chain.rust_inventory import build_rust_dependency_inputs
-from sbp_lex.supply_chain.source_binding import bind_p_object
+from sbp_lex.supply_chain.source_binding import (
+    bind_p_object,
+    validate_p_binding_document,
+)
 from sbp_lex.supply_chain.verifier import verify_p_source_package
 
 
@@ -47,6 +51,9 @@ class PObjectFixture(unittest.TestCase):
         self._run("-C", str(self.work), "config", "core.autocrlf", "false")
         self._run("-C", str(self.work), "config", "core.eol", "lf")
         self.history = AcceptedAttemptHistory("history", 0, "0" * 128, ())
+        self.local_trust_history_sequence = 0
+        self.local_trust_history_sha512 = "b" * 128
+        self.expected_python_prior_sha512 = "GENESIS"
         self._write_p_tree()
         self._run("-C", str(self.work), "add", ".")
         self._run("-C", str(self.work), "commit", "-m", "P")
@@ -100,16 +107,16 @@ class PObjectFixture(unittest.TestCase):
             "assurance_hash_lock_sha512": hashlib.sha512(
                 self._assurance_hash_lock()
             ).hexdigest(),
-            "target_environment": {
-                "implementation": "CPython",
-                "python_version": "3.13.0",
-                "abi_tag": "cpython-313",
-                "platform_tag": "test_platform",
-                "installed_scope": "assurance",
-            },
+            "target_environment": dict(GOVERNED_PYTHON_ENVIRONMENT),
             "rollback_guard": {
-                "accepted_attempt_history_sequence": self.history.sequence,
-                "accepted_attempt_history_sha512": self.history.sha512(),
+                "ptde_accepted_attempt_history_sequence": self.history.sequence,
+                "ptde_accepted_attempt_history_sha512": self.history.sha512(),
+                "local_trust_accepted_package_history_sequence": (
+                    self.local_trust_history_sequence
+                ),
+                "local_trust_accepted_package_history_sha512": (
+                    self.local_trust_history_sha512
+                ),
             },
             "packages": [{
                 "name": "cryptography",
@@ -161,8 +168,17 @@ class PObjectFixture(unittest.TestCase):
                 expected_p_oid=self.p_oid,
                 git_executable=self.git,
                 expected_git_executable_sha512=self.git_digest,
-                accepted_attempt_history=self.history,
-                expected_attempt_history_sha512=self.history.sha512(),
+                ptde_accepted_attempt_history=self.history,
+                expected_ptde_accepted_attempt_history_sha512=self.history.sha512(),
+                expected_local_trust_accepted_package_history_sequence=(
+                    self.local_trust_history_sequence
+                ),
+                expected_local_trust_accepted_package_history_sha512=(
+                    self.local_trust_history_sha512
+                ),
+                expected_python_dependency_prior_lock_sha512=(
+                    self.expected_python_prior_sha512
+                ),
             )
         finally:
             os.environ.clear()
@@ -184,8 +200,17 @@ class PObjectFixture(unittest.TestCase):
                 os.environ["HOME"] = str(self._home)
                 bind_p_object(
                     self.bare, p_oid=self.p_oid, expected_p_oid="0" * len(self.p_oid), git_executable=self.git,
-                    expected_git_executable_sha512=self.git_digest, accepted_attempt_history=self.history,
-                    expected_attempt_history_sha512=self.history.sha512(),
+                    expected_git_executable_sha512=self.git_digest, ptde_accepted_attempt_history=self.history,
+                    expected_ptde_accepted_attempt_history_sha512=self.history.sha512(),
+                    expected_local_trust_accepted_package_history_sequence=(
+                        self.local_trust_history_sequence
+                    ),
+                    expected_local_trust_accepted_package_history_sha512=(
+                        self.local_trust_history_sha512
+                    ),
+                    expected_python_dependency_prior_lock_sha512=(
+                        self.expected_python_prior_sha512
+                    ),
                 )
             finally:
                 os.environ.clear()
@@ -199,12 +224,28 @@ class PObjectFixture(unittest.TestCase):
                 os.environ["HOME"] = str(self._home)
                 bind_p_object(
                     self.bare, p_oid=self.p_oid, expected_p_oid=self.p_oid, git_executable=self.git,
-                    expected_git_executable_sha512=self.git_digest, accepted_attempt_history=self.history,
-                    expected_attempt_history_sha512="a" * 128,
+                    expected_git_executable_sha512=self.git_digest, ptde_accepted_attempt_history=self.history,
+                    expected_ptde_accepted_attempt_history_sha512="a" * 128,
+                    expected_local_trust_accepted_package_history_sequence=(
+                        self.local_trust_history_sequence
+                    ),
+                    expected_local_trust_accepted_package_history_sha512=(
+                        self.local_trust_history_sha512
+                    ),
+                    expected_python_dependency_prior_lock_sha512=(
+                        self.expected_python_prior_sha512
+                    ),
                 )
             finally:
                 os.environ.clear()
                 os.environ.update(previous)
+
+    def test_genesis_python_predecessor_pin_is_exact(self) -> None:
+        binding = self.bind()
+        hostile = binding.document()
+        hostile["expected_python_dependency_prior_lock_sha512"] = "d" * 128
+        with self.assertRaises(PTDEVerificationError):
+            validate_p_binding_document(hostile)
 
     def test_mutable_checkout_is_not_consulted_after_p_binding(self) -> None:
         binding = self.bind()
@@ -289,8 +330,17 @@ class PObjectFixture(unittest.TestCase):
         expected_environment = valid["target_environment"]
         common = {
             "expected_environment": expected_environment,
-            "expected_history_sequence": self.history.sequence,
-            "expected_history_sha512": self.history.sha512(),
+            "expected_ptde_accepted_attempt_history_sequence": self.history.sequence,
+            "expected_ptde_accepted_attempt_history_sha512": self.history.sha512(),
+            "expected_local_trust_accepted_package_history_sequence": (
+                self.local_trust_history_sequence
+            ),
+            "expected_local_trust_accepted_package_history_sha512": (
+                self.local_trust_history_sha512
+            ),
+            "expected_python_dependency_prior_lock_sha512": (
+                self.expected_python_prior_sha512
+            ),
         }
         complete = evaluate_python_dependency_evidence(
             requirements,
@@ -318,7 +368,7 @@ class PObjectFixture(unittest.TestCase):
                 production_hash_lock_sha512="3" * 128
             ),
             "legacy_schema": lambda value: value.update(
-                schema_id="sbp.lex.v2.python-dependency-lock/1"
+                schema_id="sbp.lex.v2.python-dependency-lock/2"
             ),
             "rollback": lambda value: value.update(lock_sequence=2),
             "environment": lambda value: value["target_environment"].update(abi_tag="cp312"),

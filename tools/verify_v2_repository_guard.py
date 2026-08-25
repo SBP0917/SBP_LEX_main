@@ -16,8 +16,48 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify the SBP-LEX V2 repository guard")
     parser.add_argument("repository", nargs="?", default=str(Path.cwd()))
     parser.add_argument("--scope", choices=("production", "test"), default="test")
+    parser.add_argument(
+        "--expected-ptde-accepted-attempt-history-sequence",
+        type=int,
+        required=True,
+    )
+    parser.add_argument(
+        "--expected-ptde-accepted-attempt-history-digest",
+        required=True,
+    )
+    parser.add_argument(
+        "--expected-local-trust-accepted-package-history-sequence",
+        type=int,
+        required=True,
+    )
+    parser.add_argument(
+        "--expected-local-trust-accepted-package-history-digest",
+        required=True,
+    )
+    parser.add_argument(
+        "--expected-python-dependency-prior-lock-sha512",
+        required=True,
+    )
     args = parser.parse_args(argv)
-    result = verify_repository_guard(args.repository, scope=args.scope)
+    result = verify_repository_guard(
+        args.repository,
+        scope=args.scope,
+        expected_ptde_accepted_attempt_history_sequence=(
+            args.expected_ptde_accepted_attempt_history_sequence
+        ),
+        expected_ptde_accepted_attempt_history_digest=(
+            args.expected_ptde_accepted_attempt_history_digest
+        ),
+        expected_local_trust_accepted_package_history_sequence=(
+            args.expected_local_trust_accepted_package_history_sequence
+        ),
+        expected_local_trust_accepted_package_history_digest=(
+            args.expected_local_trust_accepted_package_history_digest
+        ),
+        expected_python_dependency_prior_lock_sha512=(
+            args.expected_python_dependency_prior_lock_sha512
+        ),
+    )
     print(json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
     return 0 if result["status"] == "PASS" else 1
 

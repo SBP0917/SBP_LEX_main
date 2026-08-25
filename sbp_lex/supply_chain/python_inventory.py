@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import re
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from sbp_ptde.canonical import (
     canonical_sha512,
@@ -34,7 +35,7 @@ PYTHON_REQUIREMENTS_PATH = "requirements.txt"
 PYTHON_PRODUCTION_HASH_LOCK_PATH = "requirements-production.lock.txt"
 PYTHON_ASSURANCE_HASH_LOCK_PATH = "requirements-test.lock.txt"
 PYTHON_LOCK_PATH = "python-dependencies.lock.json"
-PYTHON_LOCK_SCHEMA = "sbp.lex.v2.python-dependency-lock/2"
+PYTHON_LOCK_SCHEMA = "sbp.lex.v2.python-dependency-lock/3"
 PYTHON_LOCK_VALID = "COMMITTED_LOCK_VALID"
 PYTHON_LOCK_INVALID = "COMMITTED_LOCK_INVALID"
 PYTHON_LOCK_MISSING = "COMMITTED_LOCK_MISSING"
@@ -58,8 +59,10 @@ _ENVIRONMENT_FIELDS = {
     "installed_scope",
 }
 _ROLLBACK_FIELDS = {
-    "accepted_attempt_history_sequence",
-    "accepted_attempt_history_sha512",
+    "ptde_accepted_attempt_history_sequence",
+    "ptde_accepted_attempt_history_sha512",
+    "local_trust_accepted_package_history_sequence",
+    "local_trust_accepted_package_history_sha512",
 }
 _PACKAGE_FIELDS = {
     "name",
@@ -71,6 +74,13 @@ _PACKAGE_FIELDS = {
 }
 _SCOPES = ("assurance", "production")
 _ASSURANCE_DIRECT_REQUIREMENTS = frozenset({"pytest"})
+GOVERNED_PYTHON_ENVIRONMENT = {
+    "implementation": "CPython",
+    "python_version": "3.12.13",
+    "abi_tag": "cpython-312",
+    "platform_tag": "win-amd64",
+    "installed_scope": "assurance",
+}
 
 
 def _normalize_name(value: str) -> str:
@@ -274,10 +284,13 @@ def validate_python_lock_document(
     production_hash_lock_content: bytes,
     assurance_hash_lock_content: bytes,
     expected_environment: Mapping[str, str] | None = None,
-    expected_history_sequence: int,
-    expected_history_sha512: str,
+    expected_ptde_accepted_attempt_history_sequence: int,
+    expected_ptde_accepted_attempt_history_sha512: str,
+    expected_local_trust_accepted_package_history_sequence: int,
+    expected_local_trust_accepted_package_history_sha512: str,
+    expected_python_dependency_prior_lock_sha512: str,
 ) -> dict[str, Any]:
-    """Validate the sole governed /2 lock contract without granting authority."""
+    """Validate the sole governed /3 lock contract without granting authority."""
 
     production_hash_lock = _parse_hash_lock(
         production_hash_lock_content,
@@ -294,15 +307,6 @@ def validate_python_lock_document(
         lock["lock_sequence"],
         code="SUPPLY_CHAIN_PYTHON_LOCK_SEQUENCE_INVALID",
     )
-    prior = lock["prior_lock_sha512"]
-    if lock_sequence == 1:
-        if prior != "GENESIS":
-            raise reject("SUPPLY_CHAIN_PYTHON_LOCK_ROLLBACK_EVIDENCE_INVALID")
-    else:
-        require_sha512(
-            prior,
-            "SUPPLY_CHAIN_PYTHON_LOCK_ROLLBACK_EVIDENCE_INVALID",
-        )
     if lock["requirements_sha512"] != canonical_sha512(requirements):
         raise reject("SUPPLY_CHAIN_PYTHON_LOCK_REQUIREMENTS_MISMATCH")
     if (
@@ -321,26 +325,67 @@ def validate_python_lock_document(
         _ROLLBACK_FIELDS,
         code="SUPPLY_CHAIN_PYTHON_LOCK_ROLLBACK_GUARD",
     )
-    history_sequence = rollback["accepted_attempt_history_sequence"]
-    if type(history_sequence) is not int or history_sequence < 0:
-        raise reject("SUPPLY_CHAIN_PYTHON_LOCK_ROLLBACK_SEQUENCE_INVALID")
-    history_sha512 = require_sha512(
-        rollback["accepted_attempt_history_sha512"],
-        "SUPPLY_CHAIN_PYTHON_LOCK_ROLLBACK_HISTORY_INVALID",
-    )
+    ptde_sequence = rollback["ptde_accepted_attempt_history_sequence"]
+    local_trust_sequence = rollback[
+        "local_trust_accepted_package_history_sequence"
+    ]
     if (
-        type(expected_history_sequence) is not int
-        or expected_history_sequence < 0
-        or lock_sequence != history_sequence + 1
-        or history_sequence != expected_history_sequence
+        type(ptde_sequence) is not int
+        or ptde_sequence < 0
+        or type(local_trust_sequence) is not int
+        or local_trust_sequence < 0
+        or type(expected_ptde_accepted_attempt_history_sequence) is not int
+        or expected_ptde_accepted_attempt_history_sequence < 0
+        or type(expected_local_trust_accepted_package_history_sequence) is not int
+        or expected_local_trust_accepted_package_history_sequence < 0
+        or ptde_sequence
+        != expected_ptde_accepted_attempt_history_sequence
+        or local_trust_sequence
+        != expected_local_trust_accepted_package_history_sequence
+        or lock_sequence != ptde_sequence + local_trust_sequence + 1
     ):
         raise reject("SUPPLY_CHAIN_PYTHON_LOCK_ROLLBACK_SEQUENCE_MISMATCH")
-    expected_history = require_sha512(
-        expected_history_sha512,
-        "SUPPLY_CHAIN_PYTHON_LOCK_EXPECTED_HISTORY_INVALID",
+    prior = lock["prior_lock_sha512"]
+    genesis = ptde_sequence == 0 and local_trust_sequence == 0
+    if genesis:
+        if (
+            expected_python_dependency_prior_lock_sha512 != "GENESIS"
+            or prior != "GENESIS"
+        ):
+            raise reject("SUPPLY_CHAIN_PYTHON_LOCK_ROLLBACK_EVIDENCE_INVALID")
+    else:
+        expected_prior = require_sha512(
+            expected_python_dependency_prior_lock_sha512,
+            "SUPPLY_CHAIN_PYTHON_LOCK_EXPECTED_PRIOR_INVALID",
+        )
+        actual_prior = require_sha512(
+            prior,
+            "SUPPLY_CHAIN_PYTHON_LOCK_ROLLBACK_EVIDENCE_INVALID",
+        )
+        if actual_prior != expected_prior:
+            raise reject("SUPPLY_CHAIN_PYTHON_LOCK_PRIOR_MISMATCH")
+    ptde_history_sha512 = require_sha512(
+        rollback["ptde_accepted_attempt_history_sha512"],
+        "SUPPLY_CHAIN_PYTHON_LOCK_PTDE_HISTORY_INVALID",
     )
-    if history_sha512 != expected_history:
-        raise reject("SUPPLY_CHAIN_PYTHON_LOCK_ROLLBACK_HISTORY_MISMATCH")
+    local_trust_history_sha512 = require_sha512(
+        rollback["local_trust_accepted_package_history_sha512"],
+        "SUPPLY_CHAIN_PYTHON_LOCK_LOCAL_TRUST_HISTORY_INVALID",
+    )
+    expected_ptde_history = require_sha512(
+        expected_ptde_accepted_attempt_history_sha512,
+        "SUPPLY_CHAIN_PYTHON_LOCK_EXPECTED_PTDE_HISTORY_INVALID",
+    )
+    expected_local_trust_history = require_sha512(
+        expected_local_trust_accepted_package_history_sha512,
+        "SUPPLY_CHAIN_PYTHON_LOCK_EXPECTED_LOCAL_TRUST_HISTORY_INVALID",
+    )
+    if ptde_history_sha512 != expected_ptde_history:
+        raise reject("SUPPLY_CHAIN_PYTHON_LOCK_PTDE_HISTORY_MISMATCH")
+    if local_trust_history_sha512 != expected_local_trust_history:
+        raise reject("SUPPLY_CHAIN_PYTHON_LOCK_LOCAL_TRUST_HISTORY_MISMATCH")
+    if ptde_history_sha512 == local_trust_history_sha512:
+        raise reject("SUPPLY_CHAIN_PYTHON_LOCK_HISTORY_LANES_NOT_INDEPENDENT")
 
     packages_raw = lock["packages"]
     if type(packages_raw) is not list or not packages_raw:
@@ -356,6 +401,22 @@ def validate_python_lock_document(
         for dependency in package["dependencies"]
     ):
         raise reject("SUPPLY_CHAIN_PYTHON_LOCK_DEPENDENCY_MISSING")
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(identity: str) -> None:
+        if identity in visiting:
+            raise reject("SUPPLY_CHAIN_PYTHON_LOCK_DEPENDENCY_CYCLE")
+        if identity in visited:
+            return
+        visiting.add(identity)
+        for dependency in by_identity[identity]["dependencies"]:
+            visit(dependency)
+        visiting.remove(identity)
+        visited.add(identity)
+
+    for identity in identities:
+        visit(identity)
 
     expected_production_direct = {
         item["identity"]: item["version"] for item in requirements
@@ -420,8 +481,11 @@ def evaluate_python_dependency_evidence(
     lock_document: Any | None,
     *,
     expected_environment: Mapping[str, str] | None = None,
-    expected_history_sequence: int,
-    expected_history_sha512: str,
+    expected_ptde_accepted_attempt_history_sequence: int,
+    expected_ptde_accepted_attempt_history_sha512: str,
+    expected_local_trust_accepted_package_history_sequence: int,
+    expected_local_trust_accepted_package_history_sha512: str,
+    expected_python_dependency_prior_lock_sha512: str,
 ) -> dict[str, Any]:
     requirements, failures = _parse_requirements(requirements_content)
     requirement_failures = list(failures)
@@ -457,8 +521,21 @@ def evaluate_python_dependency_evidence(
                 production_hash_lock_content=production_hash_lock_content,
                 assurance_hash_lock_content=assurance_hash_lock_content,
                 expected_environment=expected_environment,
-                expected_history_sequence=expected_history_sequence,
-                expected_history_sha512=expected_history_sha512,
+                expected_ptde_accepted_attempt_history_sequence=(
+                    expected_ptde_accepted_attempt_history_sequence
+                ),
+                expected_ptde_accepted_attempt_history_sha512=(
+                    expected_ptde_accepted_attempt_history_sha512
+                ),
+                expected_local_trust_accepted_package_history_sequence=(
+                    expected_local_trust_accepted_package_history_sequence
+                ),
+                expected_local_trust_accepted_package_history_sha512=(
+                    expected_local_trust_accepted_package_history_sha512
+                ),
+                expected_python_dependency_prior_lock_sha512=(
+                    expected_python_dependency_prior_lock_sha512
+                ),
             )
             lock_status = PYTHON_LOCK_VALID
         except PTDEVerificationError as error:
@@ -508,7 +585,7 @@ def _committed_blob_input(
 
 
 def build_python_dependency_inputs(binding: PObjectBinding) -> dict[str, Any]:
-    """Bind the governed /2 lock and both exact hash locks to immutable P."""
+    """Bind the governed /3 lock and both exact hash locks to immutable P."""
 
     requirements_content = p_blob_content(binding, PYTHON_REQUIREMENTS_PATH)
     requirements_record = binding.tree[PYTHON_REQUIREMENTS_PATH].record()
@@ -541,8 +618,22 @@ def build_python_dependency_inputs(binding: PObjectBinding) -> dict[str, Any]:
         production_content,
         assurance_content,
         lock_document,
-        expected_history_sequence=binding.accepted_attempt_history.sequence,
-        expected_history_sha512=binding.expected_attempt_history_sha512,
+        expected_environment=GOVERNED_PYTHON_ENVIRONMENT,
+        expected_ptde_accepted_attempt_history_sequence=(
+            binding.ptde_accepted_attempt_history.sequence
+        ),
+        expected_ptde_accepted_attempt_history_sha512=(
+            binding.expected_ptde_accepted_attempt_history_sha512
+        ),
+        expected_local_trust_accepted_package_history_sequence=(
+            binding.expected_local_trust_accepted_package_history_sequence
+        ),
+        expected_local_trust_accepted_package_history_sha512=(
+            binding.expected_local_trust_accepted_package_history_sha512
+        ),
+        expected_python_dependency_prior_lock_sha512=(
+            binding.expected_python_dependency_prior_lock_sha512
+        ),
     )
     path_failures = {
         failure
@@ -575,6 +666,7 @@ def build_python_dependency_inputs(binding: PObjectBinding) -> dict[str, Any]:
 
 
 __all__ = [
+    "GOVERNED_PYTHON_ENVIRONMENT",
     "PYTHON_ASSURANCE_HASH_LOCK_PATH",
     "PYTHON_LOCK_INVALID",
     "PYTHON_LOCK_MISSING",

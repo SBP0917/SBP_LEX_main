@@ -65,6 +65,36 @@ from sbp_lex.local_trust.toolchain_guard import (
     collect_toolchain_inventory,
 )
 
+_TEST_EXECUTABLE_PINS = {
+    "python": "1" * 128,
+    "cargo": "2" * 128,
+    "java": "3" * 128,
+    "alr": "4" * 128,
+    "git": "5" * 128,
+}
+
+
+def _collect_inventory(
+    root: Path,
+    *,
+    ptde_sequence: int = 0,
+    ptde_digest: str = "a" * 128,
+    local_trust_sequence: int = 0,
+    local_trust_digest: str = "b" * 128,
+    prior_lock_sha512: str = "GENESIS",
+) -> dict:
+    return collect_toolchain_inventory(
+        root,
+        expected_ptde_accepted_attempt_history_sequence=ptde_sequence,
+        expected_ptde_accepted_attempt_history_digest=ptde_digest,
+        expected_local_trust_accepted_package_history_sequence=(
+            local_trust_sequence
+        ),
+        expected_local_trust_accepted_package_history_digest=local_trust_digest,
+        expected_python_dependency_prior_lock_sha512=prior_lock_sha512,
+        expected_executable_sha512_pins=_TEST_EXECUTABLE_PINS,
+    )
+
 
 def test_external_executable_pins_are_absent_wrong_or_exact() -> None:
     measurements = [
@@ -159,6 +189,24 @@ def test_deployment_requires_distinct_roles_and_external_providers_for_productio
     deployment_material: dict,
 ) -> None:
     deployment = deployment_material["deployment"]
+    with pytest.raises(
+        DeploymentTrustError,
+        match="accepted_history_pair_pin_invalid",
+    ):
+        replace(
+            deployment,
+            expected_local_trust_accepted_package_history_digest=(
+                deployment.expected_ptde_accepted_attempt_history_digest
+            ),
+        )
+    with pytest.raises(
+        DeploymentTrustError,
+        match="python_dependency_prior_lock_pin_invalid",
+    ):
+        replace(
+            deployment,
+            expected_python_dependency_prior_lock_sha512="f" * 128,
+        )
     same_raw_keys_clock = replace(
         deployment.clock_context,
         mldsa87_public_key=deployment.artifact_context.mldsa87_public_key,
@@ -174,8 +222,22 @@ def test_deployment_requires_distinct_roles_and_external_providers_for_productio
             owner_pinned_artifact_context_digest=deployment.artifact_context.context_digest,
             owner_pinned_clock_context_digest=same_raw_keys_clock.context_digest,
             owner_pinned_history_context_digest=deployment.history_context.context_digest,
-            expected_accepted_history_digest=deployment.expected_accepted_history_digest,
-            minimum_accepted_history_sequence=0,
+            expected_ptde_accepted_attempt_history_sequence=(
+                deployment.expected_ptde_accepted_attempt_history_sequence
+            ),
+            expected_ptde_accepted_attempt_history_digest=(
+                deployment.expected_ptde_accepted_attempt_history_digest
+            ),
+            expected_local_trust_accepted_package_history_sequence=0,
+            expected_local_trust_accepted_package_history_digest=(
+                deployment.expected_local_trust_accepted_package_history_digest
+            ),
+            expected_python_dependency_prior_lock_sha512=(
+                deployment.expected_python_dependency_prior_lock_sha512
+            ),
+            expected_executable_sha512_pins=(
+                deployment.expected_executable_sha512_pins
+            ),
         )
     production_contexts = []
     contexts = (
@@ -236,8 +298,22 @@ def test_deployment_requires_distinct_roles_and_external_providers_for_productio
             owner_pinned_artifact_context_digest=production_contexts[0].context_digest,
             owner_pinned_clock_context_digest=production_contexts[1].context_digest,
             owner_pinned_history_context_digest=production_contexts[2].context_digest,
-            expected_accepted_history_digest=deployment.expected_accepted_history_digest,
-            minimum_accepted_history_sequence=0,
+            expected_ptde_accepted_attempt_history_sequence=(
+                deployment.expected_ptde_accepted_attempt_history_sequence
+            ),
+            expected_ptde_accepted_attempt_history_digest=(
+                deployment.expected_ptde_accepted_attempt_history_digest
+            ),
+            expected_local_trust_accepted_package_history_sequence=0,
+            expected_local_trust_accepted_package_history_digest=(
+                deployment.expected_local_trust_accepted_package_history_digest
+            ),
+            expected_python_dependency_prior_lock_sha512=(
+                deployment.expected_python_dependency_prior_lock_sha512
+            ),
+            expected_executable_sha512_pins=(
+                deployment.expected_executable_sha512_pins
+            ),
         )
     admission = ExternalProviderAdmission(
         trust_custody_attestation_sha512="a" * 128,
@@ -255,8 +331,22 @@ def test_deployment_requires_distinct_roles_and_external_providers_for_productio
             owner_pinned_artifact_context_digest=production_contexts[0].context_digest,
             owner_pinned_clock_context_digest=production_contexts[1].context_digest,
             owner_pinned_history_context_digest=production_contexts[2].context_digest,
-            expected_accepted_history_digest=deployment.expected_accepted_history_digest,
-            minimum_accepted_history_sequence=0,
+            expected_ptde_accepted_attempt_history_sequence=(
+                deployment.expected_ptde_accepted_attempt_history_sequence
+            ),
+            expected_ptde_accepted_attempt_history_digest=(
+                deployment.expected_ptde_accepted_attempt_history_digest
+            ),
+            expected_local_trust_accepted_package_history_sequence=0,
+            expected_local_trust_accepted_package_history_digest=(
+                deployment.expected_local_trust_accepted_package_history_digest
+            ),
+            expected_python_dependency_prior_lock_sha512=(
+                deployment.expected_python_dependency_prior_lock_sha512
+            ),
+            expected_executable_sha512_pins=(
+                deployment.expected_executable_sha512_pins
+            ),
             external_provider_admission=admission,
         )
 
@@ -600,7 +690,8 @@ def test_python_dependency_lock_is_distinct_and_host_bound(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    expected_history_digest = "a" * 128
+    expected_ptde_history_digest = "a" * 128
+    expected_local_trust_history_digest = "b" * 128
     monkeypatch.setattr(
         importlib.metadata,
         "distributions",
@@ -634,7 +725,7 @@ def test_python_dependency_lock_is_distinct_and_host_bound(
         assurance_hash_lock
     )
     lock_document = {
-        "schema_id": "sbp.lex.v2.python-dependency-lock/2",
+        "schema_id": "sbp.lex.v2.python-dependency-lock/3",
         "lock_sequence": 1,
         "prior_lock_sha512": "GENESIS",
         "requirements_sha512": digest(requirements),
@@ -648,8 +739,14 @@ def test_python_dependency_lock_is_distinct_and_host_bound(
             "installed_scope": "assurance",
         },
         "rollback_guard": {
-            "accepted_attempt_history_sequence": 0,
-            "accepted_attempt_history_sha512": expected_history_digest,
+            "ptde_accepted_attempt_history_sequence": 0,
+            "ptde_accepted_attempt_history_sha512": (
+                expected_ptde_history_digest
+            ),
+            "local_trust_accepted_package_history_sequence": 0,
+            "local_trust_accepted_package_history_sha512": (
+                expected_local_trust_history_digest
+            ),
         },
         "packages": [{
             "name": "cryptography",
@@ -668,14 +765,9 @@ def test_python_dependency_lock_is_distinct_and_host_bound(
         }],
     }
     write_json_exclusive(lock_document, tmp_path / "python-dependencies.lock.json")
-    unbound = collect_toolchain_inventory(tmp_path.resolve())
-    assert unbound["python_dependency_evidence"]["dependency_evidence_status"] == "INCOMPLETE"
-    assert "PYTHON_LOCK_ROLLBACK_GUARD_INVALID" in unbound["python_dependency_evidence"]["lock_failures"]
-    inventory = collect_toolchain_inventory(
-        tmp_path.resolve(),
-        expected_accepted_history_sequence=0,
-        expected_accepted_history_digest=expected_history_digest,
-    )
+    with pytest.raises(TypeError):
+        collect_toolchain_inventory(tmp_path.resolve())
+    inventory = _collect_inventory(tmp_path.resolve())
     python_evidence = inventory["python_dependency_evidence"]
     assert python_evidence["dependency_evidence_status"] == "COMPLETE"
     assert python_evidence["authority_granted"] is False
@@ -701,32 +793,80 @@ def test_python_dependency_lock_is_distinct_and_host_bound(
             SimpleNamespace(metadata={"Name": "unexpected"}, version="1.0.0"),
         ],
     )
-    mismatch = collect_toolchain_inventory(
-        tmp_path.resolve(),
-        expected_accepted_history_sequence=0,
-        expected_accepted_history_digest=expected_history_digest,
-    )["python_dependency_evidence"]
+    mismatch = _collect_inventory(tmp_path.resolve())["python_dependency_evidence"]
     assert mismatch["dependency_evidence_status"] == "INCOMPLETE"
     assert "PYTHON_INSTALLED_PACKAGES_LOCK_MISMATCH_OR_EXTRA" in mismatch["lock_failures"]
-    wrong_history = collect_toolchain_inventory(
+    wrong_history = _collect_inventory(
         tmp_path.resolve(),
-        expected_accepted_history_sequence=0,
-        expected_accepted_history_digest="b" * 128,
+        ptde_digest="c" * 128,
     )["python_dependency_evidence"]
     assert wrong_history["dependency_evidence_status"] == "INCOMPLETE"
     assert "PYTHON_LOCK_ROLLBACK_GUARD_INVALID" in wrong_history["lock_failures"]
+
+    def replace_lock(candidate: dict) -> dict:
+        (tmp_path / "python-dependencies.lock.json").unlink()
+        write_json_exclusive(candidate, tmp_path / "python-dependencies.lock.json")
+        return _collect_inventory(tmp_path.resolve())["python_dependency_evidence"]
+
+    copied_history = deepcopy(lock_document)
+    copied_history["rollback_guard"][
+        "local_trust_accepted_package_history_sha512"
+    ] = expected_ptde_history_digest
+    replace_lock(copied_history)
+    copied_history_evidence = _collect_inventory(
+        tmp_path.resolve(),
+        local_trust_digest=expected_ptde_history_digest,
+    )["python_dependency_evidence"]
+    assert "PYTHON_LOCK_ROLLBACK_GUARD_INVALID" in copied_history_evidence[
+        "lock_failures"
+    ]
+
+    legacy = deepcopy(lock_document)
+    legacy["schema_id"] = "sbp.lex.v2.python-dependency-lock/2"
+    legacy["rollback_guard"] = {
+        "accepted_attempt_history_sequence": 0,
+        "accepted_attempt_history_sha512": expected_ptde_history_digest,
+    }
+    legacy_evidence = replace_lock(legacy)
+    assert "PYTHON_LOCK_SCHEMA_OR_SEQUENCE_INVALID" in legacy_evidence["lock_failures"]
+
+    extended = deepcopy(lock_document)
+    extended["rollback_guard"]["unexpected"] = "not-admitted"
+    extended_evidence = replace_lock(extended)
+    assert "PYTHON_LOCK_ROLLBACK_GUARD_INVALID" in extended_evidence["lock_failures"]
+
+    non_genesis = deepcopy(lock_document)
+    non_genesis["lock_sequence"] = 2
+    non_genesis["rollback_guard"]["ptde_accepted_attempt_history_sequence"] = 1
+    replace_lock(non_genesis)
+    non_genesis_evidence = _collect_inventory(
+        tmp_path.resolve(),
+        ptde_sequence=1,
+        prior_lock_sha512="c" * 128,
+    )["python_dependency_evidence"]
+    assert "PYTHON_LOCK_ROLLBACK_EVIDENCE_INVALID" in non_genesis_evidence[
+        "lock_failures"
+    ]
+
+    substituted_prior = deepcopy(lock_document)
+    substituted_prior["lock_sequence"] = 2
+    substituted_prior["prior_lock_sha512"] = "c" * 128
+    substituted_prior["rollback_guard"][
+        "ptde_accepted_attempt_history_sequence"
+    ] = 1
+    replace_lock(substituted_prior)
+    substituted_prior_evidence = _collect_inventory(
+        tmp_path.resolve(),
+        ptde_sequence=1,
+        prior_lock_sha512="d" * 128,
+    )["python_dependency_evidence"]
+    assert "PYTHON_LOCK_ROLLBACK_EVIDENCE_INVALID" in substituted_prior_evidence[
+        "lock_failures"
+    ]
+
     cross_contaminated = deepcopy(lock_document)
     cross_contaminated["packages"][1]["scopes"] = ["assurance", "production"]
-    (tmp_path / "python-dependencies.lock.json").unlink()
-    write_json_exclusive(
-        cross_contaminated,
-        tmp_path / "python-dependencies.lock.json",
-    )
-    cross_contamination = collect_toolchain_inventory(
-        tmp_path.resolve(),
-        expected_accepted_history_sequence=0,
-        expected_accepted_history_digest=expected_history_digest,
-    )["python_dependency_evidence"]
+    cross_contamination = replace_lock(cross_contaminated)
     assert cross_contamination["dependency_evidence_status"] == "INCOMPLETE"
     assert "PYTHON_LOCK_SCOPE_CLOSURE_MISMATCH" in cross_contamination["lock_failures"]
 
@@ -745,7 +885,7 @@ def test_unpinned_requirements_and_missing_python_lock_fail_closed(tmp_path: Pat
     (tmp_path / "requirements-test.lock.txt").write_text(
         hash_lock, encoding="utf-8", newline=""
     )
-    inventory = collect_toolchain_inventory(tmp_path.resolve())
+    inventory = _collect_inventory(tmp_path.resolve())
     evidence = inventory["python_dependency_evidence"]
     assert evidence["requirements_status"] == "INVALID_OR_UNPINNED"
     assert evidence["lock_status"] == "COMMITTED_LOCK_MISSING"

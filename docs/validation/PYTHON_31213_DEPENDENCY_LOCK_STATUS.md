@@ -45,11 +45,15 @@ matched all nine test-lock entries with zero mismatches.
 ## Assurance boundary
 
 These files are exact target installation locks; they do not create the
-separately governed `python-dependencies.lock.json` assurance artifact. That
-schema requires a genuine accepted-attempt-history sequence and SHA-512
-rollback binding. The repository's existing resolution evidence records that
-this history and the final freeze binding are unavailable. No history digest,
-lock sequence, release admission, or production authority has been invented.
+separately governed `python-dependencies.lock.json` assurance artifact. Schema
+`sbp.lex.v2.python-dependency-lock/3` requires separately pinned PTDE
+accepted-attempt and local-trust accepted-package history sequence/digest pairs,
+plus an exact predecessor-lock pin. Schema `/2` is rejected. The offline builder
+derives the dependency graph from exact hashed wheel metadata, writes a new
+canonical artifact exclusively, and immediately revalidates it. The genuine
+history snapshots, independent pins and final freeze binding remain external;
+no history digest, lock sequence, admission, or production authority has been
+invented.
 
 ## Validation
 

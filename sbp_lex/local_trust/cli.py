@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from .deployment import DeploymentTrust, RepositoryIdentity
 from .digests import digest_equal
@@ -55,8 +55,28 @@ def _validate(args: argparse.Namespace) -> int:
         owner_pinned_artifact_context_digest=args.expected_artifact_context_digest,
         owner_pinned_clock_context_digest=args.expected_clock_context_digest,
         owner_pinned_history_context_digest=args.expected_history_context_digest,
-        expected_accepted_history_digest=args.expected_accepted_history_digest,
-        minimum_accepted_history_sequence=args.minimum_accepted_history_sequence,
+        expected_ptde_accepted_attempt_history_sequence=(
+            args.expected_ptde_accepted_attempt_history_sequence
+        ),
+        expected_ptde_accepted_attempt_history_digest=(
+            args.expected_ptde_accepted_attempt_history_digest
+        ),
+        expected_local_trust_accepted_package_history_sequence=(
+            args.expected_local_trust_accepted_package_history_sequence
+        ),
+        expected_local_trust_accepted_package_history_digest=(
+            args.expected_local_trust_accepted_package_history_digest
+        ),
+        expected_python_dependency_prior_lock_sha512=(
+            args.expected_python_dependency_prior_lock_sha512
+        ),
+        expected_executable_sha512_pins={
+            "python": args.expected_python_executable_sha512,
+            "cargo": args.expected_cargo_executable_sha512,
+            "java": args.expected_java_executable_sha512,
+            "alr": args.expected_alr_executable_sha512,
+            "git": args.expected_git_executable_sha512,
+        },
     )
     result = verify_local_trust_package(
         package,
@@ -85,8 +105,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     validate.add_argument("--expected-repository-identity-digest", required=True)
     validate.add_argument("--package", required=True)
     validate.add_argument("--accepted-history", required=True)
-    validate.add_argument("--expected-accepted-history-digest", required=True)
-    validate.add_argument("--minimum-accepted-history-sequence", type=int, required=True)
+    validate.add_argument(
+        "--expected-ptde-accepted-attempt-history-sequence",
+        type=int,
+        required=True,
+    )
+    validate.add_argument(
+        "--expected-ptde-accepted-attempt-history-digest",
+        required=True,
+    )
+    validate.add_argument(
+        "--expected-local-trust-accepted-package-history-sequence",
+        type=int,
+        required=True,
+    )
+    validate.add_argument(
+        "--expected-local-trust-accepted-package-history-digest",
+        required=True,
+    )
+    validate.add_argument(
+        "--expected-python-dependency-prior-lock-sha512",
+        required=True,
+    )
+    validate.add_argument("--expected-python-executable-sha512", required=True)
+    validate.add_argument("--expected-cargo-executable-sha512", required=True)
+    validate.add_argument("--expected-java-executable-sha512", required=True)
+    validate.add_argument("--expected-alr-executable-sha512", required=True)
+    validate.add_argument("--expected-git-executable-sha512", required=True)
     validate.add_argument("--artifact-context", required=True)
     validate.add_argument("--expected-artifact-context-digest", required=True)
     validate.add_argument("--clock-context", required=True)
