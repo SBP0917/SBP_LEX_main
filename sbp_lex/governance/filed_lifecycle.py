@@ -204,13 +204,15 @@ def _trust_context_owner_pinned(
     trust_context: HybridVerificationContext | None,
     owner_pinned_context_digest: str | None,
 ) -> bool:
-    return (
-        isinstance(trust_context, HybridVerificationContext)
-        and is_sha512(owner_pinned_context_digest)
-        and hmac.compare_digest(
-            trust_context.context_digest,
-            owner_pinned_context_digest,
-        )
+    if (
+        not isinstance(trust_context, HybridVerificationContext)
+        or type(owner_pinned_context_digest) is not str
+        or not is_sha512(owner_pinned_context_digest)
+    ):
+        return False
+    return hmac.compare_digest(
+        trust_context.context_digest,
+        owner_pinned_context_digest,
     )
 
 
@@ -226,7 +228,7 @@ def _evidence_references_exact(value: Any) -> bool:
         }:
             return False
         identifier = reference.get("evidence_id")
-        if not _text(identifier) or identifier in identifiers:
+        if type(identifier) is not str or not _text(identifier) or identifier in identifiers:
             return False
         identifiers.add(identifier)
         if not _text(reference.get("source")):
@@ -393,9 +395,13 @@ def _source_error(
         return "FILED_LIFECYCLE_ATTESTATION_PROVIDER_NOT_ADMITTED"
     if type(source) is not dict or set(source) != _SOURCE_FIELDS:
         return f"{engine_id}_EVALUATOR_RESULT_SHAPE_INVALID"
-    if not _trust_context_owner_pinned(
-        trust_context,
-        owner_pinned_context_digest,
+    if (
+        not isinstance(trust_context, HybridVerificationContext)
+        or type(owner_pinned_context_digest) is not str
+        or not _trust_context_owner_pinned(
+            trust_context,
+            owner_pinned_context_digest,
+        )
     ):
         return "FILED_LIFECYCLE_OWNER_TRUST_PIN_INVALID"
     if not verify_hybrid_signed_object(
@@ -500,6 +506,8 @@ def _trace_records_error(
             return f"{engine_id}_RECORD_SHAPE_INVALID"
         snapshot = record.get("evaluation_snapshot")
         source = record.get("evaluation_source")
+        if type(snapshot) is not dict or type(source) is not dict:
+            return f"{engine_id}_RECORD_SHAPE_INVALID"
         if (
             record.get("lifecycle_engine") != lifecycle_engine
             or record.get("schema_status") != FILED_LIFECYCLE_SCHEMA_STATUS
@@ -552,7 +560,9 @@ def _hash_binding_error(
     state: dict[str, Any], trace: list[dict[str, Any]]
 ) -> str | None:
     chain = state.get("hash_chain")
-    if not verify_hash_chain_entries(chain, state.get("state_hash")):
+    if type(chain) is not list or not verify_hash_chain_entries(
+        chain, state.get("state_hash")
+    ):
         return "FILED_LIFECYCLE_HASH_CHAIN_INVALID"
     previous_index = -1
     for sequence, record in enumerate(trace, start=1):
@@ -680,17 +690,20 @@ def evaluate_filed_lifecycle(
         ):
             error = "FILED_LIFECYCLE_ATTESTATION_PROVIDER_NOT_ADMITTED"
     if error is None:
-        try:
-            source = method(
-                stage=FILED_LIFECYCLE_STAGES[lifecycle_engine],
-                snapshot=deepcopy(snapshot),
-            )
-        except Exception as exc:
-            error = (
-                f"{FILED_LIFECYCLE_ENGINE_IDS[lifecycle_engine]}_"
-                f"EVALUATOR_ERROR:{type(exc).__name__}:{exc}"
-            )
-    if error is None:
+        if not callable(method):
+            error = "FILED_LIFECYCLE_EVALUATOR_CONTRACT_INVALID"
+        else:
+            try:
+                source = method(
+                    stage=FILED_LIFECYCLE_STAGES[lifecycle_engine],
+                    snapshot=deepcopy(snapshot),
+                )
+            except Exception as exc:
+                error = (
+                    f"{FILED_LIFECYCLE_ENGINE_IDS[lifecycle_engine]}_"
+                    f"EVALUATOR_ERROR:{type(exc).__name__}:{exc}"
+                )
+    if error is None and evaluator is not None:
         error = _source_error(
             source,
             lifecycle_engine=lifecycle_engine,
@@ -770,6 +783,8 @@ def verify_filed_lifecycle(
         )
         if error is not None:
             return False
+        if type(trace) is not list or type(results) is not dict:
+            return False
         if (
             state.get("filed_lifecycle_digest") != _safe_hash(trace)
             or state.get("filed_lifecycle_result") != LIFECYCLE_PASS
@@ -793,11 +808,13 @@ def verify_filed_lifecycle(
             "skg_record": state.get("skg_authority_record"),
             "governance_result": state.get("governance_result"),
         }
-        if any(
-            any(record["evaluation_snapshot"].get(field) != value for field, value in stable_live_fields.items())
-            for record in trace
-        ):
-            return False
+        for record in trace:
+            snapshot = record.get("evaluation_snapshot")
+            if type(snapshot) is not dict or any(
+                snapshot.get(field) != value
+                for field, value in stable_live_fields.items()
+            ):
+                return False
         if not require_hash_binding:
             return True
         return _hash_binding_error(state, trace) is None

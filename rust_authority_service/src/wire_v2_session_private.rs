@@ -2,14 +2,20 @@
 //!
 //! A deployment transport must authenticate its peer before calling this
 //! layer.  This module adds no named-pipe, socket, credential, process, or
-//! binary-identity semantics.  It accepts only exact canonical wire-v2 frames
-//! for externally owned roles and never accepts an adapter request, authority
-//! result, watchdog result, receipt, or redeemable permit from Python.
+//! binary-identity semantics. It accepts only owner-pinned, mandatory
+//! ML-DSA-87 + Ed448 hybrid frames for externally owned roles and never accepts
+//! an adapter request, authority result, watchdog result, receipt, or
+//! redeemable permit from Python. Legacy wire-v2 remains inspectable only as
+//! explicitly non-effect compatibility data.
 
-use sbp_lex_authority_wire_v2::{decode_frame, Message, Value, MAX_FRAME_BYTES};
+use sbp_lex_authority_wire_v2::hybrid::{
+    decode_for_admission, OwnerPinnedHybridAdmission, WireAdmission, MAX_HYBRID_FRAME_BYTES,
+};
+use sbp_lex_authority_wire_v2::{Message, Value};
 
 const MAX_EXTERNAL_SESSION_FRAMES: usize = 8;
-const MAX_EXTERNAL_SESSION_BYTES: usize = MAX_EXTERNAL_SESSION_FRAMES * (MAX_FRAME_BYTES + 4);
+const MAX_EXTERNAL_SESSION_BYTES: usize =
+    MAX_EXTERNAL_SESSION_FRAMES * (MAX_HYBRID_FRAME_BYTES + 4);
 
 #[derive(Debug, Eq, PartialEq)]
 enum PrivateSessionError {
@@ -19,6 +25,16 @@ enum PrivateSessionError {
     UnsupportedMode,
     UnexpectedExternallyOwnedStage,
     InternallyOwnedStage,
+    NonEffectAdmission,
+    HybridRouteBindingChanged,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SessionHybridRouteIdentity {
+    ordered_key_set_digest: [u8; 64],
+    purpose: String,
+    authority_epoch: u64,
+    context_sha512: [u8; 64],
 }
 
 fn text<'a>(message: &'a Message, key: &str) -> Result<&'a str, PrivateSessionError> {
@@ -75,6 +91,7 @@ struct PrivateInboundSession {
     mode: Option<String>,
     accepted: Vec<Message>,
     accepted_bytes: usize,
+    hybrid_route_identity: Option<SessionHybridRouteIdentity>,
 }
 
 impl PrivateInboundSession {
@@ -83,10 +100,15 @@ impl PrivateInboundSession {
             mode: None,
             accepted: Vec::new(),
             accepted_bytes: 0,
+            hybrid_route_identity: None,
         }
     }
 
-    fn accept_frame(&mut self, frame: &[u8]) -> Result<&Message, PrivateSessionError> {
+    fn accept_frame(
+        &mut self,
+        frame: &[u8],
+        owner_pins: Option<&OwnerPinnedHybridAdmission>,
+    ) -> Result<&Message, PrivateSessionError> {
         if self.accepted.len() == MAX_EXTERNAL_SESSION_FRAMES {
             return Err(PrivateSessionError::SessionComplete);
         }
@@ -97,8 +119,28 @@ impl PrivateInboundSession {
         if new_total > MAX_EXTERNAL_SESSION_BYTES {
             return Err(PrivateSessionError::SessionByteLimit);
         }
-        let message =
-            decode_frame(frame).map_err(|error| PrivateSessionError::Wire(error.to_string()))?;
+        let (message, route_identity) = match decode_for_admission(frame, owner_pins)
+            .map_err(|error| PrivateSessionError::Wire(error.to_string()))?
+        {
+            WireAdmission::HybridProductionEffect { envelope, payload } => (
+                payload,
+                SessionHybridRouteIdentity {
+                    ordered_key_set_digest: *envelope.ordered_key_set_digest(),
+                    purpose: envelope.purpose().to_owned(),
+                    authority_epoch: envelope.authority_epoch(),
+                    context_sha512: *envelope.context_sha512(),
+                },
+            ),
+            WireAdmission::HybridAuthenticatedNonEffect { .. }
+            | WireAdmission::LegacyV2NonEffect(_) => {
+                return Err(PrivateSessionError::NonEffectAdmission)
+            }
+        };
+        match &self.hybrid_route_identity {
+            None => {}
+            Some(expected) if expected == &route_identity => {}
+            Some(_) => return Err(PrivateSessionError::HybridRouteBindingChanged),
+        }
         let kind = text(&message, "kind")?;
         if matches!(
             kind,
@@ -131,6 +173,9 @@ impl PrivateInboundSession {
         if kind != *expected_kind || number(&message, "sequence")? != *expected_sequence {
             return Err(PrivateSessionError::UnexpectedExternallyOwnedStage);
         }
+        if self.hybrid_route_identity.is_none() {
+            self.hybrid_route_identity = Some(route_identity);
+        }
         self.accepted_bytes = new_total;
         self.accepted.push(message);
         Ok(self.accepted.last().expect("message was just appended"))
@@ -144,10 +189,26 @@ impl PrivateInboundSession {
     }
 }
 
+fn inspect_legacy_non_effect(frame: &[u8]) -> Result<Message, PrivateSessionError> {
+    match decode_for_admission(frame, None)
+        .map_err(|error| PrivateSessionError::Wire(error.to_string()))?
+    {
+        WireAdmission::LegacyV2NonEffect(message) => Ok(message),
+        WireAdmission::HybridAuthenticatedNonEffect { .. }
+        | WireAdmission::HybridProductionEffect { .. } => {
+            Err(PrivateSessionError::NonEffectAdmission)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sbp_lex_authority_wire_v2::hybrid::{
+        encode_hybrid_frame, HybridAdmissionClass, HybridEnvelope,
+    };
     use sbp_lex_authority_wire_v2::{encode_frame, parse_message};
+    use sbp_lex_v2_hybrid_signature::SoftwareHybridSigningKey;
 
     const MODE1: &str = include_str!("../../wire_protocol/v2/vectors/mode1_golden.jsonl");
     const MODE2: &str = include_str!("../../wire_protocol/v2/vectors/mode_2_golden.jsonl");
@@ -164,6 +225,9 @@ mod tests {
         include_str!("../../wire_protocol/v2/vectors/mode3_unknown_golden.jsonl");
     const MODE3_TIMEOUT: &str =
         include_str!("../../wire_protocol/v2/vectors/mode3_timeout_golden.jsonl");
+    const ROUTE_PURPOSE: &str = "AUTHORITY_SESSION";
+    const ROUTE_EPOCH: u64 = 89;
+    const ROUTE_CONTEXT: &[u8] = b"owner-pinned:bounded-private-session";
 
     fn messages(vector: &str) -> Vec<Message> {
         vector
@@ -171,6 +235,59 @@ mod tests {
             .filter(|line| !line.is_empty())
             .map(|line| parse_message(line.as_bytes()).expect("fixed canonical vector"))
             .collect()
+    }
+
+    fn route_signer() -> SoftwareHybridSigningKey {
+        SoftwareHybridSigningKey::from_seed_slices(&[0xB1; 32], &[0xC2; 57])
+            .expect("fixed route signer")
+    }
+
+    fn admitted_frame(
+        message: &Message,
+        signer: &SoftwareHybridSigningKey,
+        purpose: &str,
+        epoch: u64,
+        context: &[u8],
+        admission_class: HybridAdmissionClass,
+        external_custody_admitted: bool,
+    ) -> (Vec<u8>, OwnerPinnedHybridAdmission) {
+        let payload = encode_frame(message).expect("legacy payload frame");
+        let key = signer.public_key();
+        let signature = signer
+            .sign(purpose, epoch, context, &payload)
+            .expect("strict-dual signature");
+        let envelope =
+            HybridEnvelope::new(purpose, epoch, context, payload, key.clone(), signature)
+                .expect("hybrid envelope");
+        let frame = encode_hybrid_frame(&envelope).expect("hybrid frame");
+        let pins = OwnerPinnedHybridAdmission::new(
+            key.clone(),
+            key.ordered_key_set_digest(),
+            purpose,
+            epoch,
+            context,
+            text(message, "kind").expect("message kind"),
+            admission_class,
+            external_custody_admitted,
+        )
+        .expect("owner pins");
+        (frame, pins)
+    }
+
+    fn accept_message<'a>(
+        session: &'a mut PrivateInboundSession,
+        message: &Message,
+    ) -> Result<&'a Message, PrivateSessionError> {
+        let (frame, pins) = admitted_frame(
+            message,
+            &route_signer(),
+            ROUTE_PURPOSE,
+            ROUTE_EPOCH,
+            ROUTE_CONTEXT,
+            HybridAdmissionClass::ProductionEffect,
+            true,
+        );
+        session.accept_frame(&frame, Some(&pins))
     }
 
     #[test]
@@ -183,33 +300,90 @@ mod tests {
             let source = messages(vector);
             let mut session = PrivateInboundSession::new();
             for index in indexes {
-                session
-                    .accept_frame(&encode_frame(&source[*index]).expect("fixed frame"))
-                    .expect("externally owned stage");
+                accept_message(&mut session, &source[*index]).expect("externally owned stage");
             }
             assert!(session.is_complete());
         }
     }
 
     #[test]
+    fn bounded_session_requires_effect_admission_and_one_pinned_route_identity() {
+        let source = messages(MODE1);
+        let legacy_frame = encode_frame(&source[0]).expect("legacy frame");
+        assert_eq!(
+            inspect_legacy_non_effect(&legacy_frame).expect("legacy inspection"),
+            source[0]
+        );
+        let mut session = PrivateInboundSession::new();
+        assert_eq!(
+            session.accept_frame(&legacy_frame, None),
+            Err(PrivateSessionError::NonEffectAdmission)
+        );
+
+        let signer = route_signer();
+        let (first_frame, first_pins) = admitted_frame(
+            &source[0],
+            &signer,
+            ROUTE_PURPOSE,
+            ROUTE_EPOCH,
+            ROUTE_CONTEXT,
+            HybridAdmissionClass::ProductionEffect,
+            true,
+        );
+        assert!(matches!(
+            session.accept_frame(&first_frame, None),
+            Err(PrivateSessionError::Wire(_))
+        ));
+        session
+            .accept_frame(&first_frame, Some(&first_pins))
+            .expect("owner-pinned first stage");
+
+        let (test_frame, test_pins) = admitted_frame(
+            &source[2],
+            &signer,
+            ROUTE_PURPOSE,
+            ROUTE_EPOCH,
+            ROUTE_CONTEXT,
+            HybridAdmissionClass::TestOnlyNonEffect,
+            false,
+        );
+        assert_eq!(
+            session.accept_frame(&test_frame, Some(&test_pins)),
+            Err(PrivateSessionError::NonEffectAdmission)
+        );
+
+        let (changed_frame, changed_pins) = admitted_frame(
+            &source[2],
+            &signer,
+            "CHANGED_ROUTE",
+            ROUTE_EPOCH,
+            ROUTE_CONTEXT,
+            HybridAdmissionClass::ProductionEffect,
+            true,
+        );
+        assert_eq!(
+            session.accept_frame(&changed_frame, Some(&changed_pins)),
+            Err(PrivateSessionError::HybridRouteBindingChanged)
+        );
+    }
+
+    #[test]
     fn adapter_authority_and_partial_or_malformed_frames_are_rejected() {
         let source = messages(MODE1);
         let mut session = PrivateInboundSession::new();
-        session
-            .accept_frame(&encode_frame(&source[0]).expect("release frame"))
-            .expect("release request");
+        accept_message(&mut session, &source[0]).expect("release request");
         assert_eq!(
-            session.accept_frame(&encode_frame(&source[1]).expect("result frame")),
+            accept_message(&mut session, &source[1]),
             Err(PrivateSessionError::InternallyOwnedStage)
         );
         assert!(matches!(
-            session.accept_frame(&[0, 0, 0]),
+            session.accept_frame(&[0, 0, 0], None),
             Err(PrivateSessionError::Wire(_))
         ));
 
         let mut later = PrivateInboundSession::new();
         assert_eq!(
-            later.accept_frame(&encode_frame(&source[11]).expect("lease request frame")),
+            accept_message(&mut later, &source[11]),
             Err(PrivateSessionError::InternallyOwnedStage)
         );
     }
@@ -229,9 +403,7 @@ mod tests {
             let source = messages(vector);
             let mut session = PrivateInboundSession::new();
             for index in indexes {
-                session
-                    .accept_frame(&encode_frame(&source[*index]).expect("fixed frame"))
-                    .expect("externally owned stage");
+                accept_message(&mut session, &source[*index]).expect("externally owned stage");
             }
             assert!(session.is_complete());
         }
@@ -247,25 +419,21 @@ mod tests {
 
             let mut partial = PrivateInboundSession::new();
             for index in &indexes[..indexes.len() - 1] {
-                partial
-                    .accept_frame(&encode_frame(&source[*index]).expect("partial frame"))
-                    .expect("valid partial prefix");
+                accept_message(&mut partial, &source[*index]).expect("valid partial prefix");
             }
             assert!(!partial.is_complete());
 
-            let first = encode_frame(&source[indexes[0]]).expect("first frame");
             let mut wrong_order = PrivateInboundSession::new();
-            wrong_order.accept_frame(&first).expect("first stage");
+            accept_message(&mut wrong_order, &source[indexes[0]]).expect("first stage");
             assert_eq!(
-                wrong_order
-                    .accept_frame(&encode_frame(&source[indexes[2]]).expect("wrong-order frame")),
+                accept_message(&mut wrong_order, &source[indexes[2]]),
                 Err(PrivateSessionError::UnexpectedExternallyOwnedStage)
             );
 
             let mut replay = PrivateInboundSession::new();
-            replay.accept_frame(&first).expect("first stage");
+            accept_message(&mut replay, &source[indexes[0]]).expect("first stage");
             assert_eq!(
-                replay.accept_frame(&first),
+                accept_message(&mut replay, &source[indexes[0]]),
                 Err(PrivateSessionError::UnexpectedExternallyOwnedStage)
             );
         }
@@ -281,9 +449,7 @@ mod tests {
             for index in internal_indexes {
                 let mut session = PrivateInboundSession::new();
                 assert_eq!(
-                    session.accept_frame(
-                        &encode_frame(&source[*index]).expect("internally owned frame")
-                    ),
+                    accept_message(&mut session, &source[*index]),
                     Err(PrivateSessionError::InternallyOwnedStage)
                 );
             }

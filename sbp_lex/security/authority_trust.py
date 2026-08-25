@@ -27,7 +27,7 @@ from sbp_lex.security.hybrid_signature import (
     HybridVerificationContext,
     is_hybrid_provider,
 )
-from sbp_lex.security.integrity import canonical_integrity_hash, is_sha512
+from sbp_lex.security.integrity import is_sha512
 from sbp_lex.security.signature_provider import (
     GENERIC_SIGNING_PURPOSE,
     verify_signed_object,
@@ -196,16 +196,19 @@ class AuthorityTrustRolePin:
         }
         if self.algorithm == HYBRID_SUITE_ID:
             context = self.hybrid_verification_context
-            assert context is not None
+            if not isinstance(context, HybridVerificationContext):
+                raise ValueError("AUTHORITY_TRUST_ROLE_PIN_INVALID")
             return {
                 **common,
                 "hybrid_context": context.public_record(),
                 "hybrid_context_digest": context.context_digest,
             }
-        assert self.ed25519_public_key is not None
+        public_key = self.ed25519_public_key
+        if type(public_key) is not bytes:
+            raise ValueError("AUTHORITY_TRUST_ROLE_PIN_INVALID")
         return {
             **common,
-            "ed25519_public_key_hex": self.ed25519_public_key.hex(),
+            "ed25519_public_key_hex": public_key.hex(),
             "public_key_sha512": self.public_key_sha512,
         }
 
@@ -344,7 +347,7 @@ def verify_pinned_signed_object(
         if not hmac.compare_digest(value.get("digest", ""), digest):
             return False
         encoded = signature.get("signature_b64")
-        if not _text(encoded):
+        if type(encoded) is not str or not _text(encoded):
             return False
         signature_bytes = base64.b64decode(encoded, validate=True)
         if role_pin.ed25519_public_key is None:
@@ -378,21 +381,29 @@ def _owner_pin(owner_provider: Any) -> AuthorityTrustRolePin | None:
         except ValueError:
             return None
     raw = _public_key_bytes(owner_provider)
-    values = (
-        getattr(owner_provider, "provider_id", None),
-        getattr(owner_provider, "algorithm", None),
-        getattr(owner_provider, "key_id", None),
-        getattr(owner_provider, "custody_class", None),
-    )
-    if raw is None or not all(_text(value) for value in values):
+    provider_id = getattr(owner_provider, "provider_id", None)
+    algorithm = getattr(owner_provider, "algorithm", None)
+    key_id = getattr(owner_provider, "key_id", None)
+    custody_class = getattr(owner_provider, "custody_class", None)
+    if (
+        raw is None
+        or not isinstance(provider_id, str)
+        or not provider_id
+        or not isinstance(algorithm, str)
+        or not algorithm
+        or not isinstance(key_id, str)
+        or not key_id
+        or not isinstance(custody_class, str)
+        or not custody_class
+    ):
         return None
     try:
         return AuthorityTrustRolePin(
             role=AUTHORITY_TRUST_ROLE_OWNER,
-            provider_id=values[0],
-            algorithm=values[1],
-            key_id=values[2],
-            custody_class=values[3],
+            provider_id=provider_id,
+            algorithm=algorithm,
+            key_id=key_id,
+            custody_class=custody_class,
             effect_authority=(
                 getattr(owner_provider, "effect_authority", None) is True
             ),
@@ -435,12 +446,27 @@ def role_pin_from_provider(
     raw = _public_key_bytes(provider)
     if raw is None:
         raise ValueError("AUTHORITY_TRUST_PROVIDER_PUBLIC_KEY_INVALID")
+    provider_id = getattr(provider, "provider_id", None)
+    algorithm = getattr(provider, "algorithm", None)
+    key_id = getattr(provider, "key_id", None)
+    custody_class = getattr(provider, "custody_class", None)
+    if (
+        not isinstance(provider_id, str)
+        or not provider_id
+        or not isinstance(algorithm, str)
+        or not algorithm
+        or not isinstance(key_id, str)
+        or not key_id
+        or not isinstance(custody_class, str)
+        or not custody_class
+    ):
+        raise ValueError("AUTHORITY_TRUST_PROVIDER_METADATA_INVALID")
     return AuthorityTrustRolePin(
         role=role,
-        provider_id=getattr(provider, "provider_id", None),
-        algorithm=getattr(provider, "algorithm", None),
-        key_id=getattr(provider, "key_id", None),
-        custody_class=getattr(provider, "custody_class", None),
+        provider_id=provider_id,
+        algorithm=algorithm,
+        key_id=key_id,
+        custody_class=custody_class,
         effect_authority=(getattr(provider, "effect_authority", None) is True),
         ed25519_public_key=raw,
         public_key_sha512=sha512(raw).hexdigest(),
@@ -515,6 +541,17 @@ def _register(
         or payload.get("role_pins") != [pin.document() for pin in role_pins]
     ):
         raise ValueError("AUTHORITY_TRUST_DEPLOYMENT_PIN_MISMATCH")
+    context_version = payload.get("context_version")
+    minimum_clock_sequence = payload.get("minimum_clock_sequence")
+    minimum_registry_sequence = payload.get("minimum_registry_sequence")
+    minimum_registry_head_digest = payload.get("minimum_registry_head_digest")
+    if (
+        type(context_version) is not str
+        or type(minimum_clock_sequence) is not int
+        or type(minimum_registry_sequence) is not int
+        or type(minimum_registry_head_digest) is not str
+    ):
+        raise ValueError("AUTHORITY_TRUST_CONTEXT_FIELDS_INVALID")
     dependencies = (evaluator, trusted_clock, registry_head_provider)
     if require_test_fixtures and any(
         getattr(dependency, "fixture_class", None) != TEST_ONLY_FIXTURE_CLASS
@@ -525,13 +562,11 @@ def _register(
         raise ValueError("AUTHORITY_TRUST_CONTEXT_ALREADY_REGISTERED")
     context = AuthorityProvenanceTrustContext(
         context_id=context_id,
-        context_version=payload.get("context_version"),
+        context_version=context_version,
         role_pins=role_pins,
-        minimum_clock_sequence=payload.get("minimum_clock_sequence"),
-        minimum_registry_sequence=payload.get("minimum_registry_sequence"),
-        minimum_registry_head_digest=payload.get(
-            "minimum_registry_head_digest"
-        ),
+        minimum_clock_sequence=minimum_clock_sequence,
+        minimum_registry_sequence=minimum_registry_sequence,
+        minimum_registry_head_digest=minimum_registry_head_digest,
         signed_context_record=signed_context_record,
         context_digest=context_digest,
     )
@@ -540,7 +575,7 @@ def _register(
         evaluator=evaluator,
         trusted_clock=trusted_clock,
         registry_head_provider=registry_head_provider,
-        dependency_ids=tuple(id(item) for item in dependencies),
+        dependency_ids=(id(evaluator), id(trusted_clock), id(registry_head_provider)),
     )
     return context
 
@@ -556,18 +591,24 @@ def install_production_authority_trust_context(
 ) -> AuthorityProvenanceTrustContext:
     if _RUNTIME_MODE != _MODE_PRODUCTION:
         raise RuntimeError("PRODUCTION_AUTHORITY_TRUST_API_DISABLED")
+    context_id = _PRODUCTION_CONTEXT_ID
+    context_digest = _PRODUCTION_CONTEXT_DIGEST
+    owner_context_digest = _PRODUCTION_OWNER_HYBRID_CONTEXT_DIGEST
     if (
-        not _text(_PRODUCTION_CONTEXT_ID)
-        or not is_sha512(_PRODUCTION_CONTEXT_DIGEST)
-        or not is_sha512(_PRODUCTION_OWNER_HYBRID_CONTEXT_DIGEST)
+        type(context_id) is not str
+        or not _text(context_id)
+        or type(context_digest) is not str
+        or not is_sha512(context_digest)
+        or type(owner_context_digest) is not str
+        or not is_sha512(owner_context_digest)
         or not is_hybrid_provider(owner_provider)
     ):
         raise RuntimeError("PRODUCTION_AUTHORITY_TRUST_PINS_MISSING")
     return _register(
         expected_pins=(
-            _PRODUCTION_CONTEXT_ID,
-            _PRODUCTION_CONTEXT_DIGEST,
-            _PRODUCTION_OWNER_HYBRID_CONTEXT_DIGEST,
+            context_id,
+            context_digest,
+            owner_context_digest,
         ),
         signed_context_record=signed_context_record,
         owner_provider=owner_provider,

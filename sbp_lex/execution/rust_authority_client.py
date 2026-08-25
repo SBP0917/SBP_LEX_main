@@ -137,7 +137,8 @@ def _decode_bounded_frames(
         total += len(frame)
         if total > maximum_bytes:
             raise wire.WireError("session byte count")
-        messages.append(wire.decode_frame(frame))
+        message: dict[str, object] = dict(wire.decode_frame(frame))
+        messages.append(message)
         encoded.append(frame)
     if not encoded:
         raise wire.WireError("empty session")

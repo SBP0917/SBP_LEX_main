@@ -8,6 +8,9 @@
 
 use std::collections::BTreeMap;
 
+use sbp_lex_authority_wire_v2::hybrid::{
+    decode_for_admission, OwnerPinnedHybridAdmission, WireAdmission,
+};
 use sbp_lex_authority_wire_v2::{
     adapter_consumption_digest, admission_policy_digest, authority_artifact_digest,
     authority_artifact_id, effect_receipt_digest, encode_message, point_of_use_digest,
@@ -30,11 +33,11 @@ use crate::sha512::digest;
 
 const V2_SPEC_SHA512: &str = "e1b79cf73411ca5fc7704c02ba153e9824eaf35748300ac515f62e4d528561600497acf05be8bdb67ab1b6e1ea643e46b8ab4f729e11103f415cf6754a07d7e7";
 const V2_PYTHON_CORE_SHA512: &str =
-    "76788a5377413d364b172d37986b504405efab8d36d003de402e499b7d74419df9a39786dd2c0a0ceaa5c6d80d56c5618dcfc60461f11a5556912d248ba2f603";
+    "040407dbbc4835cb7b779b89200a1314dabc244b7d8e798143a18fe84930ca5918c3ef9a7abf5217eaa13371f6321e2fdae0e9985904ec2bb2fad17ff6b9b1d7";
 const V2_RUST_CORE_SHA512: &str =
     "9b286950344d7e844c9ebb660f0597d3f352f87d95fc8d30a5e4ed8439393b445c3de3798305d72bb5c46abed5f463d526e307373265eef28cd7fb6b482b8ed9";
 const V2_HYBRID_RUST_CORE_SHA512: &str =
-    "0daaab828b031a58cddc4038d4d69cfafe39ff098bd8cf8b554a12f65d465065f8f5b1245d42d04b727026f3a7a1459f43dad9cef5e75481fc31dc34cc9553bd";
+    "c0cb15855b8c5bf4286d5d38287f8e3e6c0ee795ef69e380f4ed9d7d4ff56300f645201b97b6ef04c21054ab8e4d64b64f394c229e61797e9f55e6d5e5bd0cde";
 const V2_MODE1_GOLDEN_SHA512: &str =
     "823f83c2989e79d180a48a289f02977003b2210033764b99be149945868449ed1b2dc7f6f6d04fb59cc2578484970ba95009fd612cc8f229078abf45613b5303";
 const V2_MODE2_GOLDEN_SHA512: &str =
@@ -227,6 +230,97 @@ fn authority_class(value: &str) -> Result<AuthorityClass, IntegrationError> {
     }
 }
 
+/// Immutable route identity obtained only after the independently implemented
+/// wire wrapper verifies both ML-DSA-87 and Ed448 against caller-external owner
+/// pins. Every later external message in one authority session must carry this
+/// exact key set, purpose, epoch, and application context.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PrivateHybridRouteIdentity {
+    ordered_key_set_digest: [u8; 64],
+    purpose: String,
+    authority_epoch: u64,
+    context_sha512: [u8; 64],
+}
+
+/// A typed external message that can enter an authority-capable private route.
+/// There is deliberately no constructor from `Message`: legacy single-lane
+/// frames and authenticated TEST_ONLY wrappers cannot create this type.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PrivateHybridEffectMessage {
+    message: Message,
+    route_identity: PrivateHybridRouteIdentity,
+}
+
+impl PrivateHybridEffectMessage {
+    fn decode(
+        frame: &[u8],
+        owner_pins: Option<&OwnerPinnedHybridAdmission>,
+    ) -> Result<Self, IntegrationError> {
+        match decode_for_admission(frame, owner_pins).map_err(wire_error)? {
+            WireAdmission::HybridProductionEffect { envelope, payload } => Ok(Self {
+                route_identity: PrivateHybridRouteIdentity {
+                    ordered_key_set_digest: *envelope.ordered_key_set_digest(),
+                    purpose: envelope.purpose().to_owned(),
+                    authority_epoch: envelope.authority_epoch(),
+                    context_sha512: *envelope.context_sha512(),
+                },
+                message: payload,
+            }),
+            WireAdmission::HybridAuthenticatedNonEffect { .. }
+            | WireAdmission::LegacyV2NonEffect(_) => Err(IntegrationError::Invalid(
+                "non-effect wire admission cannot enter authority route",
+            )),
+        }
+    }
+
+    fn into_parts(self) -> (Message, PrivateHybridRouteIdentity) {
+        (self.message, self.route_identity)
+    }
+}
+
+/// Explicit compatibility parser. The resulting type has no conversion into
+/// `PrivateHybridEffectMessage` and therefore cannot create a route session.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PrivateLegacyNonEffectMessage(Message);
+
+impl PrivateLegacyNonEffectMessage {
+    fn decode(frame: &[u8]) -> Result<Self, IntegrationError> {
+        match decode_for_admission(frame, None).map_err(wire_error)? {
+            WireAdmission::LegacyV2NonEffect(message) => Ok(Self(message)),
+            WireAdmission::HybridAuthenticatedNonEffect { .. }
+            | WireAdmission::HybridProductionEffect { .. } => Err(IntegrationError::Invalid(
+                "hybrid frame is not legacy compatibility data",
+            )),
+        }
+    }
+
+    fn message(&self) -> &Message {
+        &self.0
+    }
+}
+
+fn open_hybrid_effect_prefix(
+    admitted: Vec<PrivateHybridEffectMessage>,
+) -> Result<(Vec<Message>, PrivateHybridRouteIdentity), IntegrationError> {
+    let route_identity = admitted
+        .first()
+        .ok_or(IntegrationError::Invalid("empty hybrid route prefix"))?
+        .route_identity
+        .clone();
+    if admitted
+        .iter()
+        .any(|entry| entry.route_identity != route_identity)
+    {
+        return Err(IntegrationError::Invalid(
+            "hybrid route purpose/context/epoch/key changed",
+        ));
+    }
+    Ok((
+        admitted.into_iter().map(|entry| entry.message).collect(),
+        route_identity,
+    ))
+}
+
 #[derive(Copy, Clone)]
 struct PinnedCoreConfiguration {
     authority_custody_provider_identity: Digest,
@@ -331,6 +425,7 @@ impl PrivateReplayAnchor for crate::evidence::EvidenceReplayJournal {
 
 struct PrivateAuthorityEngine<R> {
     replay: R,
+    hybrid_route_identity: PrivateHybridRouteIdentity,
     provider_identity: Digest,
     registry_digest: String,
     admission_digest: String,
@@ -370,7 +465,7 @@ struct PrivateMode1Released<R> {
 impl<R: PrivateReplayAnchor> PrivateMode1Released<R> {
     #[allow(clippy::too_many_arguments)]
     fn from_release_request<V: PrivateWireVerificationProvider>(
-        request: Message,
+        request: PrivateHybridEffectMessage,
         registry: &TrustRegistry,
         admission: &AdmissionPolicy,
         verifier: &V,
@@ -385,6 +480,7 @@ impl<R: PrivateReplayAnchor> PrivateMode1Released<R> {
         signers: PrivateSessionSigners,
     ) -> Result<Self, IntegrationError> {
         verify_fixed_v2_bytes()?;
+        let (request, hybrid_route_identity) = request.into_parts();
         let mut engine = PrivateAuthorityEngine::new(
             replay,
             expected_replay_provider_identity,
@@ -396,6 +492,7 @@ impl<R: PrivateReplayAnchor> PrivateMode1Released<R> {
             admission,
             verifier,
             signers,
+            hybrid_route_identity,
         )?;
         let prefix = vec![request];
         let stage = validate_request_prefix(
@@ -493,12 +590,15 @@ impl<R: PrivateReplayAnchor> PrivateMode1Released<R> {
 
     fn converge<V: PrivateWireVerificationProvider>(
         self,
-        external_execution_suffix: Vec<Message>,
+        external_execution_suffix: Vec<PrivateHybridEffectMessage>,
         registry: &TrustRegistry,
         admission: &AdmissionPolicy,
         verifier: &V,
         issue: StageIssue<'_>,
     ) -> Result<PrivatelyConverged<R>, IntegrationError> {
+        let external_execution_suffix = self
+            .engine
+            .admit_external_prefix(external_execution_suffix)?;
         if external_execution_suffix.len() != 4
             || text(&external_execution_suffix[0], "kind")? != "branch_a_statement"
             || text(&external_execution_suffix[1], "kind")? != "branch_b_statement"
@@ -521,7 +621,7 @@ struct PrivateMode2Convergence;
 impl PrivateMode2Convergence {
     #[allow(clippy::too_many_arguments)]
     fn from_external_prefix<R: PrivateReplayAnchor, V: PrivateWireVerificationProvider>(
-        prefix: Vec<Message>,
+        prefix: Vec<PrivateHybridEffectMessage>,
         registry: &TrustRegistry,
         admission: &AdmissionPolicy,
         verifier: &V,
@@ -534,6 +634,7 @@ impl PrivateMode2Convergence {
         expected_watchdog_provider_identity: Digest,
         signers: PrivateSessionSigners,
     ) -> Result<PrivatelyConverged<R>, IntegrationError> {
+        let (prefix, hybrid_route_identity) = open_hybrid_effect_prefix(prefix)?;
         if prefix.len() != 3
             || text(&prefix[0], "kind")? != "branch_a_statement"
             || text(&prefix[1], "kind")? != "mode2_validator_certificate"
@@ -553,6 +654,7 @@ impl PrivateMode2Convergence {
             admission,
             verifier,
             signers,
+            hybrid_route_identity,
         )?;
         private_converge_prefix(prefix, engine, registry, admission, verifier, issue)
     }
@@ -565,7 +667,7 @@ struct PrivateMode3Convergence;
 impl PrivateMode3Convergence {
     #[allow(clippy::too_many_arguments)]
     fn from_external_prefix<R: PrivateReplayAnchor, V: PrivateWireVerificationProvider>(
-        prefix: Vec<Message>,
+        prefix: Vec<PrivateHybridEffectMessage>,
         registry: &TrustRegistry,
         admission: &AdmissionPolicy,
         verifier: &V,
@@ -578,6 +680,7 @@ impl PrivateMode3Convergence {
         expected_watchdog_provider_identity: Digest,
         signers: PrivateSessionSigners,
     ) -> Result<PrivatelyConverged<R>, IntegrationError> {
+        let (prefix, hybrid_route_identity) = open_hybrid_effect_prefix(prefix)?;
         if prefix.len() != 2
             || text(&prefix[0], "kind")? != "mode3_single_state_proof"
             || text(&prefix[1], "kind")? != "convergence_request"
@@ -596,6 +699,7 @@ impl PrivateMode3Convergence {
             admission,
             verifier,
             signers,
+            hybrid_route_identity,
         )?;
         private_converge_prefix(prefix, engine, registry, admission, verifier, issue)
     }
@@ -671,13 +775,14 @@ struct PrivatelyConverged<R> {
 impl<R: PrivateReplayAnchor> PrivatelyConverged<R> {
     fn accept_prepare_request<V: PrivateWireVerificationProvider>(
         self,
-        request: Message,
+        request: PrivateHybridEffectMessage,
         registry: &TrustRegistry,
         admission: &AdmissionPolicy,
         verifier: &V,
         trusted_now_ms: u64,
         pinned: PinnedCoreConfiguration,
     ) -> Result<AuthenticatedConvergence<R>, IntegrationError> {
+        let request = self.engine.admit_external(request)?;
         let mut transcript = self.transcript;
         transcript.push(request);
         AuthenticatedConvergence::from_prepare_prefix_with_engine(
@@ -705,6 +810,7 @@ impl<R: PrivateReplayAnchor> PrivateAuthorityEngine<R> {
         admission: &AdmissionPolicy,
         verifier: &V,
         signers: PrivateSessionSigners,
+        hybrid_route_identity: PrivateHybridRouteIdentity,
     ) -> Result<Self, IntegrationError> {
         if expected_provider_identity
             .as_bytes()
@@ -746,6 +852,7 @@ impl<R: PrivateReplayAnchor> PrivateAuthorityEngine<R> {
         }
         Ok(Self {
             replay,
+            hybrid_route_identity,
             provider_identity: expected_provider_identity,
             registry_digest: registry.digest().map_err(wire_error)?,
             admission_digest: admission_policy_digest(admission).map_err(wire_error)?,
@@ -779,6 +886,31 @@ impl<R: PrivateReplayAnchor> PrivateAuthorityEngine<R> {
         &mut self.replay
     }
 
+    fn admit_external(
+        &self,
+        admitted: PrivateHybridEffectMessage,
+    ) -> Result<Message, IntegrationError> {
+        if admitted.route_identity != self.hybrid_route_identity {
+            return Err(IntegrationError::Invalid(
+                "hybrid route purpose/context/epoch/key changed",
+            ));
+        }
+        Ok(admitted.message)
+    }
+
+    fn admit_external_prefix(
+        &self,
+        admitted: Vec<PrivateHybridEffectMessage>,
+    ) -> Result<Vec<Message>, IntegrationError> {
+        if admitted.is_empty() {
+            return Err(IntegrationError::Invalid("empty hybrid route suffix"));
+        }
+        admitted
+            .into_iter()
+            .map(|entry| self.admit_external(entry))
+            .collect()
+    }
+
     fn replay_and_watchdog_mut(&mut self) -> (&mut R, &mut dyn PrivateWatchdogProvider) {
         (&mut self.replay, self.watchdog.as_mut())
     }
@@ -802,6 +934,7 @@ impl<R: PrivateReplayAnchor> AuthenticatedConvergence<R> {
     #[cfg(test)]
     fn from_prepare_prefix<V: PrivateWireVerificationProvider>(
         transcript: &[Message],
+        admitted_prepare: PrivateHybridEffectMessage,
         registry: &TrustRegistry,
         admission: &AdmissionPolicy,
         verifier: &V,
@@ -812,6 +945,12 @@ impl<R: PrivateReplayAnchor> AuthenticatedConvergence<R> {
         watchdog: Box<dyn PrivateWatchdogProvider>,
         signers: PrivateSessionSigners,
     ) -> Result<Self, IntegrationError> {
+        let (admitted_message, hybrid_route_identity) = admitted_prepare.into_parts();
+        if transcript.last() != Some(&admitted_message) {
+            return Err(IntegrationError::Invalid(
+                "hybrid prepare admission does not match transcript",
+            ));
+        }
         let engine = PrivateAuthorityEngine::new(
             replay,
             pinned.replay_provider_identity,
@@ -823,6 +962,7 @@ impl<R: PrivateReplayAnchor> AuthenticatedConvergence<R> {
             admission,
             verifier,
             signers,
+            hybrid_route_identity,
         )?;
         Self::from_prepare_prefix_with_engine(
             transcript,
@@ -1326,7 +1466,7 @@ impl<R: PrivateReplayAnchor> PrivatelyPrepared<R> {
     #[allow(clippy::too_many_arguments)]
     fn commit<P, I, H, V>(
         mut self,
-        request: Message,
+        request: PrivateHybridEffectMessage,
         registry: &TrustRegistry,
         admission: &AdmissionPolicy,
         verifier: &V,
@@ -1344,6 +1484,7 @@ impl<R: PrivateReplayAnchor> PrivatelyPrepared<R> {
     {
         self.engine
             .verify_trust_context(registry, admission, verifier)?;
+        let request = self.engine.admit_external(request)?;
         let mut prefix = self.transcript;
         prefix.push(request);
         let stage = validate_request_prefix(
@@ -1612,7 +1753,7 @@ impl<R: PrivateReplayAnchor> PrivatelyLeased<R> {
     #[allow(clippy::too_many_arguments)]
     fn arm_watchdog<V: PrivateWireVerificationProvider>(
         mut self,
-        request: Message,
+        request: PrivateHybridEffectMessage,
         registry: &TrustRegistry,
         admission: &AdmissionPolicy,
         verifier: &V,
@@ -1620,6 +1761,7 @@ impl<R: PrivateReplayAnchor> PrivatelyLeased<R> {
     ) -> Result<PrivatelyWatchdogArmed<R>, IntegrationError> {
         self.engine
             .verify_trust_context(registry, admission, verifier)?;
+        let request = self.engine.admit_external(request)?;
         let mut prefix = self.transcript;
         prefix.push(request);
         let stage = validate_request_prefix(
@@ -2734,7 +2876,13 @@ mod tests {
     use std::rc::Rc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use sbp_lex_authority_wire_v2::{parse_message, FixtureVerifier, PROTOCOL as V2_PROTOCOL};
+    use sbp_lex_authority_wire_v2::hybrid::{
+        encode_hybrid_frame, HybridAdmissionClass, HybridEnvelope,
+    };
+    use sbp_lex_authority_wire_v2::{
+        encode_frame, parse_message, FixtureVerifier, PROTOCOL as V2_PROTOCOL,
+    };
+    use sbp_lex_v2_hybrid_signature::SoftwareHybridSigningKey;
 
     use crate::evidence::{
         EvidenceAuthorityDependencies, EvidenceInhibit, EvidenceInterlock, EvidenceReplayJournal,
@@ -2766,6 +2914,9 @@ mod tests {
         include_str!("../../wire_protocol/v2/vectors/mode3_timeout_golden.jsonl");
     const TEST_REGISTRY: &str =
         include_str!("../../wire_protocol/v2/vectors/test_trust_registry.txt");
+    const HYBRID_ROUTE_PURPOSE: &str = "AUTHORITY_ROUTE";
+    const HYBRID_ROUTE_EPOCH: u64 = 73;
+    const HYBRID_ROUTE_CONTEXT: &[u8] = b"owner-pinned:rust-authority-private-route";
 
     impl PrivateWireVerificationProvider for FixtureVerifier {
         fn provider_identity(&self) -> Digest {
@@ -2779,6 +2930,82 @@ mod tests {
             .filter(|line| !line.is_empty())
             .map(|line| parse_message(line.as_bytes()).expect("fixed canonical vector"))
             .collect()
+    }
+
+    fn route_signer() -> SoftwareHybridSigningKey {
+        SoftwareHybridSigningKey::from_seed_slices(&[0x71; 32], &[0x82; 57])
+            .expect("fixed route signer")
+    }
+
+    fn attacker_route_signer() -> SoftwareHybridSigningKey {
+        SoftwareHybridSigningKey::from_seed_slices(&[0x91; 32], &[0xA2; 57])
+            .expect("fixed attacker signer")
+    }
+
+    fn hybrid_frame_for(
+        message: &Message,
+        signer: &SoftwareHybridSigningKey,
+        purpose: &str,
+        epoch: u64,
+        context: &[u8],
+    ) -> Vec<u8> {
+        let payload = encode_frame(message).expect("legacy payload frame");
+        let key = signer.public_key();
+        let signature = signer
+            .sign(purpose, epoch, context, &payload)
+            .expect("fixed strict-dual signature");
+        let envelope = HybridEnvelope::new(purpose, epoch, context, payload, key, signature)
+            .expect("hybrid route envelope");
+        encode_hybrid_frame(&envelope).expect("hybrid route frame")
+    }
+
+    fn route_pins_for(
+        message: &Message,
+        signer: &SoftwareHybridSigningKey,
+        purpose: &str,
+        epoch: u64,
+        context: &[u8],
+        admission_class: HybridAdmissionClass,
+        external_custody_admitted: bool,
+    ) -> OwnerPinnedHybridAdmission {
+        let key = signer.public_key();
+        OwnerPinnedHybridAdmission::new(
+            key.clone(),
+            key.ordered_key_set_digest(),
+            purpose,
+            epoch,
+            context,
+            text(message, "kind").expect("message kind"),
+            admission_class,
+            external_custody_admitted,
+        )
+        .expect("fixed owner pins")
+    }
+
+    fn admit_route_message(message: &Message) -> PrivateHybridEffectMessage {
+        let signer = route_signer();
+        let frame = hybrid_frame_for(
+            message,
+            &signer,
+            HYBRID_ROUTE_PURPOSE,
+            HYBRID_ROUTE_EPOCH,
+            HYBRID_ROUTE_CONTEXT,
+        );
+        let pins = route_pins_for(
+            message,
+            &signer,
+            HYBRID_ROUTE_PURPOSE,
+            HYBRID_ROUTE_EPOCH,
+            HYBRID_ROUTE_CONTEXT,
+            HybridAdmissionClass::ProductionEffect,
+            true,
+        );
+        PrivateHybridEffectMessage::decode(&frame, Some(&pins))
+            .expect("owner-pinned strict-dual route message")
+    }
+
+    fn admit_route_messages(messages: &[Message]) -> Vec<PrivateHybridEffectMessage> {
+        messages.iter().map(admit_route_message).collect()
     }
 
     fn txt(message: &Message, key: &str) -> String {
@@ -3194,7 +3421,7 @@ mod tests {
         let replay_identity = replay.provider_identity();
         let watchdog_identity = PrivateWatchdogProvider::provider_identity(&dependencies.watchdog);
         let released = PrivateMode1Released::from_release_request(
-            messages[0].clone(),
+            admit_route_message(&messages[0]),
             &registry,
             &admission,
             &FixtureVerifier,
@@ -3214,7 +3441,7 @@ mod tests {
         .expect("private release");
         let converged = released
             .converge(
-                messages[2..6].to_vec(),
+                admit_route_messages(&messages[2..6]),
                 &registry,
                 &admission,
                 &FixtureVerifier,
@@ -3226,7 +3453,7 @@ mod tests {
             .expect("private convergence");
         let authenticated = converged
             .accept_prepare_request(
-                messages[7].clone(),
+                admit_route_message(&messages[7]),
                 &registry,
                 &admission,
                 &FixtureVerifier,
@@ -3252,7 +3479,7 @@ mod tests {
             .expect("private prepare");
         let committed = prepared
             .commit(
-                messages[9].clone(),
+                admit_route_message(&messages[9]),
                 &registry,
                 &admission,
                 &FixtureVerifier,
@@ -3290,7 +3517,7 @@ mod tests {
             .expect("private lease");
         let armed = leased
             .arm_watchdog(
-                messages[13].clone(),
+                admit_route_message(&messages[13]),
                 &registry,
                 &admission,
                 &FixtureVerifier,
@@ -3332,7 +3559,7 @@ mod tests {
         };
         let converged = if mode == "MODE_2" {
             PrivateMode2Convergence::from_external_prefix(
-                messages[..convergence_result_index].to_vec(),
+                admit_route_messages(&messages[..convergence_result_index]),
                 &registry,
                 &admission,
                 &FixtureVerifier,
@@ -3347,7 +3574,7 @@ mod tests {
             )
         } else {
             PrivateMode3Convergence::from_external_prefix(
-                messages[..convergence_result_index].to_vec(),
+                admit_route_messages(&messages[..convergence_result_index]),
                 &registry,
                 &admission,
                 &FixtureVerifier,
@@ -3377,7 +3604,7 @@ mod tests {
 
         let authenticated = converged
             .accept_prepare_request(
-                messages[prepare_request_index].clone(),
+                admit_route_message(&messages[prepare_request_index]),
                 &registry,
                 &admission,
                 &FixtureVerifier,
@@ -3404,7 +3631,7 @@ mod tests {
             .expect("private Mode 2/3 prepare");
         let committed = prepared
             .commit(
-                messages[commit_request_index].clone(),
+                admit_route_message(&messages[commit_request_index]),
                 &registry,
                 &admission,
                 &FixtureVerifier,
@@ -3443,7 +3670,7 @@ mod tests {
             .expect("private Mode 2/3 lease");
         let armed = leased
             .arm_watchdog(
-                messages[watchdog_request_index].clone(),
+                admit_route_message(&messages[watchdog_request_index]),
                 &registry,
                 &admission,
                 &FixtureVerifier,
@@ -3566,6 +3793,119 @@ mod tests {
         assert_eq!(PRODUCTION_HSM_PROFILE.authority_wire_v2_sha512, None);
         assert_eq!(PRODUCTION_TPM_PROFILE.authority_wire_v2_sha512, None);
         assert_eq!(EVIDENCE_PROFILE.authority_wire_v2_sha512, None);
+    }
+
+    #[test]
+    fn authority_route_rejects_missing_pins_downgrade_substitution_and_test_only() {
+        let messages = parse_lines(GOLDEN);
+        let message = &messages[0];
+        let owner = route_signer();
+        let attacker = attacker_route_signer();
+        let owner_frame = hybrid_frame_for(
+            message,
+            &owner,
+            HYBRID_ROUTE_PURPOSE,
+            HYBRID_ROUTE_EPOCH,
+            HYBRID_ROUTE_CONTEXT,
+        );
+        let owner_pins = route_pins_for(
+            message,
+            &owner,
+            HYBRID_ROUTE_PURPOSE,
+            HYBRID_ROUTE_EPOCH,
+            HYBRID_ROUTE_CONTEXT,
+            HybridAdmissionClass::ProductionEffect,
+            true,
+        );
+        assert!(PrivateHybridEffectMessage::decode(&owner_frame, None).is_err());
+        assert!(PrivateHybridEffectMessage::decode(&owner_frame, Some(&owner_pins)).is_ok());
+
+        let mut single_lane = message.clone();
+        single_lane.insert(
+            "authority_class".into(),
+            Value::Text("PRODUCTION_HSM".into()),
+        );
+        single_lane.insert(
+            "signer_key_class".into(),
+            Value::Text("PRODUCTION_HSM".into()),
+        );
+        single_lane.insert(
+            "signature_algorithm".into(),
+            Value::Text("ML-DSA-65".into()),
+        );
+        let single_lane_digest = transcript_digest(&single_lane).expect("downgrade digest");
+        single_lane.insert("transcript_digest".into(), Value::Text(single_lane_digest));
+        let single_lane_frame = encode_frame(&single_lane).expect("legacy single-lane frame");
+        let legacy = PrivateLegacyNonEffectMessage::decode(&single_lane_frame)
+            .expect("legacy form remains parseable only as compatibility data");
+        assert_eq!(legacy.message(), &single_lane);
+        assert!(PrivateHybridEffectMessage::decode(&single_lane_frame, Some(&owner_pins)).is_err());
+
+        let attacker_frame = hybrid_frame_for(
+            message,
+            &attacker,
+            HYBRID_ROUTE_PURPOSE,
+            HYBRID_ROUTE_EPOCH,
+            HYBRID_ROUTE_CONTEXT,
+        );
+        assert!(PrivateHybridEffectMessage::decode(&attacker_frame, Some(&owner_pins)).is_err());
+
+        for pins in [
+            route_pins_for(
+                message,
+                &owner,
+                "WRONG_PURPOSE",
+                HYBRID_ROUTE_EPOCH,
+                HYBRID_ROUTE_CONTEXT,
+                HybridAdmissionClass::ProductionEffect,
+                true,
+            ),
+            route_pins_for(
+                message,
+                &owner,
+                HYBRID_ROUTE_PURPOSE,
+                HYBRID_ROUTE_EPOCH + 1,
+                HYBRID_ROUTE_CONTEXT,
+                HybridAdmissionClass::ProductionEffect,
+                true,
+            ),
+            route_pins_for(
+                message,
+                &owner,
+                HYBRID_ROUTE_PURPOSE,
+                HYBRID_ROUTE_EPOCH,
+                b"owner-pinned:wrong-context",
+                HybridAdmissionClass::ProductionEffect,
+                true,
+            ),
+        ] {
+            assert!(PrivateHybridEffectMessage::decode(&owner_frame, Some(&pins)).is_err());
+        }
+
+        let key = owner.public_key();
+        let wrong_kind = OwnerPinnedHybridAdmission::new(
+            key.clone(),
+            key.ordered_key_set_digest(),
+            HYBRID_ROUTE_PURPOSE,
+            HYBRID_ROUTE_EPOCH,
+            HYBRID_ROUTE_CONTEXT,
+            "watchdog_result",
+            HybridAdmissionClass::ProductionEffect,
+            true,
+        )
+        .expect("wrong-kind owner pins are structurally valid");
+        assert!(PrivateHybridEffectMessage::decode(&owner_frame, Some(&wrong_kind)).is_err());
+
+        let test_only = route_pins_for(
+            message,
+            &owner,
+            HYBRID_ROUTE_PURPOSE,
+            HYBRID_ROUTE_EPOCH,
+            HYBRID_ROUTE_CONTEXT,
+            HybridAdmissionClass::TestOnlyNonEffect,
+            false,
+        );
+        assert!(PrivateHybridEffectMessage::decode(&owner_frame, Some(&test_only)).is_err());
     }
 
     #[test]
@@ -3879,6 +4219,7 @@ mod tests {
             &admission,
             &FixtureVerifier,
             signers,
+            admit_route_message(&messages[0]).route_identity,
         )
         .is_err());
         assert_eq!(calls.get(), 0);
@@ -3922,7 +4263,7 @@ mod tests {
             };
             let converged = if label == "mode2" {
                 PrivateMode2Convergence::from_external_prefix(
-                    messages[..=convergence_request_index].to_vec(),
+                    admit_route_messages(&messages[..=convergence_request_index]),
                     &registry,
                     &admission,
                     &FixtureVerifier,
@@ -3937,7 +4278,7 @@ mod tests {
                 )
             } else {
                 PrivateMode3Convergence::from_external_prefix(
-                    messages[..=convergence_request_index].to_vec(),
+                    admit_route_messages(&messages[..=convergence_request_index]),
                     &registry,
                     &admission,
                     &FixtureVerifier,
@@ -3956,7 +4297,7 @@ mod tests {
             let prepare_request_index = convergence_result_index + 1;
             converged
                 .accept_prepare_request(
-                    messages[prepare_request_index].clone(),
+                    admit_route_message(&messages[prepare_request_index]),
                     &registry,
                     &admission,
                     &FixtureVerifier,
@@ -4522,6 +4863,7 @@ mod tests {
         let (terminal_audit, terminal_audit_identity) = evidence_terminal_audit(&root);
         let authenticated = AuthenticatedConvergence::from_prepare_prefix(
             &messages[..8],
+            admit_route_message(&messages[7]),
             &registry,
             &admission,
             &FixtureVerifier,
@@ -4618,6 +4960,7 @@ mod tests {
         let (terminal_audit, terminal_audit_identity) = evidence_terminal_audit(&root);
         assert!(AuthenticatedConvergence::from_prepare_prefix(
             &messages[5..8],
+            admit_route_message(&messages[7]),
             &registry,
             &admission,
             &FixtureVerifier,
@@ -4635,6 +4978,7 @@ mod tests {
         let (terminal_audit, terminal_audit_identity) = evidence_terminal_audit(&root);
         assert!(AuthenticatedConvergence::from_prepare_prefix(
             &messages[..8],
+            admit_route_message(&messages[7]),
             &registry,
             &production,
             &FixtureVerifier,
@@ -4661,6 +5005,7 @@ mod tests {
         let (terminal_audit, terminal_audit_identity) = evidence_terminal_audit(&root);
         let authenticated = AuthenticatedConvergence::from_prepare_prefix(
             &messages[..8],
+            admit_route_message(&messages[7]),
             &registry,
             &admission,
             &FixtureVerifier,
@@ -4691,6 +5036,7 @@ mod tests {
         let (terminal_audit, terminal_audit_identity) = evidence_terminal_audit(&root);
         let replayed = AuthenticatedConvergence::from_prepare_prefix(
             &messages[..8],
+            admit_route_message(&messages[7]),
             &registry,
             &admission,
             &FixtureVerifier,
@@ -4721,6 +5067,7 @@ mod tests {
         let (terminal_audit, terminal_audit_identity) = evidence_terminal_audit(&root);
         assert!(AuthenticatedConvergence::from_prepare_prefix(
             &messages[..8],
+            admit_route_message(&messages[7]),
             &registry,
             &alternate_namespace,
             &FixtureVerifier,
@@ -4756,6 +5103,7 @@ mod tests {
             .expect("prepare ttl");
             AuthenticatedConvergence::from_prepare_prefix(
                 &messages[..=prepare_request_index],
+                admit_route_message(&messages[prepare_request_index]),
                 &registry,
                 &admission,
                 &FixtureVerifier,
@@ -4787,6 +5135,7 @@ mod tests {
             let (terminal_audit, terminal_audit_identity) = evidence_terminal_audit(&root);
             let replayed = AuthenticatedConvergence::from_prepare_prefix(
                 &messages[..=prepare_request_index],
+                admit_route_message(&messages[prepare_request_index]),
                 &registry,
                 &admission,
                 &FixtureVerifier,
@@ -4838,6 +5187,7 @@ mod tests {
             &admission,
             &FixtureVerifier,
             fixture_signers(),
+            admit_route_message(&messages[0]).route_identity,
         );
         assert!(rejected.is_err());
 
@@ -4855,6 +5205,7 @@ mod tests {
             &admission,
             &FixtureVerifier,
             fixture_signers(),
+            admit_route_message(&messages[0]).route_identity,
         )
         .expect("pinned engine");
         let mut changed_admission = admission.clone();

@@ -109,13 +109,14 @@ native command’s full-byte transcript (`cargo test`, TLC over the measured
 not accepted as the native TLA+/SPARK proof lane. This classification never
 claims that those assets are active in the Python runtime.
 
-`requirements.txt` is a direct dependency declaration and `requirements.lock`
-is a resolved version manifest; neither is the assurance dependency lock. The
-toolchain guard requires the separate canonical
+`requirements.txt` is the direct production declaration;
+`requirements-production.lock.txt` and `requirements-test.lock.txt` are the
+separate hash-pinned production and assurance-test resolver closures. None is
+the assurance dependency lock. The toolchain guard requires the separate canonical
 `python-dependencies.lock.json` artifact before Python dependency assurance can
 be `PASS` / `PRESENT_TESTED`. The lock contract requires exact direct pins,
-SHA-256 artifact hashes, production/development scope, a complete reachable
-dependency graph, exact interpreter/version/ABI/platform binding, and
+SHA-256 artifact hashes, distinct production/test scope, complete reachable
+dependency graphs, exact interpreter/version/ABI/platform binding, and
 accepted-history/sequence rollback evidence. Missing, unpinned, unhashed,
 mismatched, extra, duplicate, case-variant, non-canonical or rollback-invalid
 evidence fails closed. No canonical lock artifact is currently supplied by this

@@ -240,13 +240,15 @@ def _trust_context_owner_pinned(
     trust_context: HybridVerificationContext | None,
     owner_pinned_context_digest: str | None,
 ) -> bool:
-    return (
-        isinstance(trust_context, HybridVerificationContext)
-        and is_sha512(owner_pinned_context_digest)
-        and hmac.compare_digest(
-            trust_context.context_digest,
-            owner_pinned_context_digest,
-        )
+    if (
+        not isinstance(trust_context, HybridVerificationContext)
+        or type(owner_pinned_context_digest) is not str
+        or not is_sha512(owner_pinned_context_digest)
+    ):
+        return False
+    return hmac.compare_digest(
+        trust_context.context_digest,
+        owner_pinned_context_digest,
     )
 
 
@@ -291,7 +293,7 @@ def _evidence_references_exact(value: Any) -> bool:
         }:
             return False
         evidence_id = reference.get("evidence_id")
-        if not _text(evidence_id) or evidence_id in evidence_ids:
+        if type(evidence_id) is not str or not _text(evidence_id) or evidence_id in evidence_ids:
             return False
         evidence_ids.add(evidence_id)
         if not _text(reference.get("source")):
@@ -492,9 +494,13 @@ def _source_error(
         return "FILED_GOVERNANCE_INTEGRITY_EVALUATOR_CONTRACT_INVALID"
     if type(source) is not dict or set(source) != _SOURCE_FIELDS:
         return f"{function_id}_EVALUATOR_RESULT_SHAPE_INVALID"
-    if not _trust_context_owner_pinned(
-        trust_context,
-        owner_pinned_context_digest,
+    if (
+        not isinstance(trust_context, HybridVerificationContext)
+        or type(owner_pinned_context_digest) is not str
+        or not _trust_context_owner_pinned(
+            trust_context,
+            owner_pinned_context_digest,
+        )
     ):
         return "FILED_GOVERNANCE_INTEGRITY_OWNER_TRUST_PIN_INVALID"
     if not verify_hybrid_signed_object(
@@ -623,6 +629,8 @@ def _trace_error(
             return f"{function_id}_RECORD_SHAPE_INVALID"
         snapshot = record.get("evaluation_snapshot")
         source = record.get("evaluation_source")
+        if type(snapshot) is not dict or type(source) is not dict:
+            return f"{function_id}_RECORD_SHAPE_INVALID"
         expected_reason = f"{function_id}_EVALUATION_COMPLETED"
         if (
             record.get("schema_status")
@@ -728,7 +736,9 @@ def _hash_binding_error(
     state: dict[str, Any], trace: list[dict[str, Any]]
 ) -> str | None:
     chain = state.get("hash_chain")
-    if not verify_hash_chain_entries(chain, state.get("state_hash")):
+    if type(chain) is not list or not verify_hash_chain_entries(
+        chain, state.get("state_hash")
+    ):
         return "FILED_GOVERNANCE_INTEGRITY_HASH_CHAIN_INVALID"
     previous_index = -1
     for sequence, record in enumerate(trace, start=1):
@@ -850,29 +860,35 @@ def evaluate_filed_governance_integrity(
         else None
     )
     if error is None:
-        try:
-            source = method(
-                stage=FILED_GOVERNANCE_INTEGRITY_STAGES[
-                    governance_function
-                ],
-                snapshot=deepcopy(snapshot),
-            )
-        except Exception as exc:
-            error = (
-                f"{FILED_GOVERNANCE_INTEGRITY_FUNCTION_IDS[governance_function]}_"
-                f"EVALUATOR_ERROR:{type(exc).__name__}:{exc}"
-            )
+        if not callable(method):
+            error = "FILED_GOVERNANCE_INTEGRITY_EVALUATOR_CONTRACT_INVALID"
+        else:
+            try:
+                source = method(
+                    stage=FILED_GOVERNANCE_INTEGRITY_STAGES[
+                        governance_function
+                    ],
+                    snapshot=deepcopy(snapshot),
+                )
+            except Exception as exc:
+                error = (
+                    f"{FILED_GOVERNANCE_INTEGRITY_FUNCTION_IDS[governance_function]}_"
+                    f"EVALUATOR_ERROR:{type(exc).__name__}:{exc}"
+                )
     if error is None:
-        error = _source_error(
-            source,
-            governance_function=governance_function,
-            sequence=sequence,
-            snapshot=snapshot,
-            evaluator=evaluator,
-            provider=attestation_provider,
-            trust_context=attestation_trust_context,
-            owner_pinned_context_digest=owner_pinned_context_digest,
-        )
+        if evaluator is None:
+            error = "FILED_GOVERNANCE_INTEGRITY_EVALUATOR_NOT_INJECTED"
+        else:
+            error = _source_error(
+                source,
+                governance_function=governance_function,
+                sequence=sequence,
+                snapshot=snapshot,
+                evaluator=evaluator,
+                provider=attestation_provider,
+                trust_context=attestation_trust_context,
+                owner_pinned_context_digest=owner_pinned_context_digest,
+            )
 
     result = (
         source["determination"]["result"]
@@ -929,6 +945,8 @@ def verify_filed_governance_integrity(
         )
         if error is not None:
             return False
+        if type(trace) is not list or type(results) is not dict:
+            return False
         if (
             state.get("filed_governance_integrity_record") != trace[-1]
             or state.get("filed_governance_integrity_digest")
@@ -951,6 +969,8 @@ def verify_filed_governance_integrity(
         if _snapshot_error(live_snapshot) is not None:
             return False
         latest_snapshot = trace[-1]["evaluation_snapshot"]
+        if type(latest_snapshot) is not dict:
+            return False
         for field in (
             "request_fingerprint",
             "evaluation_time",

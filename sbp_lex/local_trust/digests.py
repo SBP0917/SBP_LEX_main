@@ -16,8 +16,7 @@ from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from hashlib import sha512
-from typing import Any
-
+from typing import Any, TypeGuard
 
 MAX_CANONICAL_DEPTH = 64
 MAX_CANONICAL_NODES = 1_000_000
@@ -132,7 +131,7 @@ def digest(value: Any) -> str:
     return sha512(canonical_bytes(value)).hexdigest()
 
 
-def is_sha512(value: Any) -> bool:
+def is_sha512(value: object) -> TypeGuard[str]:
     return (
         type(value) is str
         and len(value) == 128

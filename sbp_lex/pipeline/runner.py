@@ -114,6 +114,10 @@ from sbp_lex.security.signature_provider import (
     SignatureProvider,
     SignatureProviderUnavailable,
 )
+from sbp_lex.security.hybrid_signature import (
+    HybridSignatureProvider,
+    is_hybrid_provider,
+)
 from sbp_lex.security.authority_trust import (
     AUTHORITY_TRUST_ROLE_SKG,
     provider_matches_role,
@@ -179,6 +183,23 @@ def _pipeline_trust_pair(
         getattr(contexts, surface),
         getattr(contexts, f"{surface}_owner_pin"),
     )
+
+
+def _required_hybrid_stage_dependencies(
+    provider: SignatureProvider | None,
+    contexts: PipelineHybridTrustContexts | None,
+    surface: str,
+) -> tuple[HybridSignatureProvider, HybridVerificationContext, str]:
+    trust_context, owner_pin = _pipeline_trust_pair(contexts, surface)
+    if (
+        not is_hybrid_provider(provider)
+        or not isinstance(trust_context, HybridVerificationContext)
+        or type(owner_pin) is not str
+    ):
+        raise SignatureProviderUnavailable(
+            f"{surface.upper()}_HYBRID_DEPENDENCIES_NOT_ADMITTED"
+        )
+    return provider, trust_context, owner_pin
 
 
 from sbp_lex.governance.filed_frameworks import (
@@ -1088,17 +1109,20 @@ def _run_filed_framework_stage(
     )
     if terminal:
         return state, True
+    hybrid_provider, trust_context, owner_pin = (
+        _required_hybrid_stage_dependencies(
+            attestation_provider,
+            hybrid_trust_contexts,
+            "filed_framework",
+        )
+    )
     state = evaluate_filed_framework(
         state,
         framework,
         evaluator=evaluator,
-        attestation_provider=attestation_provider,
-        attestation_trust_context=_pipeline_trust_pair(
-            hybrid_trust_contexts, "filed_framework"
-        )[0],
-        owner_pinned_context_digest=_pipeline_trust_pair(
-            hybrid_trust_contexts, "filed_framework"
-        )[1],
+        attestation_provider=hybrid_provider,
+        attestation_trust_context=trust_context,
+        owner_pinned_context_digest=owner_pin,
     )
     _append_hash_chain(state, stage, filed_framework_hash_payload(state))
     state, terminal = _require_three_p(
@@ -1197,17 +1221,20 @@ def _run_skg_authority_stage(
     )
     if terminal:
         return state, True
+    hybrid_provider, trust_context, owner_pin = (
+        _required_hybrid_stage_dependencies(
+            attestation_provider,
+            hybrid_trust_contexts,
+            "skg",
+        )
+    )
     state = evaluate_skg_authority(
         state,
         stage=_SKG_TRAVERSAL_STAGE,
         evaluator=evaluator,
-        attestation_provider=attestation_provider,
-        attestation_trust_context=_pipeline_trust_pair(
-            hybrid_trust_contexts, "skg"
-        )[0],
-        owner_pinned_context_digest=_pipeline_trust_pair(
-            hybrid_trust_contexts, "skg"
-        )[1],
+        attestation_provider=hybrid_provider,
+        attestation_trust_context=trust_context,
+        owner_pinned_context_digest=owner_pin,
     )
     trust_boundary = resolve_authority_trust_boundary(
         authority_provenance_dependencies
@@ -1303,17 +1330,20 @@ def _run_filed_lifecycle_stage(
     )
     if terminal:
         return state, True
+    hybrid_provider, trust_context, owner_pin = (
+        _required_hybrid_stage_dependencies(
+            attestation_provider,
+            hybrid_trust_contexts,
+            "filed_lifecycle",
+        )
+    )
     state = evaluate_filed_lifecycle(
         state,
         lifecycle_engine,
         evaluator=evaluator,
-        attestation_provider=attestation_provider,
-        attestation_trust_context=_pipeline_trust_pair(
-            hybrid_trust_contexts, "filed_lifecycle"
-        )[0],
-        owner_pinned_context_digest=_pipeline_trust_pair(
-            hybrid_trust_contexts, "filed_lifecycle"
-        )[1],
+        attestation_provider=hybrid_provider,
+        attestation_trust_context=trust_context,
+        owner_pinned_context_digest=owner_pin,
     )
     _append_hash_chain(state, stage, filed_lifecycle_hash_payload(state))
     state, terminal = _require_three_p(
@@ -1402,17 +1432,20 @@ def _run_filed_governance_integrity_stage(
     )
     if terminal:
         return state, True
+    hybrid_provider, trust_context, owner_pin = (
+        _required_hybrid_stage_dependencies(
+            attestation_provider,
+            hybrid_trust_contexts,
+            "filed_governance_integrity",
+        )
+    )
     state = evaluate_filed_governance_integrity(
         state,
         governance_function,
         evaluator=evaluator,
-        attestation_provider=attestation_provider,
-        attestation_trust_context=_pipeline_trust_pair(
-            hybrid_trust_contexts, "filed_governance_integrity"
-        )[0],
-        owner_pinned_context_digest=_pipeline_trust_pair(
-            hybrid_trust_contexts, "filed_governance_integrity"
-        )[1],
+        attestation_provider=hybrid_provider,
+        attestation_trust_context=trust_context,
+        owner_pinned_context_digest=owner_pin,
     )
     _append_hash_chain(
         state,
@@ -2282,19 +2315,28 @@ def _run_v2_core(
                 )
                 return apply_grc(state)
 
-        if not verify_filed_governance_integrity(
+        governance_gate_provider: SignatureProvider | None = (
+            filed_governance_integrity_attestation_provider
+        )
+        governance_trust_context, governance_owner_pin = _pipeline_trust_pair(
+            hybrid_trust_contexts, "filed_governance_integrity"
+        )
+        if not (
+            is_hybrid_provider(
+                filed_governance_integrity_attestation_provider
+            )
+            and governance_trust_context is not None
+            and governance_owner_pin is not None
+            and verify_filed_governance_integrity(
             state,
             evaluator=filed_governance_integrity_evaluator,
             attestation_provider=(
                 filed_governance_integrity_attestation_provider
             ),
-            attestation_trust_context=_pipeline_trust_pair(
-                hybrid_trust_contexts, "filed_governance_integrity"
-            )[0],
-            owner_pinned_context_digest=_pipeline_trust_pair(
-                hybrid_trust_contexts, "filed_governance_integrity"
-            )[1],
+            attestation_trust_context=governance_trust_context,
+            owner_pinned_context_digest=governance_owner_pin,
             require_hash_binding=True,
+            )
         ):
             state["governance_result"] = GOVERNANCE_DENY
             state["governance_reason"] = (
@@ -2620,10 +2662,15 @@ def _run_v2_core(
                     "filed_licence_runtime_revalidation_failed",
                 ),
             )
+            licensing_reason = state.get("licensing_reason")
             state = build_deny_feedback(
                 state,
                 denial_code="LICENCE_RUNTIME_REVALIDATION_FAILURE",
-                denial_reason=state.get("licensing_reason"),
+                denial_reason=(
+                    licensing_reason
+                    if type(licensing_reason) is str
+                    else "filed_licence_runtime_revalidation_failed"
+                ),
                 retry_eligible=True,
                 required_change_for_retry=(
                     "Re-enter through the complete governed licence pathway."
@@ -2750,7 +2797,7 @@ def _run_v2_core(
                 filed_governance_integrity_evaluator
             ),
             filed_governance_integrity_attestation_provider=(
-                filed_governance_integrity_attestation_provider
+                governance_gate_provider
             ),
             filed_governance_integrity_attestation_trust_context=(
                 _pipeline_trust_pair(
@@ -2834,12 +2881,14 @@ def _run_v2_core(
             )
         else:
             try:
-                terminal = rust_authority_route.execute(deepcopy(state))
-                if type(terminal) is not RustAuthorityTerminalEvidence:
+                rust_terminal_evidence = rust_authority_route.execute(
+                    deepcopy(state)
+                )
+                if type(rust_terminal_evidence) is not RustAuthorityTerminalEvidence:
                     raise RustAuthorityRouteInDoubt(
                         "RUST_AUTHORITY_TERMINAL_EVIDENCE_TYPE_REJECTED"
                     )
-                terminal_record = terminal.audit_record()
+                terminal_record = rust_terminal_evidence.audit_record()
                 if not terminal_record.get(
                     "complete_signed_terminal_transcript_validated"
                 ):
@@ -2860,17 +2909,17 @@ def _run_v2_core(
                 )
                 state["rust_authority_terminal_evidence"] = terminal_record
                 state["rust_authority_terminal_transcript"] = list(
-                    terminal.messages_for_diagnostics()
+                    rust_terminal_evidence.messages_for_diagnostics()
                 )
                 state["rust_authority_terminal_validated"] = True
-                state["effect_adapter_id"] = terminal.adapter_digest
-                state["effect_id"] = terminal.effect_digest
+                state["effect_adapter_id"] = rust_terminal_evidence.adapter_digest
+                state["effect_id"] = rust_terminal_evidence.effect_digest
                 state["effect_permit"] = {
-                    "digest": terminal.permit_digest,
+                    "digest": rust_terminal_evidence.permit_digest,
                     "classification": "POST_CONSUMPTION_AUDIT_ONLY",
                 }
                 state["effect_receipt"] = {
-                    "digest": terminal.receipt_digest,
+                    "digest": rust_terminal_evidence.receipt_digest,
                     "classification": "RUST_TERMINAL_AUDIT_EVIDENCE",
                 }
                 state["effect_result"] = "BLOCKED"
@@ -2881,7 +2930,7 @@ def _run_v2_core(
                     {
                         "event": "rust_authority_unadmitted_terminal_validated",
                         "reason": RUST_AUTHORITY_ROUTE_NOT_ADMITTED,
-                        "reported_terminal_outcome": terminal.outcome,
+                        "reported_terminal_outcome": rust_terminal_evidence.outcome,
                         "authority_effect": "NONE_GRANTED",
                         "programme_success_eligible": False,
                         "python_effect_handler_reachable": False,
@@ -2974,8 +3023,8 @@ def _run_v2_core(
         return state
 
     except SignatureProviderUnavailable as exc:
-        state = locals().get("state")
-        state = state if type(state) is dict else {}
+        candidate_state = locals().get("state")
+        state = candidate_state if type(candidate_state) is dict else {}
         state.update(
             {
                 "decision": "DENY",
@@ -2987,8 +3036,8 @@ def _run_v2_core(
         )
         return state
     except Exception as exc:
-        state = locals().get("state")
-        state = state if type(state) is dict else {}
+        candidate_state = locals().get("state")
+        state = candidate_state if type(candidate_state) is dict else {}
         state.update(
             {
                 "decision": "DENY",

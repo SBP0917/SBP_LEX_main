@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import PurePosixPath
 
-
 CONTRACT_VERSION = "SBP_LEX_V2_LOCAL_TRUST_V2"
 HYBRID_SIGNATURE_PROFILE = "SBP_LEX_V2_ML_DSA_87_ED448_AND_V1"
 RETIRED_HYBRID_SIGNATURE_PROFILE = "ML_DSA_87_AND_ED448_REQUIRED_V1"
@@ -163,8 +162,8 @@ EVIDENCE_GROUPS = (
             "tools/build_sha512_handover_snapshot.ps1",
             "docs/validation/SHA512_HANDOVER_STATUS.md",
             "docs/validation/UNIVERSITY_VALIDATION_PROTOCOL.md",
+            "docs/validation/V2_CANONICAL_STATUS.md",
             "docs/security/RUST_TCB_AND_TLA_VALIDATION.md",
-            "evidence/v2/spark-proof-evidence.json",
             "runtime_artifacts/toolchains/tla2tools.jar",
         ),
     },
@@ -179,24 +178,130 @@ EVIDENCE_GROUPS = (
 
 DEPENDENCY_LOCK_PATHS = (
     "python-dependencies.lock.json",
+    "requirements-production.lock.txt",
+    "requirements-test.lock.txt",
+    "runtime.txt",
+    "hybrid_signature_rust/Cargo.lock",
+    "independent_verifier_rust/Cargo.lock",
+    "polyglot/rust/v2_assurance_kernel/Cargo.lock",
+    "rust_authority_service/Cargo.lock",
     "security_core/Cargo.lock",
+    "trusted_core_rust/Cargo.lock",
+    "wire_protocol/rust/Cargo.lock",
     "wire_protocol/v2/rust/Cargo.lock",
     "spark_safety_monitor/alire/alire.lock",
     "runtime_artifacts/toolchains/tla2tools.jar",
 )
 
+_RUST_ASSURANCE_CRATES = (
+    ("hybrid_signature_rust", "hybrid_signature_rust/Cargo.toml", ()),
+    ("independent_verifier_rust", "independent_verifier_rust/Cargo.toml", ()),
+    (
+        "polyglot_v2_assurance_kernel",
+        "polyglot/rust/v2_assurance_kernel/Cargo.toml",
+        (),
+    ),
+    (
+        "rust_authority_service",
+        "rust_authority_service/Cargo.toml",
+        ("--features", "evidence-only-fixtures"),
+    ),
+    ("security_core", "security_core/Cargo.toml", ()),
+    ("trusted_core_rust", "trusted_core_rust/Cargo.toml", ()),
+    ("wire_protocol_rust", "wire_protocol/rust/Cargo.toml", ()),
+    ("wire_protocol_v2_rust", "wire_protocol/v2/rust/Cargo.toml", ()),
+)
+_RUST_ASSURANCE_COMMANDS = tuple(
+    command
+    for crate_id, manifest, feature_arguments in _RUST_ASSURANCE_CRATES
+    for command in (
+        (
+            f"rust_{crate_id}_test",
+            (
+                "cargo", "test", "--offline", "--locked", "--manifest-path",
+                manifest, *feature_arguments,
+            ),
+            True,
+            ".",
+        ),
+        (
+            f"rust_{crate_id}_check",
+            (
+                "cargo", "check", "--offline", "--locked", "--all-targets",
+                "--manifest-path", manifest, *feature_arguments,
+            ),
+            True,
+            ".",
+        ),
+        (
+            f"rust_{crate_id}_clippy",
+            (
+                "cargo", "clippy", "--offline", "--locked", "--all-targets",
+                "--manifest-path", manifest, *feature_arguments, "--", "-D", "warnings",
+            ),
+            True,
+            ".",
+        ),
+        (
+            f"rust_{crate_id}_fmt",
+            ("cargo", "fmt", "--manifest-path", manifest, "--", "--check"),
+            True,
+            ".",
+        ),
+        (
+            f"rust_{crate_id}_rustsec",
+            (
+                "cargo", "audit", "--no-fetch", "--deny", "warnings", "--file",
+                str(PurePosixPath(manifest).parent / "Cargo.lock"),
+            ),
+            True,
+            ".",
+        ),
+    )
+)
+
 COMMAND_POLICY = (
     ("python_tests", ("{python}", "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests"), True, "."),
-    ("rust_security_core", ("cargo", "test", "--offline", "--manifest-path", "security_core/Cargo.toml"), True, "."),
     ("wire_v2_python", ("{python}", "wire_protocol/v2/run_python_tests.py"), True, "."),
-    ("wire_v2_rust", ("cargo", "test", "--offline", "--manifest-path", "wire_protocol/v2/rust/Cargo.toml"), True, "."),
     ("cross_language", ("{python}", "-m", "unittest", "discover", "-s", "cross_language_reconciliation"), True, "."),
+    ("tool_python_version", ("{python}", "--version"), True, "."),
+    ("tool_cargo_version", ("cargo", "--version"), True, "."),
+    ("tool_java_version", ("java", "--version"), True, "."),
+    ("tool_alr_version", ("alr", "--version"), True, "."),
+    ("tool_git_version", ("git", "--version"), True, "."),
+    *_RUST_ASSURANCE_COMMANDS,
     (
-        "formal_tla_native",
+        "formal_tla_v2_tpm_disabled",
         (
             "java", "-Xmx4g", "-cp", "runtime_artifacts/toolchains/tla2tools.jar",
             "tlc2.TLC", "-config", "formal/tla/SBPLEXV2.cfg", "formal/tla/SBPLEXV2.tla",
         ),
+        True,
+        ".",
+    ),
+    (
+        "formal_tla_v2_tpm_admitted",
+        (
+            "java", "-Xmx4g", "-cp", "runtime_artifacts/toolchains/tla2tools.jar",
+            "tlc2.TLC", "-config", "formal/tla/SBPLEXV2_TPM_ADMITTED_NONVACUITY.cfg",
+            "formal/tla/SBPLEXV2.tla",
+        ),
+        True,
+        ".",
+    ),
+    (
+        "formal_tla_authority",
+        (
+            "java", "-Xmx4g", "-cp", "runtime_artifacts/toolchains/tla2tools.jar",
+            "tlc2.TLC", "-config", "formal/SBPLexAuthority.cfg",
+            "formal/SBPLexAuthority.tla",
+        ),
+        True,
+        ".",
+    ),
+    (
+        "formal_python_explorer",
+        ("{python}", "formal/check_model.py"),
         True,
         ".",
     ),
@@ -208,6 +313,18 @@ COMMAND_POLICY = (
         ),
         True,
         "spark_safety_monitor",
+    ),
+    (
+        "spark_build_native",
+        ("alr", "build"),
+        True,
+        "spark_safety_monitor",
+    ),
+    (
+        "spark_assertion_harness",
+        ("{python}", "spark_safety_monitor/tools/run_harness.py"),
+        True,
+        ".",
     ),
 )
 

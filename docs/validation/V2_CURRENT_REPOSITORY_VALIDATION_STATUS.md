@@ -1,5 +1,8 @@
 # SBP-LEX V2 Current Repository Validation Status
 
+> Historical mutable validation snapshot. It is preserved for provenance but
+> is not the current canonical status. See `V2_CANONICAL_STATUS.md`.
+
 Status date: 24 August 2026
 
 Status: `PASS_REPOSITORY_LOCAL_NON_INDEPENDENT`

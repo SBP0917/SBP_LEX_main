@@ -1,6 +1,19 @@
 from __future__ import annotations
 
-from typing import Dict, Any
+from typing import Any, Dict, TypedDict
+
+
+class _FinancialThresholds(TypedDict):
+    low_max: float
+    medium_max: float
+    currency: str
+
+
+class _FailClosedDefaults(TypedDict):
+    missing_safety_value: int
+    missing_financial_amount: float
+    unknown_tier: str
+    unknown_corroboration_required: int
 
 
 # ─────────────────────────────────────────────
@@ -11,25 +24,25 @@ LOW_TIER = "LOW"
 MEDIUM_TIER = "MEDIUM"
 TOP_TIER = "TOP"
 
-TIER_ORDER = {
+TIER_ORDER: dict[str, int] = {
     LOW_TIER: 1,
     MEDIUM_TIER: 2,
     TOP_TIER: 3,
 }
 
-CORROBORATION_THRESHOLDS = {
+CORROBORATION_THRESHOLDS: dict[str, int] = {
     LOW_TIER: 2,
     MEDIUM_TIER: 3,
     TOP_TIER: 5,
 }
 
-FINANCIAL_THRESHOLDS = {
+FINANCIAL_THRESHOLDS: _FinancialThresholds = {
     "low_max": 499.99,
     "medium_max": 49999.99,
     "currency": "AUD",
 }
 
-FAIL_CLOSED_DEFAULTS = {
+FAIL_CLOSED_DEFAULTS: _FailClosedDefaults = {
     "missing_safety_value": 0,
     "missing_financial_amount": 0.0,
     "unknown_tier": TOP_TIER,

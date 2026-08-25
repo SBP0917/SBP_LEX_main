@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any, Mapping
+from typing import Any
 
 from .constants import (
     ACCEPTED_HISTORY_SCHEMA,
@@ -52,14 +53,14 @@ _HISTORY_FIELDS = _UNSIGNED_FIELDS | {"signatures", "history_digest"}
 def _record(
     *,
     sequence: int,
-    package_digest: str,
-    chain_head_digest: str,
-    time_head_digest: str,
-    prior_package_digest: str,
-    prior_record_digest: str,
+    package_digest: object,
+    chain_head_digest: object,
+    time_head_digest: object,
+    prior_package_digest: object,
+    prior_record_digest: object,
 ) -> dict[str, Any]:
-    for value in (package_digest, chain_head_digest, time_head_digest):
-        if not is_sha512(value):
+    for digest_value in (package_digest, chain_head_digest, time_head_digest):
+        if not is_sha512(digest_value):
             raise AcceptedHistoryError("accepted_record_digest_invalid")
     if prior_package_digest != GENESIS and not is_sha512(prior_package_digest):
         raise AcceptedHistoryError("accepted_record_predecessor_invalid")
@@ -222,7 +223,8 @@ def validate_accepted_package_history(
         seen_packages: set[str] = set()
         seen_replays: set[str] = set()
         seen_time_heads: set[str] = set()
-        for expected_sequence, record in enumerate(records, start=1):
+        record_values: list[object] = records if type(records) is list else []
+        for expected_sequence, record in enumerate(record_values, start=1):
             if type(record) is not dict or set(record) != _RECORD_FIELDS:
                 failures.append("accepted_history_record_shape_invalid")
                 break

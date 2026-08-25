@@ -182,6 +182,7 @@ def _upstream_record_exact(
         or type(record) is not dict
         or type(trace) is not list
         or not trace
+        or type(source) is not dict
         or record != trace[-1]
         or state.get(result_field) != expected_result
         or not is_sha512(digest)
@@ -248,6 +249,8 @@ def _snapshot(
     )
     boundary = resolve_authority_trust_boundary(dependencies)
     request_fingerprint = state.get("request_fingerprint")
+    if type(request_fingerprint) is not str:
+        return None
     state_hash = state.get("state_hash") or GENESIS_HASH
     foundational_digest = state.get("foundational_baseline_digest")
     claims = _submitted_claims(state)
@@ -444,6 +447,8 @@ def _source_error(
     dependencies: AuthorityProvenanceDependencies,
 ) -> str | None:
     boundary = resolve_authority_trust_boundary(dependencies)
+    if boundary is None:
+        return "AUTHORITY_PROVENANCE_TRUST_CONTEXT_UNAVAILABLE"
     pin = boundary.context.role_pin(AUTHORITY_TRUST_ROLE_PROVENANCE) if boundary else None
     evaluator = boundary.evaluator if boundary else None
     if pin is None or evaluator is None:
@@ -505,6 +510,8 @@ def evaluate_authority_provenance(
     if type(trace) is not list:
         return _deny(state, "AUTHORITY_PROVENANCE_TRACE_INVALID")
     request_fingerprint = state.get("request_fingerprint")
+    if type(request_fingerprint) is not str:
+        return _deny(state, "AUTHORITY_PROVENANCE_REQUEST_FINGERPRINT_INVALID")
     trust = current_authority_trust_evidence(
         dependencies=dependencies,
         request_fingerprint=request_fingerprint,
@@ -525,6 +532,8 @@ def evaluate_authority_provenance(
     if snapshot is None:
         return _deny(state, "AUTHORITY_PROVENANCE_SNAPSHOT_INVALID")
     boundary = resolve_authority_trust_boundary(dependencies)
+    if boundary is None:
+        return _deny(state, "AUTHORITY_PROVENANCE_TRUST_BOUNDARY_UNAVAILABLE")
     source: dict[str, Any] | None = None
     error: str | None = None
     try:
@@ -550,6 +559,8 @@ def evaluate_authority_provenance(
         error = "AUTHORITY_PROVENANCE_TERMINAL_HEAD_RECHECK_FAILED"
     if error is not None:
         return _deny(state, error)
+    if type(source) is not dict:
+        return _deny(state, "AUTHORITY_PROVENANCE_SOURCE_INVALID")
     determination = source["determination"]
     record = {
         "contract_id": AUTHORITY_PROVENANCE_CONTRACT_ID,
@@ -658,6 +669,8 @@ def verify_authority_provenance(
             return False
         snapshot = record.get("evaluation_snapshot")
         source = record.get("evaluation_source")
+        if type(snapshot) is not dict or type(source) is not dict:
+            return False
         if (
             type(snapshot) is not dict
             or record.get("evaluation_snapshot_digest") != _safe_hash(snapshot)
@@ -711,7 +724,9 @@ def verify_authority_provenance(
         if not require_hash_binding:
             return True
         chain = state.get("hash_chain")
-        if not verify_hash_chain_entries(chain, state.get("state_hash")):
+        if type(chain) is not list or not verify_hash_chain_entries(
+            chain, state.get("state_hash")
+        ):
             return False
         expected_stage = (
             f"{AUTHORITY_PROVENANCE_HASH_STAGE_PREFIX}admission"

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
-from .artifact import build_signed_artifact, validate_artifact_chain, validate_signed_artifact
+from .artifact import (
+    build_signed_artifact,
+    validate_artifact_chain,
+    validate_signed_artifact,
+)
 from .constants import DEPLOYMENT_LIMITS, FAIL, PASS, STAGE_ORDER
 from .signing import HybridSigningContext, HybridVerificationContext
-
 
 PAYLOAD_SCHEMA = "SBP_LEX_V2_LOCAL_TRUST_CLAIMS_EVIDENCE_DOSSIER_PAYLOAD_V1"
 CLAIM_ORDER = (
@@ -109,6 +113,9 @@ def validate_claims_evidence_dossier(
     owner_pinned_clock_context_digest: str,
 ) -> dict[str, Any]:
     artifacts = [dict(item) for item in prior_artifacts]
+    prior_time = artifacts[-1].get("time_evidence_digest")
+    if type(prior_time) is not str:
+        prior_time = ""
     chain = validate_artifact_chain(
         artifacts,
         trust_context=trust_context,
@@ -126,7 +133,7 @@ def validate_claims_evidence_dossier(
         owner_pinned_clock_context_digest=owner_pinned_clock_context_digest,
         expected_prior_artifact_digest=chain["head_digest"],
         expected_time_sequence=10,
-        expected_prior_time_digest=artifacts[-1].get("time_evidence_digest"),
+        expected_prior_time_digest=prior_time,
     )
     failures = list(chain["validation_failures"]) + list(base["validation_failures"])
     try:

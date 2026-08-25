@@ -103,7 +103,7 @@ def _evidence_references_exact(value: Any) -> bool:
         }:
             return False
         identifier = reference.get("evidence_id")
-        if not _text(identifier) or identifier in identifiers:
+        if type(identifier) is not str or not _text(identifier) or identifier in identifiers:
             return False
         identifiers.add(identifier)
         if not _text(reference.get("source")):
@@ -345,11 +345,14 @@ def evaluate_filed_licence(
                     owner_pinned_context_digest=owner_pinned_context_digest,
                 )
             if error is None:
-                error = _determination_error(
-                    source.get("determination"),
-                    snapshot,
-                )
-            if error is None and trace:
+                if type(source) is not dict:
+                    error = "FILED_LICENCE_SOURCE_INVALID"
+                else:
+                    error = _determination_error(
+                        source.get("determination"),
+                        snapshot,
+                    )
+            if error is None and trace and type(source) is dict:
                 previous_source = trace[-1].get("evaluation_source")
                 previous_determination = (
                     previous_source.get("determination")
@@ -566,6 +569,8 @@ def verify_filed_licence(
             return False
         snapshot = record.get("evaluation_snapshot")
         source = record.get("evaluation_source")
+        if type(snapshot) is not dict or type(source) is not dict:
+            return False
         if (
             record.get("evaluation_sequence") != index
             or record.get("result") != LICENCE_ALLOW
@@ -596,6 +601,8 @@ def verify_filed_licence(
             return False
         prior_revocation_sequence = observed_sequence
     latest_snapshot = trace[-1]["evaluation_snapshot"]
+    if type(latest_snapshot) is not dict:
+        return False
     if (
         latest_snapshot.get("tier") != state.get("license_tier")
         or latest_snapshot.get("bindings") != _licence_bindings(state)
@@ -606,7 +613,9 @@ def verify_filed_licence(
     if not require_hash_binding:
         return True
     chain = state.get("hash_chain")
-    if not verify_hash_chain_entries(chain, state.get("state_hash")):
+    if type(chain) is not list or not verify_hash_chain_entries(
+        chain, state.get("state_hash")
+    ):
         return False
     previous_index = -1
     for record in trace:

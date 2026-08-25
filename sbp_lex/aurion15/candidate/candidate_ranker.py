@@ -1,4 +1,4 @@
-from typing import Dict, Any, List
+from typing import Any, Dict
 
 
 def rank_candidates(state: Dict[str, Any]) -> Dict[str, Any]:

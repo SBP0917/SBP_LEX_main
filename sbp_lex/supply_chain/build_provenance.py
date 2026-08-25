@@ -9,10 +9,11 @@ import shutil
 import signal
 import stat
 import subprocess
+import tempfile
 import time
 from ctypes import wintypes
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, BinaryIO, Mapping
 
 from sbp_ptde.canonical import canonical_json_document_bytes, canonical_path, canonical_sha512, identifier, require_sha512
 from sbp_ptde.constants import MAX_LANE_TIMEOUT_SECONDS, MAX_STREAM_BYTE_COUNT, NO_AUTHORITY, TIMEOUT_STATUS, TRANSCRIPT_SCHEMA_ID
@@ -73,6 +74,25 @@ def _kernel32() -> Any:
     return kernel32
 
 
+def _windows_process_handle(process: subprocess.Popen[bytes]) -> int:
+    handle = getattr(process, "_handle", None)
+    if not isinstance(handle, int) or handle <= 0:
+        raise reject("SUPPLY_CHAIN_PROCESS_HANDLE_INVALID")
+    return handle
+
+
+def _resume_suspended_process(process: subprocess.Popen[bytes]) -> bool:
+    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+    ntdll.NtResumeProcess.argtypes = (wintypes.HANDLE,)
+    ntdll.NtResumeProcess.restype = wintypes.LONG
+    return (
+        ntdll.NtResumeProcess(
+            wintypes.HANDLE(_windows_process_handle(process))
+        )
+        == 0
+    )
+
+
 class _WindowsLaneJob:
     """Contain a Windows lane and terminate all of its processes on close."""
 
@@ -98,9 +118,16 @@ class _WindowsLaneJob:
         ):
             self.close()
             raise reject("SUPPLY_CHAIN_PROCESS_TREE_CONTAINMENT_UNAVAILABLE")
-        if not kernel32.AssignProcessToJobObject(wintypes.HANDLE(self._handle), wintypes.HANDLE(process._handle)):
+        if not kernel32.AssignProcessToJobObject(
+            wintypes.HANDLE(self._handle),
+            wintypes.HANDLE(_windows_process_handle(process)),
+        ):
             self.close()
             raise reject("SUPPLY_CHAIN_PROCESS_TREE_CONTAINMENT_UNAVAILABLE")
+        if not _resume_suspended_process(process):
+            self.terminate()
+            self.close()
+            raise reject("SUPPLY_CHAIN_PROCESS_TREE_RESUME_FAILED")
 
     def terminate(self) -> bool:
         if self._handle is None:
@@ -182,17 +209,52 @@ def _clean_checkout(git_executable: Path, git_identity: tuple[int, int, int, int
         "GIT_TERMINAL_PROMPT": "0",
         "LC_ALL": "C",
     })
-    result = subprocess.run(
-        [str(git_executable), "status", "--porcelain=v1", "--untracked-files=all"],
-        cwd=checkout,
-        shell=False,
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        timeout=120,
-        env=clean_environment,
-    )
+    with tempfile.TemporaryFile(mode="w+b") as stdout_file, tempfile.TemporaryFile(mode="w+b") as stderr_file:
+        creationflags = _windows_creation_flags()
+        process = subprocess.Popen(
+            [str(git_executable), "status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=checkout,
+            shell=False,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            env=clean_environment,
+            start_new_session=os.name != "nt",
+            creationflags=creationflags,
+        )
+        windows_job: _WindowsLaneJob | None = None
+        bounded = True
+        try:
+            try:
+                windows_job = _WindowsLaneJob(process)
+            except BaseException:
+                process.kill()
+                process.wait(timeout=5)
+                raise
+            deadline = time.monotonic() + 120
+            while process.poll() is None:
+                if (
+                    os.fstat(stdout_file.fileno()).st_size > MAX_STREAM_BYTE_COUNT
+                    or os.fstat(stderr_file.fileno()).st_size > MAX_STREAM_BYTE_COUNT
+                    or time.monotonic() >= deadline
+                ):
+                    bounded = False
+                    _terminate_process_tree(process, windows_job)
+                    break
+                time.sleep(0.01)
+            return_code = process.wait(timeout=5)
+            stdout_size = os.fstat(stdout_file.fileno()).st_size
+            stderr_size = os.fstat(stderr_file.fileno()).st_size
+        finally:
+            if windows_job is not None:
+                windows_job.close()
     _confirm_executable(git_executable, git_identity, expected_git_sha512)
-    return result.returncode == 0 and result.stdout == b""
+    return (
+        bounded
+        and return_code == 0
+        and stdout_size == 0
+        and stderr_size <= MAX_STREAM_BYTE_COUNT
+    )
 
 
 def _terminate_process_tree(process: subprocess.Popen[bytes], windows_job: _WindowsLaneJob | None) -> bool:
@@ -202,17 +264,185 @@ def _terminate_process_tree(process: subprocess.Popen[bytes], windows_job: _Wind
                 return False
             process.wait(timeout=5)
             return True
-        os.killpg(process.pid, signal.SIGKILL)
+        kill_process_group = getattr(os, "killpg", None)
+        kill_signal = getattr(signal, "SIGKILL", None)
+        if not callable(kill_process_group) or not isinstance(kill_signal, int):
+            return False
+        kill_process_group(process.pid, kill_signal)
         process.wait(timeout=5)
         return True
     except (OSError, subprocess.SubprocessError):
         return False
 
 
-def _write_bytes(root: Path, relative: str, value: bytes) -> None:
+def _windows_creation_flags() -> int:
+    if os.name != "nt":
+        return 0
+    return (
+        getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        | getattr(subprocess, "CREATE_SUSPENDED", 0x00000004)
+    )
+
+
+def _path_identity(metadata: os.stat_result) -> tuple[int, int]:
+    return metadata.st_dev, metadata.st_ino
+
+
+def _is_link_or_reparse(metadata: os.stat_result) -> bool:
+    return stat.S_ISLNK(metadata.st_mode) or bool(
+        getattr(metadata, "st_file_attributes", 0) & 0x400
+    )
+
+
+def _secure_directory_identity(path: Path) -> tuple[int, int]:
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise reject("SUPPLY_CHAIN_EVIDENCE_DIRECTORY_UNAVAILABLE") from exc
+    if _is_link_or_reparse(metadata) or not stat.S_ISDIR(metadata.st_mode):
+        raise reject("SUPPLY_CHAIN_EVIDENCE_DIRECTORY_ALIAS_REJECTED")
+    return _path_identity(metadata)
+
+
+def _ensure_secure_directory(path: Path) -> tuple[int, int]:
+    if not path.is_absolute() or any(part in {".", ".."} for part in path.parts):
+        raise reject("SUPPLY_CHAIN_EVIDENCE_PATH_INVALID")
+    missing: list[Path] = []
+    current = path
+    while True:
+        try:
+            current.lstat()
+            break
+        except FileNotFoundError:
+            missing.append(current)
+            parent = current.parent
+            if parent == current:
+                raise reject("SUPPLY_CHAIN_EVIDENCE_DIRECTORY_UNAVAILABLE")
+            current = parent
+        except OSError as exc:
+            raise reject("SUPPLY_CHAIN_EVIDENCE_DIRECTORY_UNAVAILABLE") from exc
+
+    while True:
+        _secure_directory_identity(current)
+        if current.parent == current:
+            break
+        current = current.parent
+
+    for directory in reversed(missing):
+        parent_identity = _secure_directory_identity(directory.parent)
+        try:
+            directory.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            raise reject("SUPPLY_CHAIN_EVIDENCE_DIRECTORY_CREATE_FAILED") from exc
+        if _secure_directory_identity(directory.parent) != parent_identity:
+            raise reject("SUPPLY_CHAIN_EVIDENCE_PARENT_IDENTITY_CHANGED")
+        _secure_directory_identity(directory)
+    return _secure_directory_identity(path)
+
+
+def _validate_open_output(
+    path: Path,
+    stream: BinaryIO,
+    *,
+    parent_identity: tuple[int, int],
+    root: Path,
+    root_identity: tuple[int, int],
+) -> None:
+    try:
+        descriptor_metadata = os.fstat(stream.fileno())
+        path_metadata = path.lstat()
+    except OSError as exc:
+        raise reject("SUPPLY_CHAIN_EVIDENCE_OUTPUT_IDENTITY_UNAVAILABLE") from exc
+    if (
+        _is_link_or_reparse(path_metadata)
+        or not stat.S_ISREG(descriptor_metadata.st_mode)
+        or not stat.S_ISREG(path_metadata.st_mode)
+        or descriptor_metadata.st_nlink != 1
+        or path_metadata.st_nlink != 1
+        or _path_identity(descriptor_metadata) != _path_identity(path_metadata)
+        or _secure_directory_identity(path.parent) != parent_identity
+        or _secure_directory_identity(root) != root_identity
+    ):
+        raise reject("SUPPLY_CHAIN_EVIDENCE_OUTPUT_IDENTITY_CHANGED")
+
+
+def _open_secure_output(
+    root: Path,
+    relative: str,
+) -> tuple[Path, BinaryIO, tuple[int, int], tuple[int, int]]:
+    root_identity = _ensure_secure_directory(root)
     path = root.joinpath(*relative.split("/"))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(value)
+    parent_identity = _ensure_secure_directory(path.parent)
+    if _secure_directory_identity(root) != root_identity:
+        raise reject("SUPPLY_CHAIN_EVIDENCE_ROOT_IDENTITY_CHANGED")
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise reject("SUPPLY_CHAIN_EVIDENCE_OUTPUT_UNAVAILABLE") from exc
+    else:
+        raise reject("SUPPLY_CHAIN_EVIDENCE_OUTPUT_ALREADY_EXISTS")
+    flags = os.O_CREAT | os.O_EXCL | os.O_RDWR
+    flags |= getattr(os, "O_BINARY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError as exc:
+        raise reject("SUPPLY_CHAIN_EVIDENCE_OUTPUT_CREATE_FAILED") from exc
+    try:
+        stream = os.fdopen(descriptor, "w+b")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    try:
+        _validate_open_output(
+            path,
+            stream,
+            parent_identity=parent_identity,
+            root=root,
+            root_identity=root_identity,
+        )
+    except BaseException:
+        stream.close()
+        raise
+    return path, stream, parent_identity, root_identity
+
+
+def _sync_parent(path: Path) -> None:
+    try:
+        descriptor = os.open(path.parent, os.O_RDONLY)
+    except OSError as exc:
+        if os.name != "nt":
+            raise reject("SUPPLY_CHAIN_EVIDENCE_PARENT_SYNC_FAILED") from exc
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError as exc:
+        if os.name != "nt":
+            raise reject("SUPPLY_CHAIN_EVIDENCE_PARENT_SYNC_FAILED") from exc
+    finally:
+        os.close(descriptor)
+
+
+def _write_bytes(root: Path, relative: str, value: bytes) -> None:
+    path, stream, parent_identity, root_identity = _open_secure_output(
+        root, relative
+    )
+    with stream:
+        stream.write(value)
+        stream.flush()
+        os.fsync(stream.fileno())
+        _validate_open_output(
+            path,
+            stream,
+            parent_identity=parent_identity,
+            root=root,
+            root_identity=root_identity,
+        )
+    _sync_parent(path)
 
 
 def execute_host_lane(
@@ -251,16 +481,28 @@ def execute_host_lane(
     stderr_relative = canonical_path(lane["stderr_contract"]["relative_path"], code="SUPPLY_CHAIN_STDERR_PATH_INVALID")
     if stdout_relative == stderr_relative:
         raise reject("SUPPLY_CHAIN_STREAM_PATH_OVERLAP")
-    stdout_path = evidence_root.joinpath(*stdout_relative.split("/"))
-    stderr_path = evidence_root.joinpath(*stderr_relative.split("/"))
-    stdout_path.parent.mkdir(parents=True, exist_ok=True)
-    stderr_path.parent.mkdir(parents=True, exist_ok=True)
+    (
+        stdout_path,
+        stdout_file,
+        stdout_parent_identity,
+        stdout_root_identity,
+    ) = _open_secure_output(evidence_root, stdout_relative)
+    try:
+        (
+            stderr_path,
+            stderr_file,
+            stderr_parent_identity,
+            stderr_root_identity,
+        ) = _open_secure_output(evidence_root, stderr_relative)
+    except BaseException:
+        stdout_file.close()
+        raise
     started = int(time.time() * 1000)
     timed_out = False
     tree_terminated = False
-    with stdout_path.open("xb") as stdout_file, stderr_path.open("xb") as stderr_file:
+    with stdout_file, stderr_file:
         launch_arguments = [str(pinned_executable), *lane["argv"][1:]]
-        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
+        creationflags = _windows_creation_flags()
         process = subprocess.Popen(
             launch_arguments,
             cwd=source_checkout,
@@ -297,11 +539,34 @@ def execute_host_lane(
         finally:
             if windows_job is not None:
                 windows_job.close()
+        stdout_file.flush()
+        stderr_file.flush()
+        os.fsync(stdout_file.fileno())
+        os.fsync(stderr_file.fileno())
+        _validate_open_output(
+            stdout_path,
+            stdout_file,
+            parent_identity=stdout_parent_identity,
+            root=evidence_root,
+            root_identity=stdout_root_identity,
+        )
+        _validate_open_output(
+            stderr_path,
+            stderr_file,
+            parent_identity=stderr_parent_identity,
+            root=evidence_root,
+            root_identity=stderr_root_identity,
+        )
+        stdout_file.seek(0)
+        stderr_file.seek(0)
+        stdout = stdout_file.read()
+        stderr = stderr_file.read()
+    _sync_parent(stdout_path)
+    if stderr_path.parent != stdout_path.parent:
+        _sync_parent(stderr_path)
     finished = int(time.time() * 1000)
     _confirm_executable(pinned_executable, executable_identity, expected_executable_sha512)
     source_dirty_after = not _clean_checkout(pinned_git, git_identity, expected_git_executable_sha512, source_checkout)
-    stdout = stdout_path.read_bytes()
-    stderr = stderr_path.read_bytes()
     stdout_limit = lane["stdout_contract"]["maximum_byte_count"]
     stderr_limit = lane["stderr_contract"]["maximum_byte_count"]
     if len(stdout) > stdout_limit or len(stderr) > stderr_limit:

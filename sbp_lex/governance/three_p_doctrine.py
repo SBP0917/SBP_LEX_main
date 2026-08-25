@@ -311,14 +311,14 @@ def _evaluate_source(
         evaluator, "authority_credential_id", None
     )
     method = getattr(evaluator, "evaluate", None)
-    metadata = (
-        evaluator_id,
-        evaluator_version,
-        authority_role,
-        authority_credential_id,
-    )
     if (
-        not all(type(value) is str and value for value in metadata)
+        not isinstance(evaluator_id, str)
+        or not evaluator_id
+        or not isinstance(evaluator_version, str)
+        or not evaluator_version
+        or not isinstance(authority_credential_id, str)
+        or not authority_credential_id
+        or type(authority_role) is not str
         or authority_role != THREE_P_AUTHORITY_ROLE
         or not callable(method)
     ):
@@ -504,9 +504,13 @@ def _record_is_exact(
     evaluator_id = record.get("evaluator_id")
     evaluator_version = record.get("evaluator_version")
     credential_id = record.get("authority_credential_id")
-    if not all(
-        type(value) is str and value
-        for value in (evaluator_id, evaluator_version, credential_id)
+    if (
+        not isinstance(evaluator_id, str)
+        or not evaluator_id
+        or not isinstance(evaluator_version, str)
+        or not evaluator_version
+        or not isinstance(credential_id, str)
+        or not credential_id
     ):
         return False
     if record.get("authority_role") != THREE_P_AUTHORITY_ROLE:
@@ -653,7 +657,9 @@ def _hash_binding_present(state: dict[str, Any]) -> bool:
     if expected_payload_hash is None:
         return False
     chain = state.get("hash_chain")
-    if not verify_hash_chain_entries(chain, state.get("state_hash")):
+    if type(chain) is not list or not verify_hash_chain_entries(
+        chain, state.get("state_hash")
+    ):
         return False
     bindings = [
         entry
@@ -737,6 +743,8 @@ def verify_three_p_core(
             owner_pinned_context_digest=owner_pinned_context_digest,
         ) or not is_sha512(digest):
             return False
+        if type(record) is not dict:
+            return False
         if state.get("three_p_core_result") != "PASS":
             return False
         if canonical_integrity_hash(record) != digest:
@@ -750,6 +758,8 @@ def verify_three_p_core(
         if source.get("evaluation_time") != state.get("evaluation_time"):
             return False
         trace = state["three_p_trace"]
+        if type(trace) is not list:
+            return False
         if len(trace) != record["evaluation_sequence"]:
             return False
         prior_digest = (

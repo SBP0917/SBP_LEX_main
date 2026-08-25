@@ -29,6 +29,9 @@ from .errors import reject
 
 
 def expected_policy() -> dict[str, Any]:
+    resource_maxima = ASSURANCE_LIMITS.get("resource_maxima")
+    if type(resource_maxima) is not dict:
+        raise RuntimeError("PTDE_RESOURCE_MAXIMA_INVALID")
     return {
         "callable_allowed_set": [dict(item) for item in CALLABLE_ALLOWED_SET],
         "canonical_json": {
@@ -85,7 +88,7 @@ def expected_policy() -> dict[str, Any]:
             "t_profile": T_PROFILE_PATH,
         },
         "policy_id": "SBP_LEX_V2_PTDE_POLICY",
-        "resource_maxima": dict(ASSURANCE_LIMITS["resource_maxima"]),
+        "resource_maxima": dict(resource_maxima),
         "schema_id": POLICY_SCHEMA_ID,
         "stage_chain": {
             "d": {"delta": "EXACTLY_ONE_ADDED_REGULAR_BLOB", "sole_parent": "T"},

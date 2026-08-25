@@ -41,6 +41,8 @@ def evaluate_ap_acf_profile(state: Dict[str, Any]) -> tuple[bool, str]:
     requested = state.get("requested_autonomy_level")
     declared_ceiling = state.get("autonomy_ceiling")
 
+    if type(class_id) is not str:
+        return False, "ap_acf_class_unknown"
     allowed_subclasses = AP_ACF_CLASS_SUBCLASSES.get(class_id)
     if allowed_subclasses is None:
         return False, "ap_acf_class_unknown"
@@ -91,8 +93,6 @@ def run_classification(
     # Inputs
     ap_acf_class = state.get("ap_acf_class")
     ap_acf_subclass = state.get("ap_acf_subclass")
-    requested_autonomy_level = state.get("requested_autonomy_level")
-    operational_environment = state.get("operational_environment")
     public_exposure = state.get("public_exposure")
     operational_scope = state.get("operational_scope")
     environment_modifiers = state.get("environment_modifiers") or {}

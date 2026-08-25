@@ -107,6 +107,21 @@ def _signed_provenance_receipt(graph_digest: str) -> dict:
         "schema_id": "SBP_LEX_PROVENANCE_VERIFICATION_RECEIPT_V2",
         "result": DIGITAL_PROVENANCE_ADMIT,
         "graph_digest": graph_digest,
+        "release_manifest_digest": _digest(
+            "application_integrity_manifest_digest"
+        ),
+        "runtime_measurement_digest": _digest(
+            "application_integrity_runtime_measurement_digest"
+        ),
+        "durable_claim_result": "CLAIMED",
+        "durable_claim_digest": _digest("durable-claim"),
+        "durable_transition_receipt_digest": _digest(
+            "durable-transition"
+        ),
+        "durable_live_heads_digest": _digest("durable-live-heads"),
+        "revocation_head_digest": _digest("revocation-head"),
+        "clock_evidence_digest": _digest("clock-evidence"),
+        "production_durable_storage_proven_by_module": False,
         "lineage_authenticated": True,
         "lineage_only": True,
         **dict(PROVENANCE_NO_AUTHORIZATION_EFFECT),
@@ -127,12 +142,21 @@ def _signed_provenance_receipt(graph_digest: str) -> dict:
 
 
 def _minor_record(result: str) -> dict:
+    applicable = result != RESULT_NOT_APPLICABLE
     record = {
         "schema": "SBP-LEX-AU-MINOR-ACCESS-V3",
         "result": result,
         "age_assurance_result": (
-            "UNDER_16" if result == RESULT_DENY else "AT_LEAST_16"
+            "UNDER_16"
+            if result == RESULT_DENY
+            else "INDETERMINATE"
+            if result == RESULT_NOT_APPLICABLE
+            else "AT_LEAST_16"
         ),
+        "applicable": applicable,
+        "reason": "AUTHENTICATED_DETERMINATION",
+        "privacy_data_destroyed": True if applicable else None,
+        "youth_penalty_applied": False,
         "access_granted": False,
         "authority_granted": False,
         "licence_granted": False,
@@ -168,6 +192,7 @@ def _passing_state(
     }
     impersonation_record = {
         "result": "PASS",
+        "reason": "IMPERSONATION_PROTECTION_COMPLETED",
         "biometric_proof_established": False,
         "identity_issued": False,
         "identity_label_grants_access": False,
@@ -205,8 +230,14 @@ def _passing_state(
         "participant_effect_authority_granted": False,
         "participant_pipeline_bypass_permitted": False,
         "impersonation_protection_result": "PASS",
-        "impersonation_protection_digest": _digest("impersonation"),
+        "impersonation_protection_digest": canonical_integrity_hash(
+            [impersonation_record]
+        ),
+        "impersonation_protection_trace": [deepcopy(impersonation_record)],
         "impersonation_protection_record": impersonation_record,
+        "impersonation_protection_reason": (
+            "IMPERSONATION_PROTECTION_COMPLETED"
+        ),
         "australian_minor_access": _minor_record(minor_result),
         "hash_chain": [],
         "state_hash": GENESIS_HASH,
@@ -368,6 +399,106 @@ def test_provenance_receipt_structural_admission_fails_closed(
     assert state["foundational_baseline_result"] == FOUNDATIONAL_BASELINE_DENY
     assert state["foundational_baseline_reason"] == (
         "DIGITAL_PROVENANCE_PREREQUISITE_FAILED"
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("release_manifest_digest", _digest("wrong-release")),
+        ("runtime_measurement_digest", _digest("wrong-runtime")),
+        ("durable_claim_result", "ALREADY_CLAIMED"),
+        ("durable_claim_digest", None),
+        ("durable_transition_receipt_digest", None),
+        ("durable_live_heads_digest", None),
+        ("revocation_head_digest", None),
+        ("clock_evidence_digest", None),
+        ("production_durable_storage_proven_by_module", True),
+    ],
+)
+def test_provenance_release_and_durable_bindings_fail_closed(
+    field: str,
+    value: object,
+) -> None:
+    state = _passing_state()
+    receipt = state["digital_provenance_verification_receipt"]
+    receipt[field] = value
+    payload = {
+        key: value
+        for key, value in receipt.items()
+        if key not in {"digest", "signature", "verified"}
+    }
+    receipt["digest"] = canonical_integrity_hash(payload)
+
+    evaluate_foundational_baseline(state)
+
+    assert state["foundational_baseline_result"] == FOUNDATIONAL_BASELINE_DENY
+    assert state["foundational_baseline_reason"] == (
+        "DIGITAL_PROVENANCE_PREREQUISITE_FAILED"
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["missing_trace", "terminal_record_mismatch", "trace_digest_mismatch", "reason_mismatch"],
+)
+def test_impersonation_terminal_trace_binding_fails_closed(mutation: str) -> None:
+    state = _passing_state()
+    if mutation == "missing_trace":
+        state["impersonation_protection_trace"] = None
+    elif mutation == "terminal_record_mismatch":
+        state["impersonation_protection_trace"][-1] = {
+            **state["impersonation_protection_record"],
+            "reason": "SUBSTITUTED",
+        }
+        state["impersonation_protection_digest"] = canonical_integrity_hash(
+            state["impersonation_protection_trace"]
+        )
+    elif mutation == "trace_digest_mismatch":
+        state["impersonation_protection_digest"] = _digest("wrong-trace")
+    else:
+        state["impersonation_protection_reason"] = "SUBSTITUTED"
+
+    evaluate_foundational_baseline(state)
+
+    assert state["foundational_baseline_result"] == FOUNDATIONAL_BASELINE_DENY
+    assert state["foundational_baseline_reason"] == (
+        "IMPERSONATION_PROTECTION_PREREQUISITE_FAILED"
+    )
+
+
+@pytest.mark.parametrize(
+    ("result", "field", "value"),
+    [
+        (AUSTRALIAN_MINOR_ACCESS_PASS, "applicable", False),
+        (AUSTRALIAN_MINOR_ACCESS_PASS, "age_assurance_result", "UNDER_16"),
+        (AUSTRALIAN_MINOR_ACCESS_PASS, "privacy_data_destroyed", False),
+        (AUSTRALIAN_MINOR_ACCESS_PASS, "youth_penalty_applied", True),
+        (RESULT_NOT_APPLICABLE, "applicable", True),
+        (RESULT_NOT_APPLICABLE, "age_assurance_result", "AT_LEAST_16"),
+        (RESULT_NOT_APPLICABLE, "privacy_data_destroyed", True),
+    ],
+)
+def test_minor_privacy_outcome_correlations_fail_closed(
+    result: str,
+    field: str,
+    value: object,
+) -> None:
+    state = _passing_state(result)
+    record = state["australian_minor_access"]
+    record[field] = value
+    payload = {
+        key: value
+        for key, value in record.items()
+        if key != "record_digest"
+    }
+    record["record_digest"] = canonical_integrity_hash(payload)
+
+    evaluate_foundational_baseline(state)
+
+    assert state["foundational_baseline_result"] == FOUNDATIONAL_BASELINE_DENY
+    assert state["foundational_baseline_reason"] == (
+        "AUSTRALIAN_MINOR_ACCESS_PREREQUISITE_FAILED"
     )
 
 

@@ -1,5 +1,8 @@
 # V2 Parallel Readiness Preparation
 
+> Historical preparation record. It is preserved for provenance but is not
+> the current canonical status. See `V2_CANONICAL_STATUS.md`.
+
 ## Purpose and status
 
 This record prepares the six V2 workstreams that do not alter the concurrent

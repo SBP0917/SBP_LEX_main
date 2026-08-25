@@ -634,6 +634,11 @@ def chain_factory(tmp_path: Path) -> Callable[..., PTDEChain]:
 
 
 @pytest.fixture
+def deep_json_chain_factory() -> Callable[..., PTDEChain]:
+    return build_deep_json_chain
+
+
+@pytest.fixture
 def copy_object_database(tmp_path: Path) -> Callable[[PTDEChain, str], Path]:
     def copy(chain: PTDEChain, name: str) -> Path:
         target = tmp_path / name

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
-from .artifact import build_signed_artifact, validate_artifact_chain, validate_signed_artifact
+from .artifact import (
+    build_signed_artifact,
+    validate_artifact_chain,
+    validate_signed_artifact,
+)
 from .constants import DEPLOYMENT_LIMITS, FAIL, PASS, STAGE_ORDER
 from .signing import HybridSigningContext, HybridVerificationContext
-
 
 PAYLOAD_SCHEMA = "SBP_LEX_V2_LOCAL_TRUST_CAPSTONE_PAYLOAD_V1"
 PREFIX_STAGES = STAGE_ORDER[:6]
@@ -78,6 +82,8 @@ def validate_capstone(
         expected_stages=PREFIX_STAGES,
     )
     prior_time = artifacts[-1].get("time_evidence_digest") if artifacts else "GENESIS"
+    if type(prior_time) is not str:
+        prior_time = ""
     base = validate_signed_artifact(
         capstone,
         expected_stage="capstone",

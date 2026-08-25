@@ -174,30 +174,44 @@ def _provider_metadata(
 ) -> tuple[str, str, str, str, bool]:
     if provider is None:
         raise SignatureProviderUnavailable("SIGNATURE_PROVIDER_NOT_INJECTED")
-    values = (
-        getattr(provider, "provider_id", None),
-        getattr(provider, "algorithm", None),
-        getattr(provider, "key_id", None),
-        getattr(provider, "custody_class", None),
-    )
-    if not all(type(value) is str and value for value in values):
+    provider_id = getattr(provider, "provider_id", None)
+    algorithm = getattr(provider, "algorithm", None)
+    key_id = getattr(provider, "key_id", None)
+    custody_class = getattr(provider, "custody_class", None)
+    if not all(
+        type(value) is str and value
+        for value in (provider_id, algorithm, key_id, custody_class)
+    ):
         raise SignatureProviderUnavailable("SIGNATURE_PROVIDER_METADATA_INVALID")
     if getattr(provider, "token_signing_admitted", None) is not True:
         raise SignatureProviderUnavailable("TOKEN_SIGNING_PROVIDER_NOT_ADMITTED")
     if (
-        values[1] != "Ed25519"
+        algorithm != "Ed25519"
         or getattr(provider, "legacy_non_effect_only", True) is not True
         or getattr(provider, "effect_authority", None) is True
     ):
         raise SignatureProviderUnavailable("LEGACY_SIGNATURE_PROVIDER_NOT_ADMITTED")
-    joined = "|".join(values).upper()
+    if (
+        not isinstance(provider_id, str)
+        or not isinstance(algorithm, str)
+        or not isinstance(key_id, str)
+        or not isinstance(custody_class, str)
+    ):
+        raise SignatureProviderUnavailable("SIGNATURE_PROVIDER_METADATA_INVALID")
+    joined = "|".join((provider_id, algorithm, key_id, custody_class)).upper()
     if any(term in joined for term in _FORBIDDEN_PROVIDER_TERMS):
         raise SignatureProviderUnavailable("NONPRODUCTION_PROVIDER_METADATA_REJECTED")
     if not callable(getattr(provider, "sign", None)) or not callable(
         getattr(provider, "verify", None)
     ):
         raise SignatureProviderUnavailable("SIGNATURE_PROVIDER_METHODS_MISSING")
-    return (*values, getattr(provider, "effect_authority", None) is True)
+    return (
+        provider_id,
+        algorithm,
+        key_id,
+        custody_class,
+        getattr(provider, "effect_authority", None) is True,
+    )
 
 
 def compute_digest(payload: Dict[str, Any]) -> str:
@@ -239,6 +253,8 @@ def build_legacy_non_effect_signed_object(
     provider_id, algorithm, key_id, custody_class, effect_authority = (
         _provider_metadata(provider)
     )
+    if provider is None:
+        raise SignatureProviderUnavailable("SIGNATURE_PROVIDER_NOT_INJECTED")
     payload_bytes = _payload_bytes(payload)
     signature_bytes = provider.sign(payload_bytes, key_id=key_id)
     if type(signature_bytes) is not bytes or not signature_bytes:
@@ -349,6 +365,8 @@ def verify_signed_object(
     except (binascii.Error, ValueError):
         return False
     try:
+        if provider is None:
+            return False
         return provider.verify(
             payload_bytes,
             signature_bytes,

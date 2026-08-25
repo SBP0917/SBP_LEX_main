@@ -19,7 +19,7 @@ from hashlib import sha512
 import hmac
 import os
 from threading import Lock
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeGuard
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -188,7 +188,7 @@ class InMemoryExchangeReplayGuard:
             return True
 
 
-def _text(value: Any) -> bool:
+def _text(value: Any) -> TypeGuard[str]:
     return type(value) is str and bool(value)
 
 
@@ -212,12 +212,24 @@ def _authority_metadata(
             authority, "exchange_authority_credential_id", None
         ),
     }
+    authority_id = values["authority_id"]
+    authority_version = values["authority_version"]
+    authority_role = values["authority_role"]
+    authority_credential_id = values["authority_credential_id"]
     if (
-        not all(_text(value) for value in values.values())
-        or values["authority_role"] != EXCHANGE_AUTHORITY_ROLE
+        not _text(authority_id)
+        or not _text(authority_version)
+        or not _text(authority_role)
+        or not _text(authority_credential_id)
+        or authority_role != EXCHANGE_AUTHORITY_ROLE
     ):
         return None
-    return values
+    return {
+        "authority_id": authority_id,
+        "authority_version": authority_version,
+        "authority_role": authority_role,
+        "authority_credential_id": authority_credential_id,
+    }
 
 
 def _provider_admitted(provider: ExchangeAttestationProvider | None) -> bool:
@@ -233,6 +245,7 @@ def _trust_context_owner_pinned(
 ) -> bool:
     return (
         isinstance(context, HybridVerificationContext)
+        and isinstance(owner_pinned_context_digest, str)
         and is_sha512(owner_pinned_context_digest)
         and hmac.compare_digest(
             context.context_digest, owner_pinned_context_digest
@@ -432,6 +445,13 @@ def build_segmented_exchange(
         )
     if not _resolver_admitted(key_resolver):
         raise SegmentedExchangeRejected("EXCHANGE_KEY_RESOLVER_NOT_INJECTED")
+    if (
+        attestation_provider is None
+        or attestation_trust_context is None
+        or owner_pinned_context_digest is None
+        or key_resolver is None
+    ):
+        raise SegmentedExchangeRejected("EXCHANGE_DEPENDENCY_NARROWING_FAILED")
     inputs = _segments_input_exact(segments)
     bindings = _build_bindings(
         exchange_id=exchange_id,
@@ -547,6 +567,11 @@ def _verified_envelope(
         raise SegmentedExchangeRejected(
             "EXCHANGE_OWNER_PIN_NOT_INJECTED_OR_INVALID"
         )
+    if (
+        attestation_trust_context is None
+        or owner_pinned_context_digest is None
+    ):
+        raise SegmentedExchangeRejected("EXCHANGE_DEPENDENCY_NARROWING_FAILED")
     if type(record) is not dict or set(record) != _RECORD_FIELDS:
         raise SegmentedExchangeRejected("EXCHANGE_RECORD_SHAPE_INVALID")
     envelope = record.get("envelope")
@@ -611,6 +636,8 @@ def verify_and_decrypt_segmented_exchange(
 
     if not _resolver_admitted(key_resolver):
         raise SegmentedExchangeRejected("EXCHANGE_KEY_RESOLVER_NOT_INJECTED")
+    if key_resolver is None:
+        raise SegmentedExchangeRejected("EXCHANGE_DEPENDENCY_NARROWING_FAILED")
     if replay_guard is None or not callable(getattr(replay_guard, "consume", None)):
         raise SegmentedExchangeRejected("EXCHANGE_REPLAY_GUARD_NOT_INJECTED")
     envelope, bindings = _verified_envelope(

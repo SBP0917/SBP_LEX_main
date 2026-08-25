@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any, Mapping
 
@@ -24,22 +25,52 @@ _EXACT_VERSION = re.compile(
     r"^[0-9]+(?:\.[0-9]+)*(?:(?:a|b|rc)[0-9]+)?(?:\.post[0-9]+)?(?:\.dev[0-9]+)?(?:\+[a-z0-9]+(?:[._-][a-z0-9]+)*)?$"
 )
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
+_HASH_LOCK_LINE = re.compile(
+    r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)==(?P<version>[^ ]+) "
+    r"--hash=(?P<hash>sha256:[0-9a-f]{64})$"
+)
 
 PYTHON_REQUIREMENTS_PATH = "requirements.txt"
+PYTHON_PRODUCTION_HASH_LOCK_PATH = "requirements-production.lock.txt"
+PYTHON_ASSURANCE_HASH_LOCK_PATH = "requirements-test.lock.txt"
 PYTHON_LOCK_PATH = "python-dependencies.lock.json"
-PYTHON_LOCK_SCHEMA = "sbp.lex.v2.python-dependency-lock/1"
+PYTHON_LOCK_SCHEMA = "sbp.lex.v2.python-dependency-lock/2"
 PYTHON_LOCK_VALID = "COMMITTED_LOCK_VALID"
 PYTHON_LOCK_INVALID = "COMMITTED_LOCK_INVALID"
 PYTHON_LOCK_MISSING = "COMMITTED_LOCK_MISSING"
 
 _LOCK_FIELDS = {
-    "schema_id", "lock_sequence", "prior_lock_sha512", "requirements_sha512",
-    "target_environment", "rollback_guard", "packages",
+    "schema_id",
+    "lock_sequence",
+    "prior_lock_sha512",
+    "requirements_sha512",
+    "production_hash_lock_sha512",
+    "assurance_hash_lock_sha512",
+    "target_environment",
+    "rollback_guard",
+    "packages",
 }
-_ENVIRONMENT_FIELDS = {"implementation", "python_version", "abi_tag", "platform_tag"}
-_ROLLBACK_FIELDS = {"accepted_attempt_history_sequence", "accepted_attempt_history_sha512"}
-_PACKAGE_FIELDS = {"name", "version", "hashes", "scopes", "direct", "dependencies"}
-_SCOPES = ("development", "production")
+_ENVIRONMENT_FIELDS = {
+    "implementation",
+    "python_version",
+    "abi_tag",
+    "platform_tag",
+    "installed_scope",
+}
+_ROLLBACK_FIELDS = {
+    "accepted_attempt_history_sequence",
+    "accepted_attempt_history_sha512",
+}
+_PACKAGE_FIELDS = {
+    "name",
+    "version",
+    "hashes",
+    "scopes",
+    "direct_scopes",
+    "dependencies",
+}
+_SCOPES = ("assurance", "production")
+_ASSURANCE_DIRECT_REQUIREMENTS = frozenset({"pytest"})
 
 
 def _normalize_name(value: str) -> str:
@@ -77,7 +108,9 @@ def _parse_requirements(content: bytes) -> tuple[list[dict[str, str]], list[str]
             failures.append(error.code)
             continue
         if parsed["identity"] in seen:
-            failures.append("SUPPLY_CHAIN_PYTHON_REQUIREMENT_DUPLICATE_OR_CASE_VARIANT")
+            failures.append(
+                "SUPPLY_CHAIN_PYTHON_REQUIREMENT_DUPLICATE_OR_CASE_VARIANT"
+            )
             continue
         seen.add(parsed["identity"])
         requirements.append(parsed)
@@ -85,6 +118,58 @@ def _parse_requirements(content: bytes) -> tuple[list[dict[str, str]], list[str]
         failures.append("SUPPLY_CHAIN_PYTHON_REQUIREMENTS_EMPTY")
     requirements.sort(key=lambda item: item["identity"])
     return requirements, sorted(set(failures))
+
+
+def _parse_hash_lock(
+    content: bytes,
+    *,
+    label: str,
+) -> dict[str, dict[str, Any]]:
+    try:
+        lines = content.decode("utf-8", errors="strict").splitlines()
+    except UnicodeError as exc:
+        raise reject(
+            f"SUPPLY_CHAIN_PYTHON_{label}_HASH_LOCK_ENCODING_INVALID"
+        ) from exc
+    directives: list[str] = []
+    packages: dict[str, dict[str, Any]] = {}
+    ordered: list[str] = []
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("--"):
+            directives.append(line)
+            continue
+        matched = _HASH_LOCK_LINE.fullmatch(line)
+        try:
+            identity = _normalize_name(matched.group("name")) if matched else None
+        except PTDEVerificationError as exc:
+            raise reject(
+                f"SUPPLY_CHAIN_PYTHON_{label}_HASH_LOCK_ENTRY_INVALID"
+            ) from exc
+        if (
+            matched is None
+            or identity is None
+            or matched.group("name") != identity
+            or identity in packages
+            or _EXACT_VERSION.fullmatch(matched.group("version")) is None
+        ):
+            raise reject(
+                f"SUPPLY_CHAIN_PYTHON_{label}_HASH_LOCK_ENTRY_INVALID"
+            )
+        ordered.append(identity)
+        packages[identity] = {
+            "version": matched.group("version"),
+            "hashes": [matched.group("hash")],
+        }
+    if (
+        directives != ["--only-binary=:all:", "--require-hashes"]
+        or ordered != sorted(ordered)
+        or not packages
+    ):
+        raise reject(f"SUPPLY_CHAIN_PYTHON_{label}_HASH_LOCK_POLICY_INVALID")
+    return packages
 
 
 def _require_text(value: Any, *, code: str) -> str:
@@ -98,16 +183,22 @@ def _validate_target_environment(
     *,
     expected_environment: Mapping[str, str] | None,
 ) -> dict[str, str]:
-    environment = exact_fields(value, _ENVIRONMENT_FIELDS, code="SUPPLY_CHAIN_PYTHON_LOCK_ENVIRONMENT")
+    environment = exact_fields(
+        value,
+        _ENVIRONMENT_FIELDS,
+        code="SUPPLY_CHAIN_PYTHON_LOCK_ENVIRONMENT",
+    )
     for field in ("implementation", "abi_tag", "platform_tag"):
         text = _require_text(
-            environment[field], code="SUPPLY_CHAIN_PYTHON_LOCK_ENVIRONMENT_INVALID"
+            environment[field],
+            code="SUPPLY_CHAIN_PYTHON_LOCK_ENVIRONMENT_INVALID",
         )
         if _NAME.fullmatch(text) is None:
             raise reject("SUPPLY_CHAIN_PYTHON_LOCK_ENVIRONMENT_INVALID")
     if (
         type(environment["python_version"]) is not str
         or _EXACT_VERSION.fullmatch(environment["python_version"]) is None
+        or environment["installed_scope"] != "assurance"
     ):
         raise reject("SUPPLY_CHAIN_PYTHON_LOCK_ENVIRONMENT_INVALID")
     if expected_environment is not None and environment != dict(expected_environment):
@@ -116,17 +207,27 @@ def _validate_target_environment(
 
 
 def _validate_package(value: Any) -> dict[str, Any]:
-    package = exact_fields(value, _PACKAGE_FIELDS, code="SUPPLY_CHAIN_PYTHON_LOCK_PACKAGE")
+    package = exact_fields(
+        value,
+        _PACKAGE_FIELDS,
+        code="SUPPLY_CHAIN_PYTHON_LOCK_PACKAGE",
+    )
     identity = _normalize_name(package["name"])
     if package["name"] != identity:
         raise reject("SUPPLY_CHAIN_PYTHON_LOCK_PACKAGE_CASE_VARIANT")
-    if type(package["version"]) is not str or _EXACT_VERSION.fullmatch(package["version"]) is None:
+    if (
+        type(package["version"]) is not str
+        or _EXACT_VERSION.fullmatch(package["version"]) is None
+    ):
         raise reject("SUPPLY_CHAIN_PYTHON_LOCK_PACKAGE_UNPINNED")
     hashes = package["hashes"]
     if (
         type(hashes) is not list
         or not hashes
-        or any(type(item) is not str or _SHA256.fullmatch(item) is None for item in hashes)
+        or any(
+            type(item) is not str or _SHA256.fullmatch(item) is None
+            for item in hashes
+        )
         or hashes != sorted(hashes)
         or len(hashes) != len(set(hashes))
     ):
@@ -140,8 +241,14 @@ def _validate_package(value: Any) -> dict[str, Any]:
         or len(scopes) != len(set(scopes))
     ):
         raise reject("SUPPLY_CHAIN_PYTHON_LOCK_PACKAGE_SCOPE_INVALID")
-    if type(package["direct"]) is not bool:
-        raise reject("SUPPLY_CHAIN_PYTHON_LOCK_PACKAGE_DIRECT_INVALID")
+    direct_scopes = package["direct_scopes"]
+    if (
+        type(direct_scopes) is not list
+        or any(scope not in scopes for scope in direct_scopes)
+        or direct_scopes != sorted(direct_scopes)
+        or len(direct_scopes) != len(set(direct_scopes))
+    ):
+        raise reject("SUPPLY_CHAIN_PYTHON_LOCK_PACKAGE_DIRECT_SCOPES_INVALID")
     dependencies = package["dependencies"]
     if type(dependencies) is not list:
         raise reject("SUPPLY_CHAIN_PYTHON_LOCK_DEPENDENCIES_INVALID")
@@ -164,29 +271,55 @@ def validate_python_lock_document(
     value: Any,
     *,
     requirements: list[dict[str, str]],
+    production_hash_lock_content: bytes,
+    assurance_hash_lock_content: bytes,
     expected_environment: Mapping[str, str] | None = None,
-    expected_history_sequence: int | None = None,
-    expected_history_sha512: str | None = None,
+    expected_history_sequence: int,
+    expected_history_sha512: str,
 ) -> dict[str, Any]:
-    """Validate resolver-neutral, canonical lock evidence without granting authority."""
+    """Validate the sole governed /2 lock contract without granting authority."""
 
+    production_hash_lock = _parse_hash_lock(
+        production_hash_lock_content,
+        label="PRODUCTION",
+    )
+    assurance_hash_lock = _parse_hash_lock(
+        assurance_hash_lock_content,
+        label="ASSURANCE",
+    )
     lock = exact_fields(value, _LOCK_FIELDS, code="SUPPLY_CHAIN_PYTHON_LOCK")
     if lock["schema_id"] != PYTHON_LOCK_SCHEMA:
         raise reject("SUPPLY_CHAIN_PYTHON_LOCK_SCHEMA_INVALID")
     lock_sequence = positive_int(
-        lock["lock_sequence"], code="SUPPLY_CHAIN_PYTHON_LOCK_SEQUENCE_INVALID"
+        lock["lock_sequence"],
+        code="SUPPLY_CHAIN_PYTHON_LOCK_SEQUENCE_INVALID",
     )
     prior = lock["prior_lock_sha512"]
     if lock_sequence == 1:
         if prior != "GENESIS":
             raise reject("SUPPLY_CHAIN_PYTHON_LOCK_ROLLBACK_EVIDENCE_INVALID")
     else:
-        require_sha512(prior, "SUPPLY_CHAIN_PYTHON_LOCK_ROLLBACK_EVIDENCE_INVALID")
+        require_sha512(
+            prior,
+            "SUPPLY_CHAIN_PYTHON_LOCK_ROLLBACK_EVIDENCE_INVALID",
+        )
     if lock["requirements_sha512"] != canonical_sha512(requirements):
         raise reject("SUPPLY_CHAIN_PYTHON_LOCK_REQUIREMENTS_MISMATCH")
-    _validate_target_environment(lock["target_environment"], expected_environment=expected_environment)
+    if (
+        lock["production_hash_lock_sha512"]
+        != hashlib.sha512(production_hash_lock_content).hexdigest()
+        or lock["assurance_hash_lock_sha512"]
+        != hashlib.sha512(assurance_hash_lock_content).hexdigest()
+    ):
+        raise reject("SUPPLY_CHAIN_PYTHON_HASH_LOCK_BINDING_MISMATCH")
+    _validate_target_environment(
+        lock["target_environment"],
+        expected_environment=expected_environment,
+    )
     rollback = exact_fields(
-        lock["rollback_guard"], _ROLLBACK_FIELDS, code="SUPPLY_CHAIN_PYTHON_LOCK_ROLLBACK_GUARD"
+        lock["rollback_guard"],
+        _ROLLBACK_FIELDS,
+        code="SUPPLY_CHAIN_PYTHON_LOCK_ROLLBACK_GUARD",
     )
     history_sequence = rollback["accepted_attempt_history_sequence"]
     if type(history_sequence) is not int or history_sequence < 0:
@@ -195,11 +328,18 @@ def validate_python_lock_document(
         rollback["accepted_attempt_history_sha512"],
         "SUPPLY_CHAIN_PYTHON_LOCK_ROLLBACK_HISTORY_INVALID",
     )
-    if lock_sequence != history_sequence + 1:
+    if (
+        type(expected_history_sequence) is not int
+        or expected_history_sequence < 0
+        or lock_sequence != history_sequence + 1
+        or history_sequence != expected_history_sequence
+    ):
         raise reject("SUPPLY_CHAIN_PYTHON_LOCK_ROLLBACK_SEQUENCE_MISMATCH")
-    if expected_history_sequence is not None and history_sequence != expected_history_sequence:
-        raise reject("SUPPLY_CHAIN_PYTHON_LOCK_ROLLBACK_SEQUENCE_MISMATCH")
-    if expected_history_sha512 is not None and history_sha512 != expected_history_sha512:
+    expected_history = require_sha512(
+        expected_history_sha512,
+        "SUPPLY_CHAIN_PYTHON_LOCK_EXPECTED_HISTORY_INVALID",
+    )
+    if history_sha512 != expected_history:
         raise reject("SUPPLY_CHAIN_PYTHON_LOCK_ROLLBACK_HISTORY_MISMATCH")
 
     packages_raw = lock["packages"]
@@ -217,37 +357,88 @@ def validate_python_lock_document(
     ):
         raise reject("SUPPLY_CHAIN_PYTHON_LOCK_DEPENDENCY_MISSING")
 
-    expected_direct = {item["identity"]: item["version"] for item in requirements}
-    actual_direct = {
-        item["name"]: item["version"] for item in packages if item["direct"]
+    expected_production_direct = {
+        item["identity"]: item["version"] for item in requirements
     }
-    if expected_direct != actual_direct or any(
-        "production" not in item["scopes"] for item in packages if item["direct"]
+    if not _ASSURANCE_DIRECT_REQUIREMENTS.issubset(assurance_hash_lock):
+        raise reject("SUPPLY_CHAIN_PYTHON_LOCK_DIRECT_REQUIREMENTS_MISMATCH")
+    expected_assurance_direct = {
+        **expected_production_direct,
+        **{
+            name: assurance_hash_lock[name]["version"]
+            for name in _ASSURANCE_DIRECT_REQUIREMENTS
+        },
+    }
+    actual_direct_by_scope = {
+        scope: {
+            item["name"]: item["version"]
+            for item in packages
+            if scope in item["direct_scopes"]
+        }
+        for scope in _SCOPES
+    }
+    if (
+        expected_production_direct != actual_direct_by_scope["production"]
+        or expected_assurance_direct != actual_direct_by_scope["assurance"]
     ):
         raise reject("SUPPLY_CHAIN_PYTHON_LOCK_DIRECT_REQUIREMENTS_MISMATCH")
 
-    reachable = set(actual_direct)
-    pending = list(actual_direct)
-    while pending:
-        for dependency in by_identity[pending.pop()]["dependencies"]:
-            if dependency not in reachable:
-                reachable.add(dependency)
-                pending.append(dependency)
-    if reachable != set(by_identity):
-        raise reject("SUPPLY_CHAIN_PYTHON_LOCK_EXTRA_PACKAGE")
+    for scope, expected_hash_lock in (
+        ("production", production_hash_lock),
+        ("assurance", assurance_hash_lock),
+    ):
+        scoped = {
+            item["name"]: item for item in packages if scope in item["scopes"]
+        }
+        if set(scoped) != set(expected_hash_lock):
+            raise reject("SUPPLY_CHAIN_PYTHON_LOCK_SCOPE_CLOSURE_MISMATCH")
+        for name, item in scoped.items():
+            if (
+                item["version"] != expected_hash_lock[name]["version"]
+                or item["hashes"] != expected_hash_lock[name]["hashes"]
+                or any(
+                    dependency not in scoped for dependency in item["dependencies"]
+                )
+            ):
+                raise reject("SUPPLY_CHAIN_PYTHON_LOCK_SCOPE_PACKAGE_MISMATCH")
+        reachable = set(actual_direct_by_scope[scope])
+        pending = list(reachable)
+        while pending:
+            for dependency in scoped[pending.pop()]["dependencies"]:
+                if dependency not in reachable:
+                    reachable.add(dependency)
+                    pending.append(dependency)
+        if reachable != set(scoped):
+            raise reject("SUPPLY_CHAIN_PYTHON_LOCK_EXTRA_PACKAGE")
     return lock
 
 
 def evaluate_python_dependency_evidence(
     requirements_content: bytes,
+    production_hash_lock_content: bytes | None,
+    assurance_hash_lock_content: bytes | None,
     lock_document: Any | None,
     *,
     expected_environment: Mapping[str, str] | None = None,
-    expected_history_sequence: int | None = None,
-    expected_history_sha512: str | None = None,
+    expected_history_sequence: int,
+    expected_history_sha512: str,
 ) -> dict[str, Any]:
     requirements, failures = _parse_requirements(requirements_content)
     requirement_failures = list(failures)
+    if production_hash_lock_content is None:
+        failures.append("SUPPLY_CHAIN_PYTHON_PRODUCTION_HASH_LOCK_MISSING")
+    if assurance_hash_lock_content is None:
+        failures.append("SUPPLY_CHAIN_PYTHON_ASSURANCE_HASH_LOCK_MISSING")
+    production_hash_lock_sha512 = (
+        hashlib.sha512(production_hash_lock_content).hexdigest()
+        if production_hash_lock_content is not None
+        else None
+    )
+    assurance_hash_lock_sha512 = (
+        hashlib.sha512(assurance_hash_lock_content).hexdigest()
+        if assurance_hash_lock_content is not None
+        else None
+    )
     if lock_document is None:
         failures.append("SUPPLY_CHAIN_PYTHON_LOCK_MISSING")
         lock_status = PYTHON_LOCK_MISSING
@@ -255,9 +446,16 @@ def evaluate_python_dependency_evidence(
         lock_status = PYTHON_LOCK_INVALID
     else:
         try:
+            if (
+                production_hash_lock_content is None
+                or assurance_hash_lock_content is None
+            ):
+                raise reject("SUPPLY_CHAIN_PYTHON_HASH_LOCK_MISSING")
             validate_python_lock_document(
                 lock_document,
                 requirements=requirements,
+                production_hash_lock_content=production_hash_lock_content,
+                assurance_hash_lock_content=assurance_hash_lock_content,
                 expected_environment=expected_environment,
                 expected_history_sequence=expected_history_sequence,
                 expected_history_sha512=expected_history_sha512,
@@ -269,49 +467,104 @@ def evaluate_python_dependency_evidence(
     return {
         "requirements": requirements,
         "requirements_sha512": canonical_sha512(requirements),
-        "requirements_status": "EXACTLY_PINNED" if not requirement_failures else "INVALID_OR_UNPINNED",
+        "production_hash_lock_path": PYTHON_PRODUCTION_HASH_LOCK_PATH,
+        "production_hash_lock_sha512": production_hash_lock_sha512,
+        "assurance_hash_lock_path": PYTHON_ASSURANCE_HASH_LOCK_PATH,
+        "assurance_hash_lock_sha512": assurance_hash_lock_sha512,
+        "requirements_status": (
+            "EXACTLY_PINNED" if not requirement_failures else "INVALID_OR_UNPINNED"
+        ),
         "lock_path": PYTHON_LOCK_PATH,
         "lock_status": lock_status,
         "lock_failures": sorted(set(failures)),
-        "dependency_evidence_status": "COMPLETE" if lock_status == PYTHON_LOCK_VALID else "INCOMPLETE",
+        "dependency_evidence_status": (
+            "COMPLETE" if lock_status == PYTHON_LOCK_VALID else "INCOMPLETE"
+        ),
         "runtime_attachment": "NONE",
         "authority_granted": False,
     }
 
 
-def build_python_dependency_inputs(binding: PObjectBinding) -> dict[str, Any]:
-    """Bind declarations and an explicit canonical lock artifact to immutable P."""
+def _committed_blob_input(
+    binding: PObjectBinding,
+    path: str,
+    *,
+    label: str,
+) -> tuple[dict[str, Any] | None, bytes | None, str | None]:
+    matches = [
+        candidate
+        for candidate in binding.tree
+        if candidate.casefold() == path.casefold()
+    ]
+    if matches == [path]:
+        return binding.tree[path].record(), p_blob_content(binding, path), None
+    if matches:
+        return (
+            None,
+            None,
+            f"SUPPLY_CHAIN_PYTHON_{label}_PATH_CASE_VARIANT_OR_DUPLICATE",
+        )
+    return None, None, f"SUPPLY_CHAIN_PYTHON_{label}_MISSING"
 
-    content = p_blob_content(binding, PYTHON_REQUIREMENTS_PATH)
-    requirement_record = binding.tree[PYTHON_REQUIREMENTS_PATH].record()
-    matches = [path for path in binding.tree if path.casefold() == PYTHON_LOCK_PATH.casefold()]
-    lock_record: dict[str, Any] | None = None
+
+def build_python_dependency_inputs(binding: PObjectBinding) -> dict[str, Any]:
+    """Bind the governed /2 lock and both exact hash locks to immutable P."""
+
+    requirements_content = p_blob_content(binding, PYTHON_REQUIREMENTS_PATH)
+    requirements_record = binding.tree[PYTHON_REQUIREMENTS_PATH].record()
+    production_record, production_content, production_failure = _committed_blob_input(
+        binding,
+        PYTHON_PRODUCTION_HASH_LOCK_PATH,
+        label="PRODUCTION_HASH_LOCK",
+    )
+    assurance_record, assurance_content, assurance_failure = _committed_blob_input(
+        binding,
+        PYTHON_ASSURANCE_HASH_LOCK_PATH,
+        label="ASSURANCE_HASH_LOCK",
+    )
+    lock_record, lock_content, lock_failure = _committed_blob_input(
+        binding,
+        PYTHON_LOCK_PATH,
+        label="LOCK",
+    )
     lock_document: dict[str, Any] | None = None
-    path_failure: str | None = None
-    if matches == [PYTHON_LOCK_PATH]:
-        lock_record = binding.tree[PYTHON_LOCK_PATH].record()
+    if lock_content is not None:
         try:
             lock_document = strict_json_document(
-                p_blob_content(binding, PYTHON_LOCK_PATH), code="SUPPLY_CHAIN_PYTHON_LOCK"
+                lock_content,
+                code="SUPPLY_CHAIN_PYTHON_LOCK",
             )
         except PTDEVerificationError as error:
-            path_failure = error.code
-    elif matches:
-        path_failure = "SUPPLY_CHAIN_PYTHON_LOCK_PATH_CASE_VARIANT_OR_DUPLICATE"
+            lock_failure = error.code
     evidence = evaluate_python_dependency_evidence(
-        content,
+        requirements_content,
+        production_content,
+        assurance_content,
         lock_document,
         expected_history_sequence=binding.accepted_attempt_history.sequence,
         expected_history_sha512=binding.expected_attempt_history_sha512,
     )
-    if path_failure is not None:
-        evidence["lock_status"] = PYTHON_LOCK_INVALID
+    path_failures = {
+        failure
+        for failure in (production_failure, assurance_failure, lock_failure)
+        if failure is not None
+    }
+    if path_failures:
+        evidence["lock_status"] = (
+            PYTHON_LOCK_MISSING
+            if lock_record is None
+            else PYTHON_LOCK_INVALID
+        )
         evidence["dependency_evidence_status"] = "INCOMPLETE"
-        evidence["lock_failures"] = sorted(set([*evidence["lock_failures"], path_failure]))
+        evidence["lock_failures"] = sorted(
+            {*evidence["lock_failures"], *path_failures}
+        )
     payload = {
-        "schema_id": "sbp.lex.v2.supply-chain.python-inputs/1",
+        "schema_id": "sbp.lex.v2.supply-chain.python-inputs/2",
         "p_commit_oid": binding.commit.oid,
-        "requirements_blob": requirement_record,
+        "requirements_blob": requirements_record,
+        "production_hash_lock_blob": production_record,
+        "assurance_hash_lock_blob": assurance_record,
         "python_lock_blob": lock_record,
         **evidence,
         "host_distribution_observation": "REQUIRES_DECLARED_T_OR_E_LANE",
@@ -322,7 +575,14 @@ def build_python_dependency_inputs(binding: PObjectBinding) -> dict[str, Any]:
 
 
 __all__ = [
-    "PYTHON_LOCK_INVALID", "PYTHON_LOCK_MISSING", "PYTHON_LOCK_PATH",
-    "PYTHON_LOCK_SCHEMA", "PYTHON_LOCK_VALID", "build_python_dependency_inputs",
-    "evaluate_python_dependency_evidence", "validate_python_lock_document",
+    "PYTHON_ASSURANCE_HASH_LOCK_PATH",
+    "PYTHON_LOCK_INVALID",
+    "PYTHON_LOCK_MISSING",
+    "PYTHON_LOCK_PATH",
+    "PYTHON_LOCK_SCHEMA",
+    "PYTHON_LOCK_VALID",
+    "PYTHON_PRODUCTION_HASH_LOCK_PATH",
+    "build_python_dependency_inputs",
+    "evaluate_python_dependency_evidence",
+    "validate_python_lock_document",
 ]

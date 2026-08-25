@@ -137,12 +137,14 @@ class ProceduralTruthEngine(BaseEngine):
             record["required_threshold_percentage"] = "95.000%"
 
         start_time = time.time()
+        attempts = 0
 
         while True:
             fact_verified_ratio = self._get_fact_verified_ratio(payload)
             uncertainty_ratio = 1.0 - fact_verified_ratio
 
-            record["attempts"] += 1
+            attempts += 1
+            record["attempts"] = attempts
             record["fact_verified_ratio"] = fact_verified_ratio
             record["fact_verified_percentage"] = f"{fact_verified_ratio * 100:.3f}%"
             record["uncertainty_ratio"] = uncertainty_ratio
@@ -191,7 +193,7 @@ class ProceduralTruthEngine(BaseEngine):
                     )
 
             elapsed = time.time() - start_time
-            if record["attempts"] >= PTODF_MAX_REEVALUATIONS:
+            if attempts >= PTODF_MAX_REEVALUATIONS:
                 break
             if elapsed >= PTODF_MAX_SEARCH_TIME:
                 break

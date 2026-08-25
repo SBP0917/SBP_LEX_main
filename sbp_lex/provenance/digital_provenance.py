@@ -24,7 +24,7 @@ import json
 from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha512
-from typing import Any, Final, Protocol
+from typing import Any, Final, Protocol, TypeGuard
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
@@ -49,6 +49,7 @@ from sbp_lex.security.integrity import (
 from sbp_lex.security.signature_provider import (
     SignatureProvider,
     build_legacy_non_effect_signed_object,
+    build_signed_object,
 )
 
 
@@ -61,6 +62,9 @@ OWNER_PIN_SCHEMA: Final = "SBP_LEX_PROVENANCE_OWNER_PIN_V1"
 REGISTRY_SNAPSHOT_SCHEMA: Final = "SBP_LEX_PROVENANCE_REGISTRY_SNAPSHOT_V1"
 CREDENTIAL_INCLUSION_SCHEMA: Final = "SBP_LEX_PROVENANCE_CREDENTIAL_INCLUSION_V1"
 VERIFICATION_RECEIPT_SCHEMA: Final = "SBP_LEX_PROVENANCE_VERIFICATION_RECEIPT_V2"
+PROVENANCE_VERIFICATION_RECEIPT_PURPOSE: Final = (
+    "SBP_LEX_V2_PROVENANCE_VERIFICATION_RECEIPT"
+)
 REVOCATION_HEAD_SCHEMA: Final = "SBP_LEX_PROVENANCE_REVOCATION_HEAD_V1"
 DURABLE_TRANSITION_RECEIPT_SCHEMA: Final = (
     "SBP_LEX_PROVENANCE_DURABLE_TRANSITION_RECEIPT_V1"
@@ -361,6 +365,10 @@ class ProvenanceDeploymentTrustContext:
         revocation_head_source: ProvenanceRevocationHeadSource,
         durable_context: DurableProvenanceContext,
         verification_receipt_provider: ProvenanceVerificationReceiptProvider,
+        verification_receipt_trust_context: (
+            HybridVerificationContext | None
+        ) = None,
+        verification_receipt_owner_pinned_context_digest: str | None = None,
         test_only: bool = False,
     ) -> "ProvenanceDeploymentTrustContext":
         registry_binding = _extract_provider_binding(
@@ -371,9 +379,19 @@ class ProvenanceDeploymentTrustContext:
             durable_context,
             allow_legacy_non_effect=True,
         )
-        receipt_binding = _extract_provider_binding(
-            verification_receipt_provider,
-            allow_legacy_non_effect=True,
+        receipt_binding = (
+            _extract_provider_binding(
+                verification_receipt_provider,
+                allow_legacy_non_effect=True,
+            )
+            if test_only
+            else _externally_pinned_hybrid_binding(
+                verification_receipt_provider,
+                trust_context=verification_receipt_trust_context,
+                owner_pinned_context_digest=(
+                    verification_receipt_owner_pinned_context_digest
+                ),
+            )
         )
         clock_binding = _extract_provider_binding(
             trusted_clock,
@@ -449,7 +467,7 @@ class ProvenanceDecision:
         return self.verification_receipt["digest"]
 
 
-def _text(value: Any) -> bool:
+def _text(value: Any) -> TypeGuard[str]:
     return type(value) is str and bool(value)
 
 
@@ -550,9 +568,11 @@ def _extract_provider_binding(
     effect_authority = _safe_getattr(provider, "effect_authority")
     if (
         raw is None
-        or not all(_text(value) for value in (
-            provider_id, algorithm, key_id, fingerprint, custody_class,
-        ))
+        or fingerprint is None
+        or not _text(provider_id)
+        or not _text(algorithm)
+        or not _text(key_id)
+        or not _text(custody_class)
         or algorithm != "Ed25519"
         or key_id != fingerprint
         or effect_authority is not False
@@ -571,8 +591,59 @@ def _extract_provider_binding(
     )
 
 
+def _externally_pinned_hybrid_binding(
+    provider: Any,
+    *,
+    trust_context: HybridVerificationContext | None,
+    owner_pinned_context_digest: str | None,
+) -> _PinnedEd25519Binding | None:
+    """Bind production verification only to independently supplied public material."""
+
+    try:
+        if (
+            not is_hybrid_provider(provider)
+            or not isinstance(trust_context, HybridVerificationContext)
+            or trust_context.signer_class != PRODUCTION_SIGNER
+            or trust_context.effect_authority is not False
+            or trust_context.allow_test_only
+            or type(owner_pinned_context_digest) is not str
+            or not is_sha512(owner_pinned_context_digest)
+            or not hmac.compare_digest(
+                trust_context.context_digest,
+                owner_pinned_context_digest,
+            )
+            or _safe_getattr(provider, "provider_id")
+            != trust_context.provider_id
+            or _safe_getattr(provider, "algorithm") != HYBRID_SUITE_ID
+            or _safe_getattr(provider, "key_id")
+            != trust_context.ordered_key_set_digest
+            or _safe_getattr(provider, "custody_class")
+            != trust_context.custody_class
+            or _safe_getattr(provider, "effect_authority") is not False
+        ):
+            return None
+        return _PinnedEd25519Binding(
+            provider_id=trust_context.provider_id,
+            algorithm=HYBRID_SUITE_ID,
+            key_id=trust_context.ordered_key_set_digest,
+            custody_class=trust_context.custody_class,
+            effect_authority=False,
+            public_key_bytes=canonical_json_bytes(trust_context.public_record()),
+            public_key_fingerprint=owner_pinned_context_digest,
+            hybrid_context=trust_context,
+            legacy_non_effect_only=False,
+        )
+    except (HybridSignatureError, TypeError, ValueError):
+        return None
+    except Exception:
+        return None
+
+
 def _independent_signature_valid(
-    obj: Any, binding: _PinnedEd25519Binding | None
+    obj: Any,
+    binding: _PinnedEd25519Binding | None,
+    *,
+    expected_purpose: str = GENERIC_SIGNING_PURPOSE,
 ) -> bool:
     """Verify only with immutable public material measured once."""
 
@@ -586,7 +657,7 @@ def _independent_signature_valid(
                 obj,
                 trust_context=binding.hybrid_context,
                 owner_pinned_context_digest=binding.public_key_fingerprint,
-                expected_purpose=GENERIC_SIGNING_PURPOSE,
+                expected_purpose=expected_purpose,
                 require_effect_authority=False,
             )
         except (HybridSignatureError, TypeError, ValueError):
@@ -750,12 +821,23 @@ def _finish(
     receipt_authenticated = False
     if isinstance(trust_context, ProvenanceDeploymentTrustContext):
         try:
-            receipt = build_legacy_non_effect_signed_object(
-                receipt_payload,
-                provider=trust_context.verification_receipt_provider,
-            )
+            if trust_context.deployment_mode == PRODUCTION_MODE:
+                receipt = build_signed_object(
+                    receipt_payload,
+                    provider=trust_context.verification_receipt_provider,
+                    purpose=PROVENANCE_VERIFICATION_RECEIPT_PURPOSE,
+                )
+            elif trust_context.deployment_mode == TEST_ONLY_MODE:
+                receipt = build_legacy_non_effect_signed_object(
+                    receipt_payload,
+                    provider=trust_context.verification_receipt_provider,
+                )
+            else:
+                raise ValueError("PROVENANCE_DEPLOYMENT_MODE_INVALID")
             receipt_authenticated = _independent_signature_valid(
-                receipt, trust_context.verification_receipt_binding
+                receipt,
+                trust_context.verification_receipt_binding,
+                expected_purpose=PROVENANCE_VERIFICATION_RECEIPT_PURPOSE,
             )
         except Exception:
             receipt = {}
@@ -822,7 +904,9 @@ def verify_provenance_verification_receipt(
                 for field, expected in NO_AUTHORIZATION_EFFECT.items()
             )
             and _independent_signature_valid(
-                receipt, trust_context.verification_receipt_binding
+                receipt,
+                trust_context.verification_receipt_binding,
+                expected_purpose=PROVENANCE_VERIFICATION_RECEIPT_PURPOSE,
             )
         )
     except Exception:
@@ -963,7 +1047,9 @@ def _inclusion_admission(
             and authority_binding.legacy_non_effect_only is True
         ),
     )
-    expected_binding = None if binding is None else {
+    if binding is None:
+        return None, "PROVENANCE_PROVIDER_PUBLIC_KEY_MISMATCH"
+    expected_binding = {
         "provider_id": binding.provider_id,
         "algorithm": binding.algorithm,
         "key_id": binding.key_id,
@@ -971,7 +1057,7 @@ def _inclusion_admission(
         "custody_class": binding.custody_class,
         "effect_authority": binding.effect_authority,
     }
-    if expected_binding is None or any(
+    if any(
         inclusion.get(k) != value for k, value in expected_binding.items()
     ):
         return None, "PROVENANCE_PROVIDER_PUBLIC_KEY_MISMATCH"
@@ -1194,7 +1280,9 @@ def _edge_error(
 
 def _connected_acyclic(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> bool:
     identifiers = {node["node_id"] for node in nodes}
-    adjacency = {identifier: [] for identifier in identifiers}
+    adjacency: dict[str, list[str]] = {
+        identifier: [] for identifier in identifiers
+    }
     indegree = {identifier: 0 for identifier in identifiers}
     for edge in edges:
         source = edge["from_node_id"]
@@ -1689,7 +1777,12 @@ def _verify_digital_provenance(
     context_error = _deployment_context_error(trust_context)
     if context_error is not None:
         return deny(context_error)
-    assert owner_pin is not None and expected_context is not None
+    if (
+        type(owner_pin) is not dict
+        or not _text(expected_context)
+        or not _text(durable_context_id)
+    ):
+        return deny("PROVENANCE_DEPLOYMENT_TRUST_CONTEXT_INVALID")
     clock = trust_context.trusted_clock
     durable_context = trust_context.durable_context
     authority_binding = trust_context.registry_authority_binding
@@ -1752,7 +1845,8 @@ def _verify_digital_provenance(
     )
     if snapshot_error is not None or admissions is None:
         return deny(snapshot_error or "PROVENANCE_REGISTRY_SNAPSHOT_INVALID")
-    assert registry_snapshot is not None
+    if type(registry_snapshot) is not dict:
+        return deny("PROVENANCE_REGISTRY_SNAPSHOT_INVALID")
 
     revocation_source = trust_context.revocation_head_source
     if not _revocation_head_source_exact(revocation_source, expected_context):

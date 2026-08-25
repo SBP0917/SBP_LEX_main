@@ -11,6 +11,8 @@ from copy import deepcopy
 from typing import Any, Final
 
 from sbp_lex.compliance.australian_minor_access import (
+    AGE_AT_LEAST_16,
+    AGE_INDETERMINATE,
     RESULT_NOT_APPLICABLE,
     RESULT_PASS as AUSTRALIAN_MINOR_ACCESS_PASS,
 )
@@ -24,6 +26,7 @@ from sbp_lex.identity.sovereign_identity import IDENTITY_VERIFIED
 from sbp_lex.interface.authority_boundary import BOUNDARY_PASS
 from sbp_lex.provenance.digital_provenance import (
     ADMIT as DIGITAL_PROVENANCE_ADMIT,
+    DURABLE_CLAIMED,
     NO_AUTHORIZATION_EFFECT as PROVENANCE_NO_AUTHORIZATION_EFFECT,
 )
 from sbp_lex.security.integrity import (
@@ -216,6 +219,22 @@ def _provenance_receipt_valid(state: dict[str, Any]) -> bool:
         or not is_sha512(receipt.get("digest"))
         or receipt.get("result") != DIGITAL_PROVENANCE_ADMIT
         or receipt.get("graph_digest") != state.get("digital_provenance_digest")
+        or receipt.get("release_manifest_digest")
+        != state.get("application_integrity_manifest_digest")
+        or receipt.get("runtime_measurement_digest")
+        != state.get("application_integrity_runtime_measurement_digest")
+        or receipt.get("durable_claim_result") != DURABLE_CLAIMED
+        or any(
+            not is_sha512(receipt.get(field))
+            for field in (
+                "durable_claim_digest",
+                "durable_transition_receipt_digest",
+                "durable_live_heads_digest",
+                "revocation_head_digest",
+                "clock_evidence_digest",
+            )
+        )
+        or receipt.get("production_durable_storage_proven_by_module") is not False
         or receipt.get("lineage_authenticated") is not True
         or receipt.get("lineage_only") is not True
         or any(
@@ -280,11 +299,17 @@ def _authority_boundary_valid(state: dict[str, Any]) -> bool:
 
 def _impersonation_valid(state: dict[str, Any]) -> bool:
     record = state.get("impersonation_protection_record")
+    trace = state.get("impersonation_protection_trace")
     return (
         state.get("impersonation_protection_result") == IMPERSONATION_PASS
         and is_sha512(state.get("impersonation_protection_digest"))
         and type(record) is dict
+        and type(trace) is list
+        and bool(trace)
+        and trace[-1] == record
+        and state.get("impersonation_protection_digest") == _safe_hash(trace)
         and record.get("result") == IMPERSONATION_PASS
+        and state.get("impersonation_protection_reason") == record.get("reason")
         and _exact_false_fields(record, _IMPERSONATION_FALSE_FIELDS)
         and all(
             state.get(f"impersonation_{field}") is False
@@ -303,12 +328,25 @@ def _australian_minor_record_digest(record: Any) -> str | None:
 
 def _australian_minor_access_valid(state: dict[str, Any]) -> bool:
     record = state.get("australian_minor_access")
+    if type(record) is not dict:
+        return False
+    result = record.get("result")
+    result_contract_valid = (
+        result == AUSTRALIAN_MINOR_ACCESS_PASS
+        and record.get("applicable") is True
+        and record.get("age_assurance_result") == AGE_AT_LEAST_16
+        and record.get("privacy_data_destroyed") is True
+    ) or (
+        result == RESULT_NOT_APPLICABLE
+        and record.get("applicable") is False
+        and record.get("age_assurance_result") == AGE_INDETERMINATE
+        and record.get("privacy_data_destroyed") is None
+    )
     return (
         type(record) is dict
-        and record.get("result") in {
-            AUSTRALIAN_MINOR_ACCESS_PASS,
-            RESULT_NOT_APPLICABLE,
-        }
+        and result_contract_valid
+        and record.get("reason") == "AUTHENTICATED_DETERMINATION"
+        and record.get("youth_penalty_applied") is False
         and _australian_minor_record_digest(record) is not None
         and _exact_false_fields(record, _AUSTRALIAN_MINOR_FALSE_FIELDS)
     )
@@ -411,6 +449,7 @@ def evaluate_foundational_baseline(state: Any) -> dict[str, Any]:
 
     malformed = type(state) is not dict
     target: dict[str, Any] = state if not malformed else {}
+    reason: str | None
     if malformed:
         result = FOUNDATIONAL_BASELINE_DENY
         reason = "FOUNDATIONAL_BASELINE_STATE_INVALID"
@@ -524,6 +563,8 @@ def verify_foundational_baseline(
             return True
         chain = state.get("hash_chain")
         state_hash = state.get("state_hash")
+        if type(chain) is not list:
+            return False
         if not verify_hash_chain_entries(chain, state_hash):
             return False
         index = state.get("foundational_baseline_hash_binding_index")

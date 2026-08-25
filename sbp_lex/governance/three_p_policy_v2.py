@@ -139,6 +139,7 @@ def validate_three_p_policy(policy: Any) -> tuple[str, ...]:
                     or type(rule.get("field")) is not str
                     or not rule.get("field")
                     or rule.get("comparator") not in _COMPARATORS
+                    or type(thresholds) is not dict
                     or rule.get("threshold_id") not in thresholds
                 ):
                     errors.append(f"{primitive}_RULE_INVALID")
@@ -230,15 +231,21 @@ class ImplementationDefinedV2ThreePEvaluator:
         errors = validate_three_p_policy(self.policy)
         if errors:
             return errors[0]
+        if type(self.policy) is not dict:
+            return "POLICY_DOCUMENT_INVALID"
         lifecycle = self.policy["lifecycle"]
         if lifecycle["state"] != "ACTIVE":
             return f"POLICY_{lifecycle['state']}"
         evaluation_time = _utc(snapshot.get("evaluation_time"))
         if evaluation_time is None:
             return "EVALUATION_TIME_INVALID"
-        if evaluation_time < _utc(self.policy["effective_from"]):
+        effective_from = _utc(self.policy["effective_from"])
+        expires_at = _utc(self.policy["expires_at"])
+        if effective_from is None or expires_at is None:
+            return "POLICY_TIME_WINDOW_INVALID"
+        if evaluation_time < effective_from:
             return "POLICY_NOT_YET_EFFECTIVE"
-        if evaluation_time >= _utc(self.policy["expires_at"]):
+        if evaluation_time >= expires_at:
             return "POLICY_EXPIRED"
         if self.evidence_resolver is None:
             return "EVIDENCE_RESOLVER_NOT_SUPPLIED"
@@ -246,15 +253,23 @@ class ImplementationDefinedV2ThreePEvaluator:
 
     def evaluate(self, *, stage: str, snapshot: dict[str, Any]) -> dict[str, Any]:
         policy_error = self._policy_error(snapshot)
+        policy = self.policy if type(self.policy) is dict else None
+        resolver = self.evidence_resolver
         determinations: dict[str, Any] = {}
         for primitive in THREE_P_PRIMITIVES:
             references: list[dict[str, str]] = []
             results: list[bool | None] = []
-            spec = self.policy["primitives"][primitive] if policy_error is None else None
+            spec = (
+                policy["primitives"][primitive]
+                if policy_error is None and policy is not None
+                else None
+            )
             if spec is not None:
                 for rule in spec["rules"]:
                     try:
-                        evidence = self.evidence_resolver(
+                        if resolver is None:
+                            raise TypeError("EVIDENCE_RESOLVER_NOT_SUPPLIED")
+                        evidence = resolver(
                             rule["evidence_type"],
                             rule["authority_id"],
                             deepcopy(snapshot),
@@ -264,13 +279,17 @@ class ImplementationDefinedV2ThreePEvaluator:
                     valid = (
                         type(evidence) is dict
                         and evidence.get("authority_id") == rule["authority_id"]
-                        and rule["authority_id"] in self.policy["authority"]["evidence_authorities"]
+                        and policy is not None
+                        and rule["authority_id"] in policy["authority"]["evidence_authorities"]
                         and type(evidence.get("evidence_id")) is str
                         and type(evidence.get("source")) is str
                         and is_sha512(evidence.get("digest"))
                         and type(evidence.get("values")) is dict
                     )
                     if not valid:
+                        results.append(None)
+                        continue
+                    if type(evidence) is not dict:
                         results.append(None)
                         continue
                     references.append({key: evidence[key] for key in ("evidence_id", "source", "digest")})

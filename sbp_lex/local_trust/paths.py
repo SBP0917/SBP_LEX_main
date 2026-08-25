@@ -6,9 +6,10 @@ import json
 import os
 import stat
 import unicodedata
+from collections.abc import Iterable
 from hashlib import sha512
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable
+from typing import Any
 
 from .constants import (
     IGNORED_DIRECTORY_NAMES,
@@ -17,7 +18,6 @@ from .constants import (
     MAX_FILE_BYTES,
 )
 from .digests import canonical_bytes
-
 
 _WINDOWS_RESERVED = frozenset(
     {"CON", "PRN", "AUX", "NUL"}
@@ -377,10 +377,14 @@ def write_bytes_exclusive(document: bytes, path: Path) -> Path:
 
 
 def ensure_unique_sorted_paths(records: Iterable[dict[str, Any]]) -> bool:
-    paths = [record.get("path") for record in records]
+    paths: list[str] = []
+    for record in records:
+        path = record.get("path")
+        if type(path) is not str:
+            return False
+        paths.append(path)
     return (
-        all(type(path) is str for path in paths)
-        and paths == sorted(paths)
+        paths == sorted(paths)
         and len(paths) == len(set(paths))
         and len({path.casefold() for path in paths}) == len(paths)
     )
@@ -396,6 +400,6 @@ __all__ = [
     "resolve_safe_path",
     "strict_load_json",
     "validated_root",
-    "write_json_exclusive",
     "write_bytes_exclusive",
+    "write_json_exclusive",
 ]

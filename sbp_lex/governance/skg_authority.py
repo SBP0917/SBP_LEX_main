@@ -137,13 +137,15 @@ def _trust_context_owner_pinned(
     trust_context: HybridVerificationContext | None,
     owner_pinned_context_digest: str | None,
 ) -> bool:
-    return (
-        isinstance(trust_context, HybridVerificationContext)
-        and is_sha512(owner_pinned_context_digest)
-        and hmac.compare_digest(
-            trust_context.context_digest,
-            owner_pinned_context_digest,
-        )
+    if (
+        not isinstance(trust_context, HybridVerificationContext)
+        or type(owner_pinned_context_digest) is not str
+        or not is_sha512(owner_pinned_context_digest)
+    ):
+        return False
+    return hmac.compare_digest(
+        trust_context.context_digest,
+        owner_pinned_context_digest,
     )
 
 
@@ -230,7 +232,7 @@ def _evidence_references_exact(references: Any) -> bool:
         }:
             return False
         evidence_id = reference.get("evidence_id")
-        if not _text(evidence_id) or evidence_id in evidence_ids:
+        if type(evidence_id) is not str or not _text(evidence_id) or evidence_id in evidence_ids:
             return False
         evidence_ids.add(evidence_id)
         if not _text(reference.get("source")):
@@ -293,9 +295,13 @@ def _common_error(
         return "SKG_EVALUATOR_CONTRACT_INVALID"
     if type(source) is not dict or set(source) != _SOURCE_FIELDS:
         return "SKG_EVALUATOR_RESULT_SHAPE_INVALID"
-    if not _trust_context_owner_pinned(
-        trust_context,
-        owner_pinned_context_digest,
+    if (
+        not isinstance(trust_context, HybridVerificationContext)
+        or type(owner_pinned_context_digest) is not str
+        or not _trust_context_owner_pinned(
+            trust_context,
+            owner_pinned_context_digest,
+        )
     ):
         return "SKG_OWNER_TRUST_PIN_INVALID"
     if not verify_hybrid_signed_object(
@@ -387,6 +393,8 @@ def evaluate_skg_authority(
             error = "SKG_EVALUATOR_CONTRACT_INVALID"
         elif not _provider_admitted(attestation_provider):
             error = "SKG_ATTESTATION_PROVIDER_NOT_INJECTED_OR_ADMITTED"
+        elif not callable(method) or evaluator is None:
+            error = "SKG_EVALUATOR_CONTRACT_INVALID"
         else:
             try:
                 source = method(stage=stage, snapshot=deepcopy(snapshot))
@@ -510,6 +518,8 @@ def verify_skg_authority(
                 return False
             snapshot = record.get("evaluation_snapshot")
             source = record.get("evaluation_source")
+            if type(snapshot) is not dict or type(source) is not dict:
+                return False
             if (
                 record.get("contract_id") != SKG_V2_CONTRACT_ID
                 or record.get("schema_status") != SKG_SCHEMA_STATUS
@@ -546,6 +556,8 @@ def verify_skg_authority(
                 return False
 
         latest_snapshot = latest["evaluation_snapshot"]
+        if type(latest_snapshot) is not dict:
+            return False
         if (
             latest_snapshot.get("request_fingerprint")
             != state.get("request_fingerprint")
@@ -557,7 +569,9 @@ def verify_skg_authority(
             return True
 
         chain = state.get("hash_chain")
-        if not verify_hash_chain_entries(chain, state.get("state_hash")):
+        if type(chain) is not list or not verify_hash_chain_entries(
+            chain, state.get("state_hash")
+        ):
             return False
         previous_index = -1
         for sequence, record in enumerate(trace, start=1):

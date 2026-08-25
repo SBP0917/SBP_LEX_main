@@ -7,6 +7,15 @@ runtime_artifacts/
 tmp/
 states/
 
+# Workspace-local Python environments and Codex control files are not
+# programme source, dependency evidence, or candidate artifacts.
+.venv/
+.venv311/
+.venv311-test/
+.codex/
+AGENTS.md
+RUN_INSTRUCTION_ONLY_CODEX.cmd
+
 .codex-cli/codex.exe
 
 **/target/

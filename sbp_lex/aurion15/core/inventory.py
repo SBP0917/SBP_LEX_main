@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Final, Mapping
+from typing import Any, Final, Mapping, NoReturn
 
 
 COGNITIVE_ENGINE_INVENTORY_SCHEMA_VERSION: Final = (
@@ -452,7 +452,7 @@ def build_cognitive_engine_inventory() -> dict[str, Any]:
     return deepcopy(manifest)
 
 
-def _fail(code: str) -> None:
+def _fail(code: str) -> NoReturn:
     raise CognitiveInventoryError(code)
 
 

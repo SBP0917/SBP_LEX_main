@@ -10,7 +10,10 @@ use sbp_lex_v2_hybrid_signature::{
     SUITE_ID,
 };
 
-use crate::{decode_frame as decode_legacy_frame, Message, WireError, MAX_FRAME_BYTES};
+use crate::{
+    decode_frame as decode_legacy_frame, Message, Value, WireError, MAX_FRAME_BYTES,
+    MAX_SAFE_INTEGER,
+};
 
 pub const HYBRID_PROTOCOL: &str = "SBP-LEX-AUTH-WIRE-HYBRID/2";
 pub const HYBRID_MAGIC: &[u8] = b"SBP-LEX-AUTH-WIRE-HYBRID/2\0";
@@ -40,6 +43,7 @@ impl HybridEnvelope {
         signature: HybridSignature,
     ) -> Result<Self, WireError> {
         validate_purpose(purpose)?;
+        validate_authority_epoch(authority_epoch)?;
         if payload.is_empty() || payload.len() > MAX_FRAME_BYTES {
             return Err(fail("hybrid payload length"));
         }
@@ -97,27 +101,24 @@ impl HybridEnvelope {
         &self.payload
     }
 
-    pub fn verify(
-        &self,
-        expected_purpose: &str,
-        expected_authority_epoch: u64,
-        expected_application_context: &[u8],
-    ) -> Result<(), WireError> {
-        if self.purpose != expected_purpose
-            || self.authority_epoch != expected_authority_epoch
-            || self.context_sha512 != sha512(expected_application_context)
+    pub fn verify(&self, admission: &OwnerPinnedHybridAdmission) -> Result<(), WireError> {
+        if self.purpose != admission.purpose
+            || self.authority_epoch != admission.authority_epoch
+            || self.context_sha512 != sha512(&admission.application_context)
             || self.payload_sha512 != sha512(&self.payload)
-            || self.ml_dsa_87_key_id != self.public_key.ml_dsa_87_key_id()
-            || self.ed448_key_id != self.public_key.ed448_key_id()
-            || self.ordered_key_set_digest != self.public_key.ordered_key_set_digest()
+            || self.public_key != admission.public_key
+            || self.ml_dsa_87_key_id != admission.public_key.ml_dsa_87_key_id()
+            || self.ed448_key_id != admission.public_key.ed448_key_id()
+            || self.ordered_key_set_digest != admission.ordered_key_set_digest
         {
             return Err(fail("hybrid binding mismatch"));
         }
-        self.public_key
+        admission
+            .public_key
             .verify(
                 &self.purpose,
                 self.authority_epoch,
-                expected_application_context,
+                &admission.application_context,
                 &self.payload,
                 &self.signature,
             )
@@ -125,15 +126,120 @@ impl HybridEnvelope {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HybridAdmissionClass {
+    TestOnlyNonEffect,
+    ProductionAuthenticatedNonEffect,
+    ProductionEffect,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OwnerPinnedHybridAdmission {
+    public_key: HybridPublicKey,
+    ordered_key_set_digest: [u8; SHA512_BYTES],
+    purpose: String,
+    authority_epoch: u64,
+    application_context: Vec<u8>,
+    expected_payload_kind: String,
+    admission_class: HybridAdmissionClass,
+    external_custody_admitted: bool,
+}
+
+impl OwnerPinnedHybridAdmission {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        public_key: HybridPublicKey,
+        ordered_key_set_digest: [u8; SHA512_BYTES],
+        purpose: &str,
+        authority_epoch: u64,
+        application_context: &[u8],
+        expected_payload_kind: &str,
+        admission_class: HybridAdmissionClass,
+        external_custody_admitted: bool,
+    ) -> Result<Self, WireError> {
+        validate_purpose(purpose)?;
+        validate_authority_epoch(authority_epoch)?;
+        validate_payload_kind(expected_payload_kind)?;
+        if application_context.is_empty() {
+            return Err(fail("hybrid application context"));
+        }
+        if ordered_key_set_digest != public_key.ordered_key_set_digest() {
+            return Err(fail("hybrid owner-pinned key-set digest"));
+        }
+        match admission_class {
+            HybridAdmissionClass::TestOnlyNonEffect if external_custody_admitted => {
+                return Err(fail("test-only custody admission"));
+            }
+            HybridAdmissionClass::ProductionAuthenticatedNonEffect
+            | HybridAdmissionClass::ProductionEffect
+                if !external_custody_admitted =>
+            {
+                return Err(fail("production external custody not admitted"));
+            }
+            _ => {}
+        }
+        Ok(Self {
+            public_key,
+            ordered_key_set_digest,
+            purpose: purpose.to_owned(),
+            authority_epoch,
+            application_context: application_context.to_vec(),
+            expected_payload_kind: expected_payload_kind.to_owned(),
+            admission_class,
+            external_custody_admitted,
+        })
+    }
+
+    pub const fn public_key(&self) -> &HybridPublicKey {
+        &self.public_key
+    }
+
+    pub const fn ordered_key_set_digest(&self) -> &[u8; SHA512_BYTES] {
+        &self.ordered_key_set_digest
+    }
+
+    pub fn purpose(&self) -> &str {
+        &self.purpose
+    }
+
+    pub const fn authority_epoch(&self) -> u64 {
+        self.authority_epoch
+    }
+
+    pub fn application_context(&self) -> &[u8] {
+        &self.application_context
+    }
+
+    pub fn expected_payload_kind(&self) -> &str {
+        &self.expected_payload_kind
+    }
+
+    pub const fn admission_class(&self) -> HybridAdmissionClass {
+        self.admission_class
+    }
+
+    pub const fn external_custody_admitted(&self) -> bool {
+        self.external_custody_admitted
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WireAdmission {
-    HybridEffect(Box<HybridEnvelope>),
+    HybridAuthenticatedNonEffect {
+        envelope: Box<HybridEnvelope>,
+        payload: Message,
+        admission_class: HybridAdmissionClass,
+    },
+    HybridProductionEffect {
+        envelope: Box<HybridEnvelope>,
+        payload: Message,
+    },
     LegacyV2NonEffect(Message),
 }
 
 impl WireAdmission {
     pub const fn carries_effect_authority(&self) -> bool {
-        matches!(self, Self::HybridEffect(_))
+        matches!(self, Self::HybridProductionEffect { .. })
     }
 }
 
@@ -216,6 +322,7 @@ pub fn decode_hybrid_frame(frame: &[u8]) -> Result<HybridEnvelope, WireError> {
         .to_owned();
     validate_purpose(&purpose)?;
     let authority_epoch = cursor.u64()?;
+    validate_authority_epoch(authority_epoch)?;
     let context_sha512 = cursor.array::<SHA512_BYTES>()?;
     let payload_sha512 = cursor.array::<SHA512_BYTES>()?;
     let ml_dsa_87_key_id = cursor.array::<SHA512_BYTES>()?;
@@ -260,22 +367,41 @@ pub fn decode_hybrid_frame(frame: &[u8]) -> Result<HybridEnvelope, WireError> {
 
 pub fn decode_for_admission(
     frame: &[u8],
-    expected_purpose: &str,
-    expected_authority_epoch: u64,
-    expected_application_context: &[u8],
+    owner_pins: Option<&OwnerPinnedHybridAdmission>,
 ) -> Result<WireAdmission, WireError> {
     if frame.get(4..4 + HYBRID_MAGIC.len()) == Some(HYBRID_MAGIC) {
+        let admission = owner_pins.ok_or_else(|| fail("hybrid owner pins required"))?;
         let envelope = decode_hybrid_frame(frame)?;
-        envelope.verify(
-            expected_purpose,
-            expected_authority_epoch,
-            expected_application_context,
-        )?;
-        return Ok(WireAdmission::HybridEffect(Box::new(envelope)));
+        envelope.verify(admission)?;
+        let payload = decode_legacy_frame(envelope.payload())?;
+        if payload_kind(&payload)? != admission.expected_payload_kind {
+            return Err(fail("hybrid payload kind mismatch"));
+        }
+        return match admission.admission_class {
+            HybridAdmissionClass::ProductionEffect => Ok(WireAdmission::HybridProductionEffect {
+                envelope: Box::new(envelope),
+                payload,
+            }),
+            HybridAdmissionClass::TestOnlyNonEffect
+            | HybridAdmissionClass::ProductionAuthenticatedNonEffect => {
+                Ok(WireAdmission::HybridAuthenticatedNonEffect {
+                    envelope: Box::new(envelope),
+                    payload,
+                    admission_class: admission.admission_class,
+                })
+            }
+        };
     }
     Ok(WireAdmission::LegacyV2NonEffect(decode_legacy_frame(
         frame,
     )?))
+}
+
+fn validate_authority_epoch(authority_epoch: u64) -> Result<(), WireError> {
+    if authority_epoch == 0 || authority_epoch > MAX_SAFE_INTEGER {
+        return Err(fail("hybrid authority epoch"));
+    }
+    Ok(())
 }
 
 fn validate_purpose(purpose: &str) -> Result<(), WireError> {
@@ -288,6 +414,25 @@ fn validate_purpose(purpose: &str) -> Result<(), WireError> {
         return Err(fail("hybrid purpose"));
     }
     Ok(())
+}
+
+fn validate_payload_kind(kind: &str) -> Result<(), WireError> {
+    if kind.is_empty()
+        || kind.len() > 64
+        || !kind
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    {
+        return Err(fail("hybrid payload kind"));
+    }
+    Ok(())
+}
+
+fn payload_kind(message: &Message) -> Result<&str, WireError> {
+    match message.get("kind") {
+        Some(Value::Text(kind)) => Ok(kind),
+        _ => Err(fail("hybrid payload kind")),
+    }
 }
 
 fn map_hybrid_error(error: HybridError) -> WireError {
@@ -352,35 +497,125 @@ mod tests {
     const PURPOSE: &str = "WIRE_EFFECT";
     const EPOCH: u64 = 41;
     const CONTEXT: &[u8] = b"owner-pinned:test-context";
-    const PAYLOAD: &[u8] = b"protocol=SBP-LEX-AUTH-WIRE/2\nkind=compatibility_payload\n";
+    const ARBITRARY_PAYLOAD: &[u8] = b"signed bytes are not a typed effect payload";
 
-    fn frame() -> Vec<u8> {
-        let signer = SoftwareHybridSigningKey::from_seed_slices(&[0x31; 32], &[0x42; 57]).unwrap();
+    fn signer() -> SoftwareHybridSigningKey {
+        SoftwareHybridSigningKey::from_seed_slices(&[0x31; 32], &[0x42; 57]).unwrap()
+    }
+
+    fn attacker_signer() -> SoftwareHybridSigningKey {
+        SoftwareHybridSigningKey::from_seed_slices(&[0x51; 32], &[0x62; 57]).unwrap()
+    }
+
+    fn legacy_payload() -> (Vec<u8>, String) {
+        let line = include_str!("../../vectors/mode1_golden.jsonl")
+            .lines()
+            .next()
+            .unwrap();
+        let message = crate::parse_message(line.as_bytes()).unwrap();
+        let kind = payload_kind(&message).unwrap().to_owned();
+        (crate::encode_frame(&message).unwrap(), kind)
+    }
+
+    fn frame_with(
+        signer: &SoftwareHybridSigningKey,
+        purpose: &str,
+        epoch: u64,
+        context: &[u8],
+        payload: &[u8],
+    ) -> Vec<u8> {
         let key = signer.public_key();
-        let signature = signer.sign(PURPOSE, EPOCH, CONTEXT, PAYLOAD).unwrap();
+        let signature = signer.sign(purpose, epoch, context, payload).unwrap();
         let envelope =
-            HybridEnvelope::new(PURPOSE, EPOCH, CONTEXT, PAYLOAD.to_vec(), key, signature).unwrap();
+            HybridEnvelope::new(purpose, epoch, context, payload.to_vec(), key, signature).unwrap();
         encode_hybrid_frame(&envelope).unwrap()
     }
 
+    fn frame() -> Vec<u8> {
+        let (payload, _) = legacy_payload();
+        frame_with(&signer(), PURPOSE, EPOCH, CONTEXT, &payload)
+    }
+
+    fn policy_with(
+        signer: &SoftwareHybridSigningKey,
+        purpose: &str,
+        epoch: u64,
+        context: &[u8],
+        admission_class: HybridAdmissionClass,
+        external_custody_admitted: bool,
+    ) -> OwnerPinnedHybridAdmission {
+        let key = signer.public_key();
+        let digest = key.ordered_key_set_digest();
+        let (_, kind) = legacy_payload();
+        OwnerPinnedHybridAdmission::new(
+            key,
+            digest,
+            purpose,
+            epoch,
+            context,
+            &kind,
+            admission_class,
+            external_custody_admitted,
+        )
+        .unwrap()
+    }
+
+    fn effect_policy(signer: &SoftwareHybridSigningKey) -> OwnerPinnedHybridAdmission {
+        policy_with(
+            signer,
+            PURPOSE,
+            EPOCH,
+            CONTEXT,
+            HybridAdmissionClass::ProductionEffect,
+            true,
+        )
+    }
+
     #[test]
-    fn round_trip_requires_both_real_signature_lanes() {
+    fn round_trip_requires_owner_pins_and_both_real_signature_lanes() {
+        let owner_signer = signer();
+        let policy = effect_policy(&owner_signer);
         let encoded = frame();
         let decoded = decode_hybrid_frame(&encoded).unwrap();
-        decoded.verify(PURPOSE, EPOCH, CONTEXT).unwrap();
+        decoded.verify(&policy).unwrap();
         assert!(matches!(
-            decode_for_admission(&encoded, PURPOSE, EPOCH, CONTEXT).unwrap(),
-            WireAdmission::HybridEffect(_)
+            decode_for_admission(&encoded, Some(&policy)).unwrap(),
+            WireAdmission::HybridProductionEffect { .. }
         ));
     }
 
     #[test]
-    fn purpose_epoch_context_and_payload_are_not_substitutable() {
+    fn purpose_context_epoch_and_payload_are_not_substitutable() {
+        let owner_signer = signer();
         let encoded = frame();
         let decoded = decode_hybrid_frame(&encoded).unwrap();
-        assert!(decoded.verify("OTHER", EPOCH, CONTEXT).is_err());
-        assert!(decoded.verify(PURPOSE, EPOCH + 1, CONTEXT).is_err());
-        assert!(decoded.verify(PURPOSE, EPOCH, b"other").is_err());
+        let wrong_purpose = policy_with(
+            &owner_signer,
+            "OTHER",
+            EPOCH,
+            CONTEXT,
+            HybridAdmissionClass::ProductionEffect,
+            true,
+        );
+        let wrong_epoch = policy_with(
+            &owner_signer,
+            PURPOSE,
+            EPOCH + 1,
+            CONTEXT,
+            HybridAdmissionClass::ProductionEffect,
+            true,
+        );
+        let wrong_context = policy_with(
+            &owner_signer,
+            PURPOSE,
+            EPOCH,
+            b"other-owner-context",
+            HybridAdmissionClass::ProductionEffect,
+            true,
+        );
+        assert!(decoded.verify(&wrong_purpose).is_err());
+        assert!(decoded.verify(&wrong_epoch).is_err());
+        assert!(decoded.verify(&wrong_context).is_err());
 
         let mut payload_corrupt = encoded;
         *payload_corrupt.last_mut().unwrap() ^= 1;
@@ -389,6 +624,8 @@ mod tests {
 
     #[test]
     fn suite_and_each_lane_fail_closed() {
+        let owner_signer = signer();
+        let policy = effect_policy(&owner_signer);
         let encoded = frame();
         let suite_start = 4 + HYBRID_MAGIC.len() + 2;
         let mut suite_corrupt = encoded.clone();
@@ -400,12 +637,92 @@ mod tests {
         let ml_signature_start = fixed_prefix + ML_DSA_87_PUBLIC_KEY_BYTES + ED448_PUBLIC_KEY_BYTES;
         let mut ml_corrupt = encoded.clone();
         ml_corrupt[ml_signature_start] ^= 1;
-        assert!(decode_for_admission(&ml_corrupt, PURPOSE, EPOCH, CONTEXT).is_err());
+        assert!(decode_for_admission(&ml_corrupt, Some(&policy)).is_err());
 
         let ed_signature_start = ml_signature_start + ML_DSA_87_SIGNATURE_BYTES;
         let mut ed_corrupt = encoded;
         ed_corrupt[ed_signature_start] ^= 1;
-        assert!(decode_for_admission(&ed_corrupt, PURPOSE, EPOCH, CONTEXT).is_err());
+        assert!(decode_for_admission(&ed_corrupt, Some(&policy)).is_err());
+    }
+
+    #[test]
+    fn whole_attacker_bundle_and_key_substitution_reject() {
+        let owner_signer = signer();
+        let attacker = attacker_signer();
+        let owner_policy = effect_policy(&owner_signer);
+        let attacker_policy = effect_policy(&attacker);
+        let (payload, _) = legacy_payload();
+
+        let attacker_bundle = frame_with(&attacker, PURPOSE, EPOCH, CONTEXT, &payload);
+        assert!(decode_for_admission(&attacker_bundle, Some(&owner_policy)).is_err());
+
+        let owner_bundle = frame_with(&owner_signer, PURPOSE, EPOCH, CONTEXT, &payload);
+        assert!(decode_for_admission(&owner_bundle, Some(&attacker_policy)).is_err());
+    }
+
+    #[test]
+    fn arbitrary_signed_payload_is_never_promoted_to_effect() {
+        let owner_signer = signer();
+        let policy = effect_policy(&owner_signer);
+        let encoded = frame_with(&owner_signer, PURPOSE, EPOCH, CONTEXT, ARBITRARY_PAYLOAD);
+        assert!(decode_for_admission(&encoded, Some(&policy)).is_err());
+    }
+
+    #[test]
+    fn test_only_admission_is_non_effect_and_production_requires_external_custody() {
+        let owner_signer = signer();
+        let test_policy = policy_with(
+            &owner_signer,
+            PURPOSE,
+            EPOCH,
+            CONTEXT,
+            HybridAdmissionClass::TestOnlyNonEffect,
+            false,
+        );
+        let encoded = frame();
+        let admission = decode_for_admission(&encoded, Some(&test_policy)).unwrap();
+        assert!(!admission.carries_effect_authority());
+        assert!(matches!(
+            admission,
+            WireAdmission::HybridAuthenticatedNonEffect {
+                admission_class: HybridAdmissionClass::TestOnlyNonEffect,
+                ..
+            }
+        ));
+
+        let key = owner_signer.public_key();
+        let digest = key.ordered_key_set_digest();
+        let (_, kind) = legacy_payload();
+        assert!(OwnerPinnedHybridAdmission::new(
+            key,
+            digest,
+            PURPOSE,
+            EPOCH,
+            CONTEXT,
+            &kind,
+            HybridAdmissionClass::ProductionEffect,
+            false,
+        )
+        .is_err());
+
+        let key = owner_signer.public_key();
+        let digest = key.ordered_key_set_digest();
+        assert!(OwnerPinnedHybridAdmission::new(
+            key,
+            digest,
+            PURPOSE,
+            EPOCH,
+            CONTEXT,
+            &kind,
+            HybridAdmissionClass::TestOnlyNonEffect,
+            true,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn missing_owner_pins_reject_hybrid() {
+        assert!(decode_for_admission(&frame(), None).is_err());
     }
 
     #[test]
@@ -416,7 +733,7 @@ mod tests {
             .unwrap();
         let message = crate::parse_message(line.as_bytes()).unwrap();
         let legacy = crate::encode_frame(&message).unwrap();
-        let admission = decode_for_admission(&legacy, PURPOSE, EPOCH, CONTEXT).unwrap();
+        let admission = decode_for_admission(&legacy, None).unwrap();
         assert!(!admission.carries_effect_authority());
         assert!(matches!(admission, WireAdmission::LegacyV2NonEffect(_)));
     }

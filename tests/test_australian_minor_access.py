@@ -5,9 +5,12 @@ import hmac
 import unittest
 from copy import deepcopy
 from hashlib import sha512
+from unittest.mock import patch
 
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed448 import Ed448PrivateKey
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.mldsa import MLDSA87PrivateKey
 
 from sbp_lex.assurance.envelope import canonical_json_bytes
 from sbp_lex.compliance.australian_minor_access import (
@@ -15,6 +18,14 @@ from sbp_lex.compliance.australian_minor_access import (
     AGE_ASSURANCE_USE_SCOPE,
     AGE_AT_LEAST_16,
     AGE_UNDER_16,
+    AUSTRALIAN_MINOR_ACCESS_CLOCK_PURPOSE,
+    AUSTRALIAN_MINOR_ACCESS_DURABLE_PROVIDER_ADMISSION_PURPOSE,
+    AUSTRALIAN_MINOR_ACCESS_LANE_PURPOSE_PREFIX,
+    AUSTRALIAN_MINOR_ACCESS_OWNER_PURPOSE,
+    AUSTRALIAN_MINOR_ACCESS_REGISTRY_PURPOSE,
+    AUSTRALIAN_MINOR_ACCESS_REPLAY_HEAD_PURPOSE,
+    AUSTRALIAN_MINOR_ACCESS_REPLAY_RECEIPT_PURPOSE,
+    AUSTRALIAN_MINOR_ACCESS_REVOCATION_PURPOSE,
     DISCLOSURE_SCOPE,
     LANES,
     RESIDENCE_AUSTRALIA,
@@ -30,13 +41,22 @@ from sbp_lex.compliance.australian_minor_access import (
     _install_australian_minor_access_deployment_for_tests,
     bind_australian_minor_access_hash,
     evaluate_australian_minor_access,
+    install_australian_minor_access_production,
     verify_australian_minor_access,
+)
+from sbp_lex.security.hybrid_signature import (
+    HYBRID_SUITE_ID,
+    PRODUCTION_DUAL_CUSTODY_CLASS,
+    PRODUCTION_SIGNER,
+    DualSignatureLaneCustody,
+    HybridVerificationContext,
 )
 from sbp_lex.security.integrity import (
     GENESIS_HASH,
     build_hash_chain_entry,
     canonical_integrity_hash,
 )
+from sbp_lex.security.signature_provider import build_signed_object
 
 
 class Signer:
@@ -85,6 +105,132 @@ class Signer:
             },
         }
 
+
+class ProductionHybridSigner:
+    algorithm = HYBRID_SUITE_ID
+    custody_class = PRODUCTION_DUAL_CUSTODY_CLASS
+    signer_class = PRODUCTION_SIGNER
+    effect_authority = False
+    token_signing_admitted = True
+
+    def __init__(self, provider_id: str, credential_id: str, custody: str) -> None:
+        del custody
+        self.provider_id = provider_id
+        self.credential_id = credential_id
+        self._mldsa87_private_key = MLDSA87PrivateKey.generate()
+        self._ed448_private_key = Ed448PrivateKey.generate()
+        self.key_epoch = 1
+        self.key_version = "production-1"
+        self._context = HybridVerificationContext(
+            provider_id=provider_id,
+            key_epoch=self.key_epoch,
+            key_version=self.key_version,
+            custody_class=self.custody_class,
+            signer_class=self.signer_class,
+            mldsa87_public_key=self._mldsa87_private_key.public_key(),
+            ed448_public_key=self._ed448_private_key.public_key(),
+            effect_authority=False,
+            external_custody_admitted=True,
+            external_custody_admission_sha512=sha512(
+                f"{provider_id}:coordinator".encode()
+            ).hexdigest(),
+            mldsa87_custody=self._lane_custody(
+                "ML-DSA-87", f"{provider_id}:mldsa87"
+            ),
+            ed448_custody=self._lane_custody(
+                "Ed448", f"{provider_id}:ed448"
+            ),
+        )
+
+    def _lane_custody(
+        self, algorithm: str, identity: str
+    ) -> DualSignatureLaneCustody:
+        return DualSignatureLaneCustody(
+            algorithm=algorithm,
+            provider_id=identity,
+            key_version=self.key_version,
+            key_epoch=self.key_epoch,
+            rotation_epoch=self.key_epoch,
+            custody_class=f"EXTERNAL_NON_EXPORTABLE_{algorithm}",
+            custody_reference=f"external://{identity}",
+            signer_class=PRODUCTION_SIGNER,
+            external_custody_admitted=True,
+            custody_admission_sha512=sha512(
+                f"{identity}:admission".encode()
+            ).hexdigest(),
+            non_exportable=True,
+        )
+
+    @property
+    def fingerprint(self) -> str:
+        return self._context.context_digest
+
+    @property
+    def key_id(self) -> str:
+        return self._context.ordered_key_set_digest
+
+    def hybrid_verification_context(
+        self, *, allow_test_only: bool = False
+    ) -> HybridVerificationContext:
+        del allow_test_only
+        return self._context
+
+    def sign_hybrid_preimage(
+        self,
+        preimage: bytes,
+        *,
+        purpose: str,
+        context_digest: str,
+    ) -> tuple[bytes, bytes]:
+        if context_digest != self._context.context_digest or not purpose:
+            raise ValueError("HYBRID_SIGNING_CONTEXT_MISMATCH")
+        return (
+            self._mldsa87_private_key.sign(preimage),
+            self._ed448_private_key.sign(preimage),
+        )
+
+    def binding(self) -> dict:
+        return {
+            "provider_id": self.provider_id,
+            "credential_id": self.credential_id,
+            "algorithm": HYBRID_SUITE_ID,
+            "public_key_hex": (
+                self._context.mldsa87_public_key_bytes
+                + self._context.ed448_public_key_bytes
+            ).hex(),
+            "key_fingerprint": self._context.context_digest,
+            "custody_class": self._context.custody_class,
+            "effect_authority": False,
+        }
+
+    @staticmethod
+    def _purpose(payload: dict) -> str:
+        if "production_durable_storage_admitted" in payload:
+            return AUSTRALIAN_MINOR_ACCESS_DURABLE_PROVIDER_ADMISSION_PURPOSE
+        if "deployment_mode" in payload:
+            return AUSTRALIAN_MINOR_ACCESS_OWNER_PURPOSE
+        if "lane" in payload:
+            return f"{AUSTRALIAN_MINOR_ACCESS_LANE_PURPOSE_PREFIX}{payload['lane']}"
+        if "revoked_evidence_digests" in payload:
+            return AUSTRALIAN_MINOR_ACCESS_REVOCATION_PURPOSE
+        if "time_sequence" in payload:
+            return AUSTRALIAN_MINOR_ACCESS_CLOCK_PURPOSE
+        if "replay_key" in payload:
+            return AUSTRALIAN_MINOR_ACCESS_REPLAY_RECEIPT_PURPOSE
+        if "namespace" in payload and "head_digest" in payload:
+            return AUSTRALIAN_MINOR_ACCESS_REPLAY_HEAD_PURPOSE
+        if "registry_id" in payload:
+            return AUSTRALIAN_MINOR_ACCESS_REGISTRY_PURPOSE
+        raise ValueError("UNKNOWN_TEST_SIGNATURE_PURPOSE")
+
+    def sign(self, payload: dict, *, signature_binding: dict | None = None) -> dict:
+        if signature_binding not in (None, self.binding()):
+            raise ValueError("SIGNATURE_BINDING_OVERRIDE_REJECTED")
+        return build_signed_object(
+            deepcopy(payload),
+            provider=self,
+            purpose=self._purpose(payload),
+        )
 
 class Pseudonymizer:
     pseudonymizer_id = "pseudo-service"
@@ -165,9 +311,11 @@ class RevocationStore:
         return deepcopy(self.chain)
 
     def is_current(self, context_id: str, digest: str, sequence: int) -> bool:
+        current = self.chain[-1]
+        payload = current.get("payload", current)
         return (
-            digest == canonical_integrity_hash(self.chain[-1])
-            and sequence == self.chain[-1]["payload"]["head_sequence"]
+            digest == canonical_integrity_hash(current)
+            and sequence == payload["head_sequence"]
         )
 
 
@@ -292,19 +440,22 @@ class Fixture:
         government_id_used: bool = False,
         alternative: bool = True,
         destruction: bool = True,
+        production: bool = False,
     ) -> None:
         self.context_id = "au-minor-context"
         self.now = 1_000
-        self.owner = Signer(
+        self.production = production
+        signer_type = ProductionHybridSigner if production else Signer
+        self.owner = signer_type(
             "DEPLOYMENT_OWNER", "owner:pending", "DEPLOYMENT_OWNER_ROOT"
         )
         self.owner.credential_id = f"owner:{self.owner.fingerprint}"
-        self.registry_signer = Signer("registry-provider", "registry-credential", "HSM")
-        self.revocation_signer = Signer("revocation-provider", "revocation-credential", "HSM")
-        self.replay_signer = Signer("replay-provider", "replay-credential", "HSM")
-        self.clock_signer = Signer("clock-provider", "clock-credential", "HSM")
+        self.registry_signer = signer_type("registry-provider", "registry-credential", "HSM")
+        self.revocation_signer = signer_type("revocation-provider", "revocation-credential", "HSM")
+        self.replay_signer = signer_type("replay-provider", "replay-credential", "HSM")
+        self.clock_signer = signer_type("clock-provider", "clock-credential", "HSM")
         self.lane_signers = {
-            lane: Signer(f"{lane.lower()}-provider", f"{lane.lower()}-credential", "HSM")
+            lane: signer_type(f"{lane.lower()}-provider", f"{lane.lower()}-credential", "HSM")
             for lane in LANES
         }
         self.pseudonymizer = Pseudonymizer(pseudonym_secret)
@@ -426,7 +577,7 @@ class Fixture:
                 "key_id": self.pseudonymizer.key_id,
                 "key_fingerprint": self.pseudonymizer.key_fingerprint,
             },
-            "deployment_mode": "TEST_ONLY",
+            "deployment_mode": "PRODUCTION" if production else "TEST_ONLY",
             "effect_authority": False,
         }
         self.resign_owner()
@@ -447,7 +598,87 @@ class Fixture:
             "resolvers": self.resolvers,
         }
 
+    def production_contexts(self) -> dict[str, HybridVerificationContext]:
+        if not self.production:
+            raise ValueError("PRODUCTION_FIXTURE_REQUIRED")
+        return {
+            "registry": self.registry_signer._context,
+            "revocation": self.revocation_signer._context,
+            "replay": self.replay_signer._context,
+            "clock": self.clock_signer._context,
+            **{
+                lane: signer._context
+                for lane, signer in self.lane_signers.items()
+            },
+        }
+
+    def durable_provider_admissions(
+        self,
+        signer: ProductionHybridSigner,
+        *,
+        invalid_evidence_kind: str | None = None,
+        sequence_offset: int = 0,
+    ) -> dict[str, dict]:
+        providers = {
+            "clock": self.clock,
+            "revocation": self.revocation_store,
+            "replay": self.replay_store,
+        }
+        admissions = {}
+        for sequence, (kind, provider) in enumerate(providers.items(), 1):
+            evidence_digest = sha512(
+                f"external-durability-evidence:{kind}".encode()
+            ).hexdigest()
+            if kind == invalid_evidence_kind:
+                evidence_digest = "self-declared"
+            admissions[kind] = signer.sign(
+                {
+                    "schema": (
+                        "SBP-LEX-AU-MINOR-DURABLE-PROVIDER-ADMISSION-V1"
+                    ),
+                    "context_id": self.context_id,
+                    "provider_kind": kind,
+                    "provider_id": provider.id,
+                    "provider_version": provider.version,
+                    "storage_class": "EXTERNALLY_ATTESTED_DURABLE_SERVICE",
+                    "durability_evidence_sha512": evidence_digest,
+                    "admission_sequence": sequence + sequence_offset,
+                    "status": "ACTIVE",
+                    "restart_durable": True,
+                    "transactional": True,
+                    "corruption_fail_closed": True,
+                    "rollback_protected": True,
+                    "production_durable_storage_admitted": True,
+                    "effect_authority": False,
+                }
+            )
+        return admissions
+
+    @staticmethod
+    def durable_provider_admission_pins(
+        admissions: dict[str, dict],
+    ) -> dict[str, str]:
+        return {
+            kind: canonical_integrity_hash(admission)
+            for kind, admission in admissions.items()
+        }
+
     def install(self, *, test_only: bool = True) -> None:
+        if self.production:
+            contexts = self.production_contexts()
+            install_australian_minor_access_production(
+                self.composition,
+                fixed_context_id=self.context_id,
+                fixed_context_digest=self.context_digest,
+                owner_trust_context=self.owner._context,
+                owner_pinned_context_digest=self.owner._context.context_digest,
+                signer_trust_contexts=contexts,
+                signer_owner_pinned_context_digests={
+                    name: context.context_digest
+                    for name, context in contexts.items()
+                },
+            )
+            return
         _install_australian_minor_access_deployment_for_tests(
             self.composition,
             fixed_context_id=self.context_id,
@@ -487,6 +718,197 @@ class Fixture:
 class AustralianMinorAccessTests(unittest.TestCase):
     def tearDown(self) -> None:
         _clear_australian_minor_access_deployment_for_tests(test_only=True)
+
+    def test_production_rejects_in_memory_stores_without_external_admission(self) -> None:
+        fixture = Fixture(production=True)
+        fixture.clock.production_durable_storage_admitted = True
+        fixture.revocation_store.production_durable_storage_admitted = "true"
+        fixture.replay_store.durability_evidence_sha512 = "0" * 128
+        with patch(
+            "sbp_lex.compliance.australian_minor_access._ACTIVE_COMPOSITION",
+            None,
+        ):
+            with self.assertRaisesRegex(
+                AustralianMinorAccessError,
+                "PRODUCTION_DURABLE_PROVIDER_ADMISSION_REQUIRED",
+            ):
+                fixture.install()
+
+    def test_production_rejects_unpinned_or_invalid_durability_evidence(self) -> None:
+        fixture = Fixture(production=True)
+        contexts = fixture.production_contexts()
+        admission_signer = ProductionHybridSigner(
+            "external-durability-admission-authority",
+            "external-durability-admission-credential",
+            "EXTERNAL_DURABILITY_ADMISSION_ROOT",
+        )
+        common = {
+            "fixed_context_id": fixture.context_id,
+            "fixed_context_digest": fixture.context_digest,
+            "owner_trust_context": fixture.owner._context,
+            "owner_pinned_context_digest": fixture.owner._context.context_digest,
+            "signer_trust_contexts": contexts,
+            "signer_owner_pinned_context_digests": {
+                name: context.context_digest
+                for name, context in contexts.items()
+            },
+            "durable_provider_trust_context": admission_signer._context,
+        }
+        with patch(
+            "sbp_lex.compliance.australian_minor_access._ACTIVE_COMPOSITION",
+            None,
+        ):
+            with self.assertRaisesRegex(
+                AustralianMinorAccessError,
+                "PRODUCTION_DURABLE_PROVIDER_ADMISSION_PIN_INVALID",
+            ):
+                install_australian_minor_access_production(
+                    fixture.composition,
+                    **common,
+                    durable_provider_admissions=(
+                        fixture.durable_provider_admissions(admission_signer)
+                    ),
+                    durable_provider_owner_pinned_context_digest="0" * 128,
+                )
+            invalid_admissions = fixture.durable_provider_admissions(
+                admission_signer,
+                invalid_evidence_kind="replay",
+            )
+            with self.assertRaisesRegex(
+                AustralianMinorAccessError,
+                "PRODUCTION_DURABLE_PROVIDER_ADMISSION_CLAIMS_INVALID",
+            ):
+                install_australian_minor_access_production(
+                    fixture.composition,
+                    **common,
+                    durable_provider_admissions=invalid_admissions,
+                    durable_provider_owner_pinned_admission_digests=(
+                        fixture.durable_provider_admission_pins(
+                            invalid_admissions
+                        )
+                    ),
+                    durable_provider_owner_pinned_context_digest=(
+                        admission_signer._context.context_digest
+                    ),
+                )
+
+    def test_production_rejects_stale_signed_admission_documents(self) -> None:
+        fixture = Fixture(production=True)
+        contexts = fixture.production_contexts()
+        admission_signer = ProductionHybridSigner(
+            "external-durability-admission-authority",
+            "external-durability-admission-credential",
+            "EXTERNAL_DURABILITY_ADMISSION_ROOT",
+        )
+        stale = fixture.durable_provider_admissions(admission_signer)
+        current = fixture.durable_provider_admissions(
+            admission_signer,
+            sequence_offset=10,
+        )
+        with patch(
+            "sbp_lex.compliance.australian_minor_access._ACTIVE_COMPOSITION",
+            None,
+        ):
+            with self.assertRaisesRegex(
+                AustralianMinorAccessError,
+                "PRODUCTION_DURABLE_PROVIDER_DOCUMENT_PIN_MISMATCH",
+            ):
+                install_australian_minor_access_production(
+                    fixture.composition,
+                    fixed_context_id=fixture.context_id,
+                    fixed_context_digest=fixture.context_digest,
+                    owner_trust_context=fixture.owner._context,
+                    owner_pinned_context_digest=(
+                        fixture.owner._context.context_digest
+                    ),
+                    signer_trust_contexts=contexts,
+                    signer_owner_pinned_context_digests={
+                        name: context.context_digest
+                        for name, context in contexts.items()
+                    },
+                    durable_provider_admissions=stale,
+                    durable_provider_owner_pinned_admission_digests=(
+                        fixture.durable_provider_admission_pins(current)
+                    ),
+                    durable_provider_trust_context=admission_signer._context,
+                    durable_provider_owner_pinned_context_digest=(
+                        admission_signer._context.context_digest
+                    ),
+                )
+
+    def test_production_rejects_pin_tamper_and_legacy_owner_without_fallback(self) -> None:
+        fixture = Fixture(production=True)
+        contexts = fixture.production_contexts()
+        admission_signer = ProductionHybridSigner(
+            "external-durability-admission-authority",
+            "external-durability-admission-credential",
+            "EXTERNAL_DURABILITY_ADMISSION_ROOT",
+        )
+        admissions = fixture.durable_provider_admissions(admission_signer)
+        admission_pins = fixture.durable_provider_admission_pins(admissions)
+        pins = {
+            name: context.context_digest for name, context in contexts.items()
+        }
+        pins["AGE_ASSURANCE"] = "0" * 128
+        with patch(
+            "sbp_lex.compliance.australian_minor_access._ACTIVE_COMPOSITION",
+            None,
+        ):
+            with self.assertRaises(AustralianMinorAccessError):
+                install_australian_minor_access_production(
+                    fixture.composition,
+                    fixed_context_id=fixture.context_id,
+                    fixed_context_digest=fixture.context_digest,
+                    owner_trust_context=fixture.owner._context,
+                    owner_pinned_context_digest=(
+                        fixture.owner._context.context_digest
+                    ),
+                    signer_trust_contexts=contexts,
+                    signer_owner_pinned_context_digests=pins,
+                    durable_provider_admissions=admissions,
+                    durable_provider_owner_pinned_admission_digests=(
+                        admission_pins
+                    ),
+                    durable_provider_trust_context=admission_signer._context,
+                    durable_provider_owner_pinned_context_digest=(
+                        admission_signer._context.context_digest
+                    ),
+                )
+
+        legacy_owner = Signer(
+            "DEPLOYMENT_OWNER", "owner:legacy", "DEPLOYMENT_OWNER_ROOT"
+        )
+        composition = fixture.composition
+        composition["owner_record"] = legacy_owner.sign(fixture.owner_payload)
+        with patch(
+            "sbp_lex.compliance.australian_minor_access._ACTIVE_COMPOSITION",
+            None,
+        ):
+            with self.assertRaises(AustralianMinorAccessError):
+                install_australian_minor_access_production(
+                    composition,
+                    fixed_context_id=fixture.context_id,
+                    fixed_context_digest=canonical_integrity_hash(
+                        composition["owner_record"]
+                    ),
+                    owner_trust_context=fixture.owner._context,
+                    owner_pinned_context_digest=(
+                        fixture.owner._context.context_digest
+                    ),
+                    signer_trust_contexts=contexts,
+                    signer_owner_pinned_context_digests={
+                        name: context.context_digest
+                        for name, context in contexts.items()
+                    },
+                    durable_provider_admissions=admissions,
+                    durable_provider_owner_pinned_admission_digests=(
+                        admission_pins
+                    ),
+                    durable_provider_trust_context=admission_signer._context,
+                    durable_provider_owner_pinned_context_digest=(
+                        admission_signer._context.context_digest
+                    ),
+                )
 
     def test_exact_age_threshold_and_no_independent_authority(self) -> None:
         under = Fixture(age_result=AGE_UNDER_16)

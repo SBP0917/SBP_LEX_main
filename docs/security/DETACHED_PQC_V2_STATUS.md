@@ -1,5 +1,9 @@
 # SBP-LEX V2 detached PQC status
 
+This is a component security record, not the repository-wide status authority.
+Current consolidated status and blockers are in
+`../validation/V2_CANONICAL_STATUS.md`.
+
 ## Implemented boundary
 
 The repository contains genuine runtime-detached strict dual signing through the

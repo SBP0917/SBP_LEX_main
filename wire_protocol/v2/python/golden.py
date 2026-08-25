@@ -527,7 +527,7 @@ def _append_authority_lifecycle(
     receipt = seal_fixture_message(receipt, builder.registry.entries["ADAPTER"])
     builder.messages[-1] = receipt
     success = outcome == "SUCCEEDED"
-    ack = builder.append(
+    builder.append(
         "receipt_ack",
         "AUTHORITY",
         {

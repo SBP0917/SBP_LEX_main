@@ -208,13 +208,13 @@ def _trust_context_owner_pinned(
     context: HybridVerificationContext | None,
     owner_pinned_context_digest: str | None,
 ) -> bool:
-    return (
-        isinstance(context, HybridVerificationContext)
-        and is_sha512(owner_pinned_context_digest)
-        and hmac.compare_digest(
-            context.context_digest, owner_pinned_context_digest
-        )
-    )
+    if (
+        not isinstance(context, HybridVerificationContext)
+        or type(owner_pinned_context_digest) is not str
+        or not is_sha512(owner_pinned_context_digest)
+    ):
+        return False
+    return hmac.compare_digest(context.context_digest, owner_pinned_context_digest)
 
 
 def _evaluator_exact(evaluator: Any) -> bool:
@@ -387,7 +387,7 @@ def _conflicts_error(conflicts: Any, *, artifacts: list[dict[str, Any]]) -> str 
         if type(conflict) is not dict or set(conflict) != _CONFLICT_FIELDS:
             return "RULE_ARTIFACT_CONFLICT_SHAPE_INVALID"
         conflict_id = conflict.get("conflict_id")
-        if not _text(conflict_id) or conflict_id in conflict_ids:
+        if type(conflict_id) is not str or not _text(conflict_id) or conflict_id in conflict_ids:
             return "RULE_ARTIFACT_CONFLICT_ID_INVALID"
         conflict_ids.add(conflict_id)
         references = conflict.get("artifact_references")
@@ -440,6 +440,8 @@ def _determination_error(
     )
     if error is not None:
         return error
+    if type(artifacts) is not list:
+        return "RULE_ARTIFACTS_INVALID"
     conflicts = determination.get("conflicts")
     error = _conflicts_error(conflicts, artifacts=artifacts)
     if error is not None:
@@ -476,8 +478,12 @@ def _source_error(
         return "RULE_ARTIFACT_EVALUATOR_INVALID"
     if type(source) is not dict or set(source) != _SOURCE_FIELDS:
         return "RULE_ARTIFACT_SOURCE_SHAPE_INVALID"
-    if not _trust_context_owner_pinned(
-        trust_context, owner_pinned_context_digest
+    if (
+        not isinstance(trust_context, HybridVerificationContext)
+        or type(owner_pinned_context_digest) is not str
+        or not _trust_context_owner_pinned(
+            trust_context, owner_pinned_context_digest
+        )
     ):
         return "RULE_ARTIFACT_OWNER_PIN_NOT_INJECTED_OR_INVALID"
     if not verify_hybrid_signed_object(
@@ -575,7 +581,7 @@ def evaluate_rule_artifact_register(
         not in {RULE_ARTIFACT_PASS, RULE_ARTIFACT_ESCALATE}
     ):
         error = "RULE_ARTIFACT_PRIOR_RESULT_INVALID"
-    elif not _evaluator_exact(evaluator):
+    elif evaluator is None or not _evaluator_exact(evaluator):
         error = "RULE_ARTIFACT_EVALUATOR_NOT_INJECTED_OR_INVALID"
     elif not _provider_admitted(attestation_provider):
         error = "RULE_ARTIFACT_PROVIDER_NOT_INJECTED_OR_ADMITTED"
@@ -594,7 +600,7 @@ def evaluate_rule_artifact_register(
             error = "RULE_ARTIFACT_EVALUATOR_FAILED"
     if error is None and source is None:
         error = "RULE_ARTIFACT_SOURCE_INVALID"
-    if error is None:
+    if error is None and source is not None and evaluator is not None:
         source_digest = _safe_hash(source)
         if source_digest is None:
             error = "RULE_ARTIFACT_SOURCE_INVALID"
@@ -613,8 +619,10 @@ def evaluate_rule_artifact_register(
                 trust_context=attestation_trust_context,
                 owner_pinned_context_digest=owner_pinned_context_digest,
             )
-    determination = source.get("determination") if error is None else None
-    if error is None and trace:
+    determination = source.get("determination") if error is None and source is not None else None
+    if error is None and type(determination) is not dict:
+        error = "RULE_ARTIFACT_DETERMINATION_SHAPE_INVALID"
+    if error is None and trace and type(determination) is dict:
         prior_artifacts = {
             _artifact_identity(artifact): artifact
             for artifact in trace[-1].get("artifacts", [])
@@ -632,7 +640,11 @@ def evaluate_rule_artifact_register(
         ):
             error = "RULE_ARTIFACT_REVOCATION_ROLLBACK"
 
-    result = determination["result"] if error is None else RULE_ARTIFACT_DENY
+    result = (
+        determination["result"]
+        if error is None and type(determination) is dict
+        else RULE_ARTIFACT_DENY
+    )
     reason = (
         error
         or (
@@ -653,8 +665,16 @@ def evaluate_rule_artifact_register(
         "evaluation_snapshot_digest": _safe_hash(snapshot),
         "evaluation_source": deepcopy(source),
         "evaluation_source_digest": _safe_hash(source) if source else None,
-        "artifacts": deepcopy(determination["artifacts"]) if error is None else [],
-        "conflicts": deepcopy(determination["conflicts"]) if error is None else [],
+        "artifacts": (
+            deepcopy(determination["artifacts"])
+            if error is None and type(determination) is dict
+            else []
+        ),
+        "conflicts": (
+            deepcopy(determination["conflicts"])
+            if error is None and type(determination) is dict
+            else []
+        ),
         **_false_fields(),
     }
     return _apply_record(state, record)
@@ -673,7 +693,8 @@ def verify_rule_artifact_register(
 
     trace = state.get("rule_artifact_register_trace")
     if (
-        not _evaluator_exact(evaluator)
+        evaluator is None
+        or not _evaluator_exact(evaluator)
         or not _provider_admitted(attestation_provider)
         or not _trust_context_owner_pinned(
             attestation_trust_context, owner_pinned_context_digest
@@ -707,6 +728,8 @@ def verify_rule_artifact_register(
         ):
             return False
         snapshot = record.get("evaluation_snapshot")
+        if type(snapshot) is not dict:
+            return False
         if (
             not _snapshot_exact(snapshot)
             or snapshot.get("prior_register_digest") != expected_prior
@@ -714,6 +737,8 @@ def verify_rule_artifact_register(
         ):
             return False
         source = record.get("evaluation_source")
+        if type(source) is not dict:
+            return False
         source_digest = _safe_hash(source)
         if (
             source_digest is None

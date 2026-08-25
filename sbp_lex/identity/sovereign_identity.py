@@ -14,7 +14,7 @@ downstream authority and execution boundaries.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeGuard
 
 from sbp_lex.security.integrity import (
     IntegrityContractError,
@@ -120,7 +120,7 @@ class SovereignIdentityEvaluator(Protocol):
     ) -> dict[str, Any]: ...
 
 
-def _text(value: Any) -> bool:
+def _text(value: Any) -> TypeGuard[str]:
     return type(value) is str and bool(value)
 
 
@@ -131,7 +131,9 @@ def _safe_hash(value: Any) -> str | None:
         return None
 
 
-def _evaluator_metadata_valid(evaluator: Any) -> bool:
+def _evaluator_metadata_valid(
+    evaluator: Any,
+) -> TypeGuard[SovereignIdentityEvaluator]:
     return (
         evaluator is not None
         and _text(getattr(evaluator, "identity_evaluator_id", None))
@@ -518,7 +520,12 @@ def evaluate_sovereign_identity(
             source = None
             reason = "SOVEREIGN_IDENTITY_EVALUATOR_FAILED"
 
-    if reason is None and source is not None:
+    if (
+        reason is None
+        and source is not None
+        and snapshot is not None
+        and _evaluator_metadata_valid(evaluator)
+    ):
         source_digest = _safe_hash(source)
         if source_digest is None:
             reason = "SOVEREIGN_IDENTITY_SOURCE_NOT_HASHABLE"
@@ -541,14 +548,20 @@ def evaluate_sovereign_identity(
         reason = "SOVEREIGN_IDENTITY_EVALUATOR_RESULT_INVALID"
 
     determination: dict[str, Any] | None = None
-    if reason is None:
+    if reason is None and source is not None and snapshot is not None:
         determination = source.get("determination")
         reason = _determination_error(determination, snapshot=snapshot)
+    elif reason is None:
+        reason = "SOVEREIGN_IDENTITY_INTERNAL_VALIDATION_FAILED"
 
-    if reason is None and trace:
+    if reason is None and determination is not None and trace:
         previous_sequence = trace[-1].get("revocation_sequence")
         current_sequence = determination.get("revocation_sequence")
-        if type(previous_sequence) is not int or current_sequence < previous_sequence:
+        if (
+            type(previous_sequence) is not int
+            or type(current_sequence) is not int
+            or current_sequence < previous_sequence
+        ):
             reason = "SOVEREIGN_IDENTITY_REVOCATION_ROLLBACK"
         elif trace[-1].get("revocation_status") == "REVOKED":
             reason = "SOVEREIGN_IDENTITY_REVOCATION_IRREVERSIBLE"
@@ -561,6 +574,18 @@ def evaluate_sovereign_identity(
                 sequence=sequence,
                 snapshot=snapshot,
                 reason=reason,
+                source=source,
+            ),
+        )
+
+    if snapshot is None or source is None or determination is None:
+        return _apply_record(
+            state,
+            _denial_record(
+                stage=stage,
+                sequence=sequence,
+                snapshot=snapshot,
+                reason="SOVEREIGN_IDENTITY_INTERNAL_VALIDATION_FAILED",
                 source=source,
             ),
         )
@@ -653,7 +678,8 @@ def _verify_sovereign_identity_exact(
         source = record.get("evaluation_source")
         source_digest = _safe_hash(source)
         if (
-            source_digest is None
+            type(source) is not dict
+            or source_digest is None
             or source_digest != record.get("evaluation_source_digest")
             or source_digest in seen_sources
         ):
@@ -714,7 +740,9 @@ def _verify_sovereign_identity_exact(
         return True
 
     chain = state.get("hash_chain")
-    if not verify_hash_chain_entries(chain, state.get("state_hash")):
+    if type(chain) is not list or not verify_hash_chain_entries(
+        chain, state.get("state_hash")
+    ):
         return False
     previous_index = -1
     for sequence, record in enumerate(trace, start=1):

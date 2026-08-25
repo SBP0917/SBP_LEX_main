@@ -1,5 +1,8 @@
 # V2 Freeze-Readiness Conclusion — 24 August 2026
 
+> Historical mutable readiness snapshot. It is preserved for provenance but
+> is not the current canonical status. See `V2_CANONICAL_STATUS.md`.
+
 ## Conclusion
 
 V2 has passed its current local integration, cross-language and MSVC Rust

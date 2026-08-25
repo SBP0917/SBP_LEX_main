@@ -4,6 +4,8 @@ import base64
 import hashlib
 import json
 import sys
+import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -15,11 +17,11 @@ from sbp_lex.assurance.envelope import (
     canonical_json_bytes,
 )
 from sbp_lex.assurance.verifier import (
+    MAX_VERIFIER_OUTPUT_BYTES,
     AssuranceMode,
     invoke_veto_verifier,
     mode_requires_denial,
 )
-
 
 REQUEST_FINGERPRINT = "1" * 128
 
@@ -151,6 +153,70 @@ class PolyglotAssuranceContractTests(unittest.TestCase):
         )
         invocation = invoke_veto_verifier(envelope, command=verifier)
         self.assertEqual(invocation.reason_code, "VERIFIER_OUTPUT_MALFORMED")
+
+    def test_verifier_adapter_bounds_stdout_and_stderr_while_running(self) -> None:
+        envelope = build_assurance_envelope(
+            request_fingerprint=REQUEST_FINGERPRINT,
+            checkpoint="state_construction",
+            sequence=0,
+            state_projection={"action": "observe"},
+        )
+        for stream, reason in (
+            ("stdout", "VERIFIER_OUTPUT_TOO_LARGE"),
+            ("stderr", "VERIFIER_ERROR_OUTPUT_TOO_LARGE"),
+        ):
+            with self.subTest(stream=stream):
+                verifier = (
+                    Path(sys.executable),
+                    "-c",
+                    (
+                        "import sys,time;"
+                        f"sys.{stream}.buffer.write("
+                        f"b'x'*{MAX_VERIFIER_OUTPUT_BYTES + 1});"
+                        f"sys.{stream}.buffer.flush();"
+                        "time.sleep(10)"
+                    ),
+                )
+                invocation = invoke_veto_verifier(
+                    envelope,
+                    command=verifier,
+                    timeout_seconds=2,
+                )
+                self.assertEqual(invocation.reason_code, reason)
+                self.assertFalse(invocation.accepted)
+
+    def test_verifier_timeout_terminates_descendants(self) -> None:
+        envelope = build_assurance_envelope(
+            request_fingerprint=REQUEST_FINGERPRINT,
+            checkpoint="state_construction",
+            sequence=0,
+            state_projection={"action": "observe"},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            started = root / "child-started"
+            survived = root / "child-survived"
+            child_script = (
+                "import pathlib,time;"
+                f"pathlib.Path({str(started)!r}).write_text('started');"
+                "time.sleep(1.5);"
+                f"pathlib.Path({str(survived)!r}).write_text('survived')"
+            )
+            parent_script = (
+                "import subprocess,sys,time;"
+                "subprocess.Popen([sys.executable,'-c',"
+                f"{child_script!r}]);"
+                "time.sleep(10)"
+            )
+            invocation = invoke_veto_verifier(
+                envelope,
+                command=(Path(sys.executable), "-c", parent_script),
+                timeout_seconds=0.75,
+            )
+            self.assertEqual(invocation.reason_code, "VERIFIER_TIMEOUT")
+            self.assertTrue(started.is_file())
+            time.sleep(1.0)
+            self.assertFalse(survived.exists())
 
 
 if __name__ == "__main__":

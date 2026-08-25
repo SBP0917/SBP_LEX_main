@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import base64
 import importlib.metadata
-import json
 import os
-import subprocess
-import sys
 import platform
+import sys
 import sysconfig
+import time
 from copy import deepcopy
 from dataclasses import replace
+from hashlib import sha512
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,7 +24,8 @@ from sbp_lex.local_trust.artifact import (
 )
 from sbp_lex.local_trust.boundary_checker import check_runtime_detachment
 from sbp_lex.local_trust.constants import (
-    ARTIFACT_SIGNING_PURPOSE,
+    COMMAND_POLICY,
+    EVIDENCE_GROUPS,
     GENESIS,
     NO_AUTHORITY,
     PRODUCTION,
@@ -35,7 +36,7 @@ from sbp_lex.local_trust.deployment import (
     DeploymentTrustError,
     ExternalProviderAdmission,
 )
-from sbp_lex.local_trust.digests import canonical_bytes, digest
+from sbp_lex.local_trust.digests import digest
 from sbp_lex.local_trust.history import (
     AcceptedHistoryError,
     advance_accepted_package_history,
@@ -51,16 +52,54 @@ from sbp_lex.local_trust.paths import (
     write_json_exclusive,
 )
 from sbp_lex.local_trust.signing import (
+    PRODUCTION_DUAL_CUSTODY_CLASS,
     DualSignatureLaneCustody,
     LocalTrustSignatureError,
-    PRODUCTION_DUAL_CUSTODY_CLASS,
     sign_hybrid,
     verify_hybrid,
 )
 from sbp_lex.local_trust.toolchain_guard import (
+    _executable_pin_evidence,
+    _isolated_assurance_complete,
     collect_isolated_assurance_evidence,
     collect_toolchain_inventory,
 )
+
+
+def test_external_executable_pins_are_absent_wrong_or_exact() -> None:
+    measurements = [
+        {
+            "tool_id": tool_id,
+            "sha512": f"{ordinal:x}" * 128,
+            "resolved_path": f"C:/measured/{tool_id}.exe",
+            "hardlink_count": 2 if tool_id in {"cargo", "git"} else 1,
+        }
+        for ordinal, tool_id in enumerate(
+            ("python", "cargo", "java", "alr", "git"),
+            1,
+        )
+    ]
+    absent = _executable_pin_evidence(measurements, [], None)
+    assert absent["external_executable_pins_present"] is False
+    assert absent["executable_pin_failures"] == [
+        "EXTERNAL_EXECUTABLE_PINS_ABSENT"
+    ]
+    wrong = _executable_pin_evidence(
+        measurements,
+        [],
+        {item["tool_id"]: "f" * 128 for item in measurements},
+    )
+    assert wrong["external_executable_pins_present"] is False
+    assert wrong["executable_pin_failures"] == [
+        "EXTERNAL_EXECUTABLE_PIN_MISMATCH"
+    ]
+    exact = _executable_pin_evidence(
+        measurements,
+        [],
+        {item["tool_id"]: item["sha512"] for item in measurements},
+    )
+    assert exact["external_executable_pins_present"] is True
+    assert exact["executable_pin_failures"] == []
 
 
 def test_detached_canonical_sha512_matches_exact_v2_contract() -> None:
@@ -384,6 +423,24 @@ def test_hardlink_casefold_and_immutable_receipt_controls(tmp_path: Path) -> Non
             inventory_root(root, "Case")
 
 
+def test_repository_root_alias_is_rejected_before_cli_validation(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    alias = tmp_path / "repository-alias"
+    try:
+        alias.symlink_to(repository, target_is_directory=True)
+    except OSError:
+        pass
+    else:
+        with pytest.raises(LocalTrustPathError, match="symlink_or_reparse"):
+            validated_root(alias)
+
+    cli_source = Path("sbp_lex/local_trust/cli.py").read_text(encoding="utf-8")
+    assert "Path(args.repository_root).resolve()" not in cli_source
+
+
 def test_command_capture_retains_full_bytes_and_fails_closed_on_overflow(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -406,25 +463,98 @@ def test_command_capture_retains_full_bytes_and_fails_closed_on_overflow(
     assert not command_evidence.validate_full_byte_transcript(overflow)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object containment")
+def test_command_timeout_terminates_the_entire_windows_process_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = tmp_path / "surviving-child.txt"
+    child = (
+        "import pathlib,time;time.sleep(2);"
+        f"pathlib.Path({str(marker)!r}).write_text('survived',encoding='utf-8')"
+    )
+    parent = (
+        "import subprocess,sys,time;"
+        f"subprocess.Popen([sys.executable,'-c',{child!r}]);"
+        "time.sleep(10)"
+    )
+    arguments = ("{python}", "-c", parent)
+    monkeypatch.setattr(command_evidence, "COMMAND_POLICY", (("tree_timeout", arguments, True),))
+    result = command_evidence.capture_command(
+        tmp_path,
+        command_evidence.resolved_command_policy()[0],
+        timeout_seconds=1,
+    )
+    assert result["status"] == "COMMAND_TIMEOUT"
+    time.sleep(3)
+    assert not marker.exists()
+    repository_source = Path("sbp_lex/local_trust/repository.py").read_text(encoding="utf-8")
+    assert "_WindowsCommandJob(process)" in repository_source
+    assert "creationflags=_windows_creation_flags()" in repository_source
+    assert "_terminate(process, windows_job)" in repository_source
+
+
 def test_present_tested_but_inactive_requires_source_log_and_status() -> None:
     files = [
+        {"path": "hybrid_signature_rust/src/lib.rs", "sha512": "1" * 128},
+        {"path": "independent_verifier_rust/src/lib.rs", "sha512": "1" * 128},
+        {"path": "polyglot/rust/v2_assurance_kernel/src/lib.rs", "sha512": "1" * 128},
+        {"path": "rust_authority_service/src/lib.rs", "sha512": "1" * 128},
         {"path": "security_core/src/lib.rs", "sha512": "1" * 128},
+        {"path": "trusted_core_rust/src/lib.rs", "sha512": "1" * 128},
+        {"path": "wire_protocol/rust/src/lib.rs", "sha512": "1" * 128},
+        {"path": "wire_protocol/v2/rust/src/lib.rs", "sha512": "1" * 128},
         {"path": "docs/security/RUST_TCB_AND_TLA_VALIDATION.md", "sha512": "2" * 128},
         {"path": "formal/tla/SBPLEXV2.tla", "sha512": "3" * 128},
+        {"path": "formal/SBPLexAuthority.cfg", "sha512": "3" * 128},
+        {"path": "formal/SBPLexAuthority.tla", "sha512": "3" * 128},
+        {"path": "formal/check_model.py", "sha512": "3" * 128},
+        {"path": "formal/README.md", "sha512": "4" * 128},
         {"path": "docs/validation/UNIVERSITY_VALIDATION_PROTOCOL.md", "sha512": "4" * 128},
+        {"path": "docs/validation/V2_CANONICAL_STATUS.md", "sha512": "4" * 128},
         {"path": "spark_safety_monitor/src/spark_safety_monitor.adb", "sha512": "5" * 128},
-        {"path": "evidence/v2/spark-proof-evidence.json", "sha512": "6" * 128},
+        {"path": "spark_safety_monitor/spark_safety_monitor.gpr", "sha512": "5" * 128},
+        {"path": "spark_safety_monitor/tools/run_harness.py", "sha512": "5" * 128},
     ]
+    empty_sha512 = sha512(b"").hexdigest()
     commands = [
-        {"command_id": "rust_security_core", "stdout_full_bytes": True},
-        {"command_id": "formal_tla_native", "stdout_full_bytes": True},
-        {"command_id": "spark_gnatprove_native", "stdout_full_bytes": True},
+        {
+            "command_id": command_id,
+            "status": "COMMAND_PASS",
+            "exit_code": 0,
+            "stdout_b64": "",
+            "stdout_bytes": 0,
+            "stdout_sha512": empty_sha512,
+            "stdout_full_bytes": True,
+            "stderr_b64": "",
+            "stderr_bytes": 0,
+            "stderr_sha512": empty_sha512,
+            "stderr_full_bytes": True,
+            "output_truncated": False,
+            "shell_used": False,
+            "timed_out": False,
+        }
+        for command_id in (
+            command[0]
+            for command in COMMAND_POLICY
+            if command[0].startswith("rust_")
+            or command[0].startswith("formal_")
+            or command[0].startswith("spark_")
+        )
     ]
     manifest = {"payload": {"evidence_inventory": {"files": files}}}
     envelope = {"payload": {"command_results": commands}}
     proofs = collect_isolated_assurance_evidence(manifest, envelope)
+    validation_contracts = next(
+        group for group in EVIDENCE_GROUPS
+        if group.get("group_id") == "validation_contracts"
+    )
+    assert "evidence/v2/spark-proof-evidence.json" not in validation_contracts["paths"]
     assert [item["component"] for item in proofs] == [
-        "RUST_SECURITY_CORE", "TLA_FORMAL_MODEL", "SPARK_SAFETY_MONITOR"
+        "RUST_ALL_CRATES",
+        "TLA_ALL_FORMAL_MODELS",
+        "PYTHON_FORMAL_EXPLORER",
+        "SPARK_SAFETY_MONITOR",
     ]
     assert all(
         item["source_evidence"]
@@ -434,6 +564,34 @@ def test_present_tested_but_inactive_requires_source_log_and_status() -> None:
         and item["runtime_attachment"] == "NONE"
         for item in proofs
     )
+    assert _isolated_assurance_complete(proofs) is True
+    spark_proof = next(
+        item for item in proofs if item["component"] == "SPARK_SAFETY_MONITOR"
+    )
+    assert {
+        item["path"] for item in spark_proof["status_evidence"]
+    } == {
+        "docs/validation/UNIVERSITY_VALIDATION_PROTOCOL.md",
+        "docs/validation/V2_CANONICAL_STATUS.md",
+    }
+    failed_commands = deepcopy(commands)
+    failed_commands[0]["status"] = "COMMAND_FAIL"
+    failed_proofs = collect_isolated_assurance_evidence(
+        manifest, {"payload": {"command_results": failed_commands}}
+    )
+    assert _isolated_assurance_complete(failed_proofs) is False
+    truncated_commands = deepcopy(commands)
+    truncated_commands[1]["stdout_full_bytes"] = False
+    truncated_commands[1]["output_truncated"] = True
+    truncated_proofs = collect_isolated_assurance_evidence(
+        manifest, {"payload": {"command_results": truncated_commands}}
+    )
+    assert _isolated_assurance_complete(truncated_proofs) is False
+    duplicate_commands = [*commands, deepcopy(commands[2])]
+    duplicate_proofs = collect_isolated_assurance_evidence(
+        manifest, {"payload": {"command_results": duplicate_commands}}
+    )
+    assert _isolated_assurance_complete(duplicate_proofs) is False
     missing_logs = collect_isolated_assurance_evidence(manifest, {"payload": {"command_results": []}})
     assert all(item["native_command_transcript_evidence"] == [] for item in missing_logs)
 
@@ -442,10 +600,15 @@ def test_python_dependency_lock_is_distinct_and_host_bound(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    expected_history_digest = "a" * 128
     monkeypatch.setattr(
         importlib.metadata,
         "distributions",
-        lambda: [SimpleNamespace(metadata={"Name": "cryptography"}, version="50.0.0")],
+        lambda: [
+            SimpleNamespace(metadata={"Name": "cryptography"}, version="50.0.0"),
+            SimpleNamespace(metadata={"Name": "pip"}, version="25.2"),
+            SimpleNamespace(metadata={"Name": "pytest"}, version="9.1.1"),
+        ],
     )
     requirements = [{
         "identity": "cryptography",
@@ -455,35 +618,75 @@ def test_python_dependency_lock_is_distinct_and_host_bound(
     (tmp_path / "requirements.txt").write_text(
         "cryptography==50.0.0\n", encoding="utf-8", newline=""
     )
-    write_json_exclusive({
-        "schema_id": "sbp.lex.v2.python-dependency-lock/1",
+    production_hash_lock = (
+        "--only-binary=:all:\n--require-hashes\n"
+        "cryptography==50.0.0 --hash=sha256:" + "1" * 64 + "\n"
+    ).encode()
+    assurance_hash_lock = (
+        "--only-binary=:all:\n--require-hashes\n"
+        "cryptography==50.0.0 --hash=sha256:" + "1" * 64 + "\n"
+        "pytest==9.1.1 --hash=sha256:" + "2" * 64 + "\n"
+    ).encode()
+    (tmp_path / "requirements-production.lock.txt").write_bytes(
+        production_hash_lock
+    )
+    (tmp_path / "requirements-test.lock.txt").write_bytes(
+        assurance_hash_lock
+    )
+    lock_document = {
+        "schema_id": "sbp.lex.v2.python-dependency-lock/2",
         "lock_sequence": 1,
         "prior_lock_sha512": "GENESIS",
         "requirements_sha512": digest(requirements),
+        "production_hash_lock_sha512": sha512(production_hash_lock).hexdigest(),
+        "assurance_hash_lock_sha512": sha512(assurance_hash_lock).hexdigest(),
         "target_environment": {
             "implementation": platform.python_implementation(),
             "python_version": platform.python_version(),
             "abi_tag": sys.implementation.cache_tag,
             "platform_tag": sysconfig.get_platform(),
+            "installed_scope": "assurance",
         },
         "rollback_guard": {
             "accepted_attempt_history_sequence": 0,
-            "accepted_attempt_history_sha512": "0" * 128,
+            "accepted_attempt_history_sha512": expected_history_digest,
         },
         "packages": [{
             "name": "cryptography",
             "version": "50.0.0",
             "hashes": ["sha256:" + "1" * 64],
-            "scopes": ["production"],
-            "direct": True,
+            "scopes": ["assurance", "production"],
+            "direct_scopes": ["assurance", "production"],
+            "dependencies": [],
+        }, {
+            "name": "pytest",
+            "version": "9.1.1",
+            "hashes": ["sha256:" + "2" * 64],
+            "scopes": ["assurance"],
+            "direct_scopes": ["assurance"],
             "dependencies": [],
         }],
-    }, tmp_path / "python-dependencies.lock.json")
-    inventory = collect_toolchain_inventory(tmp_path.resolve())
+    }
+    write_json_exclusive(lock_document, tmp_path / "python-dependencies.lock.json")
+    unbound = collect_toolchain_inventory(tmp_path.resolve())
+    assert unbound["python_dependency_evidence"]["dependency_evidence_status"] == "INCOMPLETE"
+    assert "PYTHON_LOCK_ROLLBACK_GUARD_INVALID" in unbound["python_dependency_evidence"]["lock_failures"]
+    inventory = collect_toolchain_inventory(
+        tmp_path.resolve(),
+        expected_accepted_history_sequence=0,
+        expected_accepted_history_digest=expected_history_digest,
+    )
     python_evidence = inventory["python_dependency_evidence"]
     assert python_evidence["dependency_evidence_status"] == "COMPLETE"
     assert python_evidence["authority_granted"] is False
     assert python_evidence["runtime_attachment"] == "NONE"
+    assert inventory["bootstrap_python_tooling"] == [
+        {"name": "pip", "version": "25.2"}
+    ]
+    assert (
+        inventory["bootstrap_python_tooling_classification"]
+        == "NON_RUNTIME_INSTALL_TOOLING"
+    )
     assert "requirements.txt" not in [item["path"] for item in inventory["dependency_locks"]]
     assert "python-dependencies.lock.json" in [
         item["path"] for item in inventory["dependency_locks"]
@@ -493,17 +696,54 @@ def test_python_dependency_lock_is_distinct_and_host_bound(
         "distributions",
         lambda: [
             SimpleNamespace(metadata={"Name": "cryptography"}, version="50.0.0"),
+            SimpleNamespace(metadata={"Name": "pip"}, version="25.2"),
+            SimpleNamespace(metadata={"Name": "pytest"}, version="9.1.1"),
             SimpleNamespace(metadata={"Name": "unexpected"}, version="1.0.0"),
         ],
     )
-    mismatch = collect_toolchain_inventory(tmp_path.resolve())["python_dependency_evidence"]
+    mismatch = collect_toolchain_inventory(
+        tmp_path.resolve(),
+        expected_accepted_history_sequence=0,
+        expected_accepted_history_digest=expected_history_digest,
+    )["python_dependency_evidence"]
     assert mismatch["dependency_evidence_status"] == "INCOMPLETE"
     assert "PYTHON_INSTALLED_PACKAGES_LOCK_MISMATCH_OR_EXTRA" in mismatch["lock_failures"]
+    wrong_history = collect_toolchain_inventory(
+        tmp_path.resolve(),
+        expected_accepted_history_sequence=0,
+        expected_accepted_history_digest="b" * 128,
+    )["python_dependency_evidence"]
+    assert wrong_history["dependency_evidence_status"] == "INCOMPLETE"
+    assert "PYTHON_LOCK_ROLLBACK_GUARD_INVALID" in wrong_history["lock_failures"]
+    cross_contaminated = deepcopy(lock_document)
+    cross_contaminated["packages"][1]["scopes"] = ["assurance", "production"]
+    (tmp_path / "python-dependencies.lock.json").unlink()
+    write_json_exclusive(
+        cross_contaminated,
+        tmp_path / "python-dependencies.lock.json",
+    )
+    cross_contamination = collect_toolchain_inventory(
+        tmp_path.resolve(),
+        expected_accepted_history_sequence=0,
+        expected_accepted_history_digest=expected_history_digest,
+    )["python_dependency_evidence"]
+    assert cross_contamination["dependency_evidence_status"] == "INCOMPLETE"
+    assert "PYTHON_LOCK_SCOPE_CLOSURE_MISMATCH" in cross_contamination["lock_failures"]
 
 
 def test_unpinned_requirements_and_missing_python_lock_fail_closed(tmp_path: Path) -> None:
     (tmp_path / "requirements.txt").write_text(
         "fastapi\nuvicorn\n", encoding="utf-8", newline=""
+    )
+    hash_lock = (
+        "--only-binary=:all:\n--require-hashes\n"
+        "cryptography==50.0.0 --hash=sha256:" + "1" * 64 + "\n"
+    )
+    (tmp_path / "requirements-production.lock.txt").write_text(
+        hash_lock, encoding="utf-8", newline=""
+    )
+    (tmp_path / "requirements-test.lock.txt").write_text(
+        hash_lock, encoding="utf-8", newline=""
     )
     inventory = collect_toolchain_inventory(tmp_path.resolve())
     evidence = inventory["python_dependency_evidence"]

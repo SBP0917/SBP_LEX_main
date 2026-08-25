@@ -5,10 +5,16 @@ from __future__ import annotations
 import os
 import subprocess
 import threading
-from time import monotonic
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
+from .command_evidence import (
+    CommandEvidenceError,
+    _terminate,
+    _windows_creation_flags,
+    _WindowsCommandJob,
+)
 from .constants import EVIDENCE_GROUPS, MAX_COMMAND_OUTPUT_BYTES
 from .digests import digest
 from .paths import collect_group_files, validated_root
@@ -36,6 +42,8 @@ def _git(root: Path, *arguments: str) -> str:
         finally:
             stream.close()
 
+    process: subprocess.Popen[bytes] | None = None
+    windows_job: _WindowsCommandJob | None = None
     try:
         process = subprocess.Popen(
             ("git", *arguments),
@@ -46,12 +54,18 @@ def _git(root: Path, *arguments: str) -> str:
             shell=False,
             close_fds=True,
             start_new_session=os.name != "nt",
-            creationflags=(
-                getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                if os.name == "nt" else 0
-            ),
+            creationflags=_windows_creation_flags(),
         )
-        assert process.stdout is not None and process.stderr is not None
+        if process.stdout is None or process.stderr is None:
+            process.kill()
+            process.wait(timeout=5)
+            raise RepositoryEvidenceError("git_evidence_stream_unavailable")
+        try:
+            windows_job = _WindowsCommandJob(process)
+        except BaseException:
+            process.kill()
+            process.wait(timeout=5)
+            raise
         readers = (
             threading.Thread(target=reader, args=(process.stdout, stdout), daemon=True),
             threading.Thread(target=reader, args=(process.stderr, stderr), daemon=True),
@@ -62,14 +76,19 @@ def _git(root: Path, *arguments: str) -> str:
         while process.poll() is None and not overflow.is_set() and monotonic() < deadline:
             overflow.wait(0.05)
         if process.poll() is None:
-            process.kill()
+            _terminate(process, windows_job)
         process.wait(timeout=5)
         for thread in readers:
             thread.join(timeout=5)
         if overflow.is_set() or any(thread.is_alive() for thread in readers):
             raise RepositoryEvidenceError("git_evidence_output_limit")
-    except (OSError, subprocess.TimeoutExpired, UnicodeError) as exc:
+    except (CommandEvidenceError, OSError, subprocess.TimeoutExpired, UnicodeError) as exc:
         raise RepositoryEvidenceError("git_evidence_unavailable") from exc
+    finally:
+        if windows_job is not None:
+            windows_job.close()
+    if process is None:
+        raise RepositoryEvidenceError("git_evidence_unavailable")
     if process.returncode != 0 or stderr:
         raise RepositoryEvidenceError("git_evidence_failed")
     try:
@@ -107,11 +126,15 @@ def collect_v2_evidence_inventory(repository_root: str | Path) -> dict[str, Any]
     required_missing: list[str] = []
     optional_missing: list[str] = []
     for spec in EVIDENCE_GROUPS:
+        group_id = spec.get("group_id")
+        required = spec.get("required")
+        if type(group_id) is not str or type(required) is not bool:
+            raise RepositoryEvidenceError("evidence_group_specification_invalid")
         records, missing = collect_group_files(root, dict(spec))
         group_status = "PRESENT" if records and not missing else "MISSING"
         group = {
-            "group_id": spec["group_id"],
-            "required": spec["required"],
+            "group_id": group_id,
+            "required": required,
             "status": group_status,
             "missing_requirements": missing,
             "file_count": len(records),
@@ -125,8 +148,8 @@ def collect_v2_evidence_inventory(repository_root: str | Path) -> dict[str, Any]
                 raise RepositoryEvidenceError("evidence_path_measurement_conflict")
             all_files[record["path"]] = record
         if group_status == "MISSING":
-            target = required_missing if spec["required"] else optional_missing
-            target.append(spec["group_id"])
+            target = required_missing if required else optional_missing
+            target.append(group_id)
     files = [all_files[path] for path in sorted(all_files)]
     return {
         "inventory_schema": "SBP_LEX_V2_LOCAL_TRUST_EVIDENCE_INVENTORY_V1",

@@ -420,10 +420,15 @@ def _validate_verification_result_impl(value: Any) -> dict[str, Any]:
             raise reject("PTDE_RESULT_BLOB_OID_INVALID")
     campaign_id(result["campaign_id"])
     lane_order = result["lane_order"]
+    resource_maxima = ASSURANCE_LIMITS.get("resource_maxima")
+    maximum_lanes = (
+        resource_maxima.get("lanes") if type(resource_maxima) is dict else None
+    )
     if (
         type(lane_order) is not list
         or not lane_order
-        or len(lane_order) > ASSURANCE_LIMITS["resource_maxima"]["lanes"]
+        or type(maximum_lanes) is not int
+        or len(lane_order) > maximum_lanes
         or any(type(lane_id) is not str for lane_id in lane_order)
         or len(lane_order) != len(set(lane_order))
     ):

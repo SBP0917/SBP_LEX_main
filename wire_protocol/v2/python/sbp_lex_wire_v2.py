@@ -6,8 +6,11 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, fields as dataclass_fields
-from typing import Final
+from dataclasses import dataclass
+from dataclasses import fields as dataclass_fields
+from typing import Final, TypeGuard, cast
+
+WireValue = str | int
 
 PROTOCOL: Final = "SBP-LEX-AUTH-WIRE/2"
 # SHA-512 migration pin over the former v2 SHA-256 oracle bytes.  It is a
@@ -281,9 +284,14 @@ class AuthenticatedStageContext:
     """
 
     __slots__ = (
-        "_stage_kind", "_expected_result_kind", "_request_transcript_digest",
-        "_chain_tip_digest", "_admission_policy_digest",
-        "_authenticated_convergence_binding_digest", "_context_digest", "_values",
+        "_admission_policy_digest",
+        "_authenticated_convergence_binding_digest",
+        "_chain_tip_digest",
+        "_context_digest",
+        "_expected_result_kind",
+        "_request_transcript_digest",
+        "_stage_kind",
+        "_values",
     )
 
     def __init__(
@@ -389,6 +397,24 @@ def _pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
+def _is_wire_mapping(fields: Mapping[str, object]) -> TypeGuard[Mapping[str, WireValue]]:
+    return all(type(value) in {str, int} for value in fields.values())
+
+
+def _wire_str(fields: Mapping[str, WireValue], key: str) -> str:
+    value = fields[key]
+    if type(value) is not str:
+        raise WireError(f"non-text wire field {key}")
+    return value
+
+
+def _wire_int(fields: Mapping[str, WireValue], key: str) -> int:
+    value = fields[key]
+    if type(value) is not int:
+        raise WireError(f"non-integer wire field {key}")
+    return value
+
+
 def _reject_number(_: str) -> None:
     raise WireError("forbidden JSON number")
 
@@ -408,7 +434,7 @@ def _raw(fields: Mapping[str, object]) -> bytes:
     return b"{" + b",".join(chunks) + b"}"
 
 
-def parse_message(payload: bytes) -> dict[str, object]:
+def parse_message(payload: bytes) -> dict[str, WireValue]:
     if type(payload) is not bytes or not 1 <= len(payload) <= MAX_FRAME_BYTES or any(b > 0x7F for b in payload):
         raise WireError("payload bounds or encoding")
     try:
@@ -422,7 +448,7 @@ def parse_message(payload: bytes) -> dict[str, object]:
     _validate_structure(result, check_digest=True)
     if _raw(result) != payload:
         raise WireError("noncanonical bytes")
-    return result
+    return cast(dict[str, WireValue], result)
 
 
 def encode_message(fields: Mapping[str, object]) -> bytes:
@@ -438,7 +464,7 @@ def encode_frame(fields: Mapping[str, object]) -> bytes:
     return len(payload).to_bytes(4, "big") + payload
 
 
-def decode_frame(frame: bytes) -> dict[str, object]:
+def decode_frame(frame: bytes) -> dict[str, WireValue]:
     if type(frame) is not bytes or len(frame) < 4:
         raise WireError("truncated frame")
     size = int.from_bytes(frame[:4], "big")
@@ -801,7 +827,7 @@ def _authenticate_messages(
     messages: Iterable[Mapping[str, object]], expected: tuple[str, ...], *,
     registry: TrustRegistry, admission: AdmissionPolicy, verifier: Verifier,
     trusted_now_ms: int,
-) -> tuple[list[dict[str, object]], bool]:
+) -> tuple[list[dict[str, WireValue]], bool]:
     parsed = [parse_message(encode_message(message)) for message in messages]
     if not parsed or len(parsed) != len(expected) or type(trusted_now_ms) is not int:
         raise WireError("empty/mismatched authenticated prefix")
@@ -871,15 +897,18 @@ def _authenticate_messages(
             raise WireError("order mismatch")
         if tuple(message[key] for key in _IMMUTABLE_FIELDS) != binding:
             raise WireError("execution binding mutation")
-        if message["prior_transcript_digest"] != prior or message["nonce"] in nonces:
+        nonce = _wire_str(message, "nonce")
+        if message["prior_transcript_digest"] != prior or nonce in nonces:
             raise WireError("chain or nonce replay")
-        nonces.add(message["nonce"])
-        time = message["message_time_ms"]
-        if not message["not_before_ms"] <= time < message["expires_at_ms"] or (prior_time is not None and time < prior_time):
+        nonces.add(nonce)
+        time = _wire_int(message, "message_time_ms")
+        not_before = _wire_int(message, "not_before_ms")
+        expires = _wire_int(message, "expires_at_ms")
+        if not not_before <= time < expires or (prior_time is not None and time < prior_time):
             raise WireError("message freshness/order")
-        if not message["not_before_ms"] <= message["message_time_ms"] <= trusted_now_ms < message["expires_at_ms"]:
+        if not not_before <= time <= trusted_now_ms < expires:
             raise WireError("trusted-time freshness")
-        prior_time, prior = time, message["transcript_digest"]
+        prior_time, prior = time, _wire_str(message, "transcript_digest")
         role = _ROLE_BY_KIND[kind]
         if message["signer_role"] != role or role not in registry.entries:
             raise WireError("unadmitted signer role")
@@ -890,16 +919,18 @@ def _authenticate_messages(
             or message["signing_public_key_hex"] != admitted.public_key_hex
         ):
             raise WireError("signer registry mismatch")
-        algorithm = message["signature_algorithm"]
+        algorithm = _wire_str(message, "signature_algorithm")
         matrix = {
             "TEST_ONLY": ("TEST_FIXTURE", {"TEST-SHA512"}),
             "PRODUCTION_HSM": ("PRODUCTION_HSM", {"ML-DSA-65", "ML-DSA-87"}),
             "PRODUCTION_TPM": ("PRODUCTION_TPM", {"ML-DSA-65", "ML-DSA-87"}),
         }
-        expected_key_class, expected_algorithms = matrix[message["authority_class"]]  # type: ignore[index]
+        expected_key_class, expected_algorithms = matrix[
+            _wire_str(message, "authority_class")
+        ]
         if admitted.key_class != expected_key_class or algorithm not in expected_algorithms:
             raise WireError("authority/key/algorithm matrix")
-        if not verifier(algorithm, bytes.fromhex(admitted.public_key_hex), signature_preimage(message), bytes.fromhex(message["signature_hex"])):
+        if not verifier(algorithm, bytes.fromhex(admitted.public_key_hex), signature_preimage(message), bytes.fromhex(_wire_str(message, "signature_hex"))):
             raise WireError("signature verification failed")
         if kind == "effect_permit_request" and message["point_of_use_digest"] != point_of_use_digest(message):
             raise WireError("point-of-use derivation")
@@ -938,21 +969,23 @@ def _expected_stage_prefix(mode: str, stage: str, actual_kinds: tuple[object, ..
     raise WireError("unsupported staged request")
 
 
-def _validate_release_request(request: Mapping[str, object]) -> dict[str, str | int]:
+def _validate_release_request(request: Mapping[str, WireValue]) -> dict[str, WireValue]:
     checkpoint_a = rendezvous_checkpoint_digest(
-        "A", request["traversal_id"], request["challenge"],
-        request["worker_a_id"], request["a_process_digest"],  # type: ignore[arg-type]
+        "A", _wire_str(request, "traversal_id"), _wire_str(request, "challenge"),
+        _wire_str(request, "worker_a_id"), _wire_str(request, "a_process_digest"),
     )
     checkpoint_b = rendezvous_checkpoint_digest(
-        "B", request["traversal_id"], request["challenge"],
-        request["worker_b_id"], request["b_process_digest"],  # type: ignore[arg-type]
+        "B", _wire_str(request, "traversal_id"), _wire_str(request, "challenge"),
+        _wire_str(request, "worker_b_id"), _wire_str(request, "b_process_digest"),
     )
     if (
         request["a_checkpoint_digest"] != checkpoint_a
         or request["b_checkpoint_digest"] != checkpoint_b
         or request["worker_a_id"] == request["worker_b_id"]
         or request["a_process_digest"] == request["b_process_digest"]
-        or not request["not_before_ms"] <= request["rendezvous_opened_at_ms"] <= request["message_time_ms"]  # type: ignore[operator]
+        or not _wire_int(request, "not_before_ms")
+        <= _wire_int(request, "rendezvous_opened_at_ms")
+        <= _wire_int(request, "message_time_ms")
     ):
         raise WireError("Mode 1 release request evidence")
     return {
@@ -963,7 +996,7 @@ def _validate_release_request(request: Mapping[str, object]) -> dict[str, str | 
     }
 
 
-def _validate_release_pair(request: Mapping[str, object], result: Mapping[str, object]) -> str:
+def _validate_release_pair(request: Mapping[str, WireValue], result: Mapping[str, WireValue]) -> str:
     derived = _validate_release_request(request)
     common_mismatch = (
         result["a_checkpoint_digest"] != derived["a_checkpoint_digest"]
@@ -993,7 +1026,7 @@ def _validate_release_pair(request: Mapping[str, object], result: Mapping[str, o
 
 
 def _receipt_request_values(
-    messages: list[dict[str, object]], start: int, base: int,
+    messages: list[dict[str, WireValue]], start: int, base: int,
 ) -> dict[str, str | int]:
     if len(messages) != base + 1 or messages[base]["kind"] != "effect_receipt":
         raise WireError("receipt request prefix")
@@ -1006,19 +1039,26 @@ def _receipt_request_values(
     if receipt["permit_digest"] != permit_result["permit_digest"] or receipt["permit_id"] != permit_result["permit_id"] or receipt["watchdog_digest"] != permit_result["watchdog_digest"]:
         raise WireError("receipt permit/watchdog binding")
     deadline = min(
-        lease_result["lease_deadline_ms"], permit_result["permit_deadline_ms"],
-        arm_result["watchdog_deadline_ms"],
+        _wire_int(lease_result, "lease_deadline_ms"),
+        _wire_int(permit_result, "permit_deadline_ms"),
+        _wire_int(arm_result, "watchdog_deadline_ms"),
     )
+    permit_time = _wire_int(permit_result, "message_time_ms")
+    consumed_at = _wire_int(receipt, "adapter_consumed_at_ms")
+    receipt_time = _wire_int(receipt, "message_time_ms")
     if (
-        not permit_result["message_time_ms"] <= receipt["adapter_consumed_at_ms"] < deadline
-        or receipt["adapter_consumed_at_ms"] > receipt["message_time_ms"]
-        or receipt["message_time_ms"] >= deadline
+        not permit_time <= consumed_at < deadline
+        or consumed_at > receipt_time
+        or receipt_time >= deadline
     ):
         raise WireError("adapter atomic consumption freshness")
     expected_consumption = adapter_consumption_digest(
-        receipt["durable_consumption_digest"], receipt["permit_digest"],
-        receipt["effect_digest"], receipt["adapter_digest"],
-        receipt["adapter_consumed_at_ms"], receipt["effect_outcome"],  # type: ignore[arg-type]
+        _wire_str(receipt, "durable_consumption_digest"),
+        _wire_str(receipt, "permit_digest"),
+        _wire_str(receipt, "effect_digest"),
+        _wire_str(receipt, "adapter_digest"),
+        consumed_at,
+        _wire_str(receipt, "effect_outcome"),
     )
     if receipt["adapter_consumption_digest"] != expected_consumption:
         raise WireError("adapter consumption derivation")
@@ -1032,7 +1072,9 @@ def _receipt_request_values(
     }
     if receipt["effect_outcome"] not in outcomes:
         raise WireError("effect outcome")
-    status, ack_decision, watchdog_status, watchdog_decision = outcomes[receipt["effect_outcome"]]  # type: ignore[index]
+    status, ack_decision, watchdog_status, watchdog_decision = outcomes[
+        _wire_str(receipt, "effect_outcome")
+    ]
     return {
         "adapter_consumption_digest": expected_consumption,
         "completion_deadline_ms": deadline,
@@ -1048,7 +1090,7 @@ def _receipt_request_values(
 
 
 def _watchdog_terminal_values(
-    messages: list[dict[str, object]], start: int, base: int,
+    messages: list[dict[str, WireValue]], start: int, base: int,
 ) -> dict[str, str | int]:
     lease_result = messages[start + 5]
     permit_result, arm_result = messages[start + 9], messages[start + 7]
@@ -1056,10 +1098,11 @@ def _watchdog_terminal_values(
     if len(tail) == 1:
         terminal = tail[0]
         fail_close_deadline = min(
-            lease_result["lease_deadline_ms"], permit_result["permit_deadline_ms"],
-            arm_result["watchdog_deadline_ms"],
+            _wire_int(lease_result, "lease_deadline_ms"),
+            _wire_int(permit_result, "permit_deadline_ms"),
+            _wire_int(arm_result, "watchdog_deadline_ms"),
         )
-        terminal_time = terminal["message_time_ms"]
+        terminal_time = _wire_int(terminal, "message_time_ms")
         result_deadline_exclusive = min(
             terminal_time + FAIL_CLOSE_RESULT_MAX_DELAY_MS + 1,  # type: ignore[operator]
             MAX_SAFE_INTEGER + 1,
@@ -1067,7 +1110,9 @@ def _watchdog_terminal_values(
         valid_trip_time = (
             terminal_time == fail_close_deadline
             if terminal["watchdog_status"] == "TIMEOUT"
-            else permit_result["message_time_ms"] <= terminal_time <= fail_close_deadline
+            else _wire_int(permit_result, "message_time_ms")
+            <= terminal_time
+            <= fail_close_deadline
         )
         if (
             terminal["watchdog_status"] not in {"STOP", "TIMEOUT"}
@@ -1090,7 +1135,7 @@ def _watchdog_terminal_values(
     if len(tail) != 3 or tail[0]["kind"] != "effect_receipt" or tail[1]["kind"] != "receipt_ack":
         raise WireError("watchdog request prefix")
     receipt_values = _receipt_request_values(messages[: base + 1], start, base)
-    receipt, ack, terminal = tail
+    _receipt, ack, terminal = tail
     if (
         ack["permit_digest"] != receipt_values["permit_digest"]
         or ack["permit_id"] != receipt_values["permit_id"]
@@ -1151,7 +1196,7 @@ def validate_request_prefix(
 
 
 def _stage_context_from_authenticated(
-    parsed: list[dict[str, object]], *, expected_request_kind: str,
+    parsed: list[dict[str, WireValue]], *, expected_request_kind: str,
     registry: TrustRegistry, admission: AdmissionPolicy,
 ) -> AuthenticatedStageContext:
     """Derive one context from an already authenticated, prior-validated prefix."""
@@ -1224,7 +1269,7 @@ def validate_and_append_result(
     request_prefix: Iterable[Mapping[str, object]], result: Mapping[str, object], *,
     context: AuthenticatedStageContext, registry: TrustRegistry,
     admission: AdmissionPolicy, verifier: Verifier, trusted_now_ms: int,
-) -> tuple[dict[str, object], ...]:
+) -> tuple[dict[str, WireValue], ...]:
     """Validate an already signed result and return the authenticated new chain.
 
     A result cannot be returned by this API unless its prefix, kind, sequence,
@@ -1274,7 +1319,12 @@ def validate_effect_permit_for_atomic_consumption(
     point_of_use = stage.derived("point_of_use_digest")
     if (
         type(lease_deadline) is not int or type(watchdog_deadline) is not int
-        or trusted_now_ms >= min(lease_deadline, watchdog_deadline, permit["permit_deadline_ms"])
+        or trusted_now_ms
+        >= min(
+            lease_deadline,
+            watchdog_deadline,
+            _wire_int(permit, "permit_deadline_ms"),
+        )
     ):
         raise WireError("permit expired at point of use")
     values: tuple[tuple[str, str | int], ...] = tuple(sorted({
@@ -1300,14 +1350,16 @@ def validate_effect_permit_for_atomic_consumption(
 
 
 def _validate_stage_result(
-    result: Mapping[str, object], context: AuthenticatedStageContext,
-    request_prefix: list[dict[str, object]] | tuple[dict[str, object], ...],
+    result: Mapping[str, WireValue], context: AuthenticatedStageContext,
+    request_prefix: list[dict[str, WireValue]] | tuple[dict[str, WireValue], ...],
 ) -> None:
     if result["kind"] != context.expected_result_kind:
         raise WireError("staged result kind")
     if result["sequence"] != len(request_prefix) or result["prior_transcript_digest"] != context.chain_tip_digest:
         raise WireError("staged result chain")
-    if result["message_time_ms"] < request_prefix[-1]["message_time_ms"]:  # type: ignore[operator]
+    if _wire_int(result, "message_time_ms") < _wire_int(
+        request_prefix[-1], "message_time_ms"
+    ):
         raise WireError("staged result chronology")
     stage = context.stage_kind
     _validate_completed_result_semantics(stage, request_prefix[-1], result, context=context)
@@ -1320,19 +1372,28 @@ def _validate_stage_result(
     elif stage == "lease_redeem_request":
         if result["lease_deadline_ms"] != context.derived("lease_deadline_ms"):
             raise WireError("authority lifecycle handoff: lease result")
-        if result["decision"] == "ALLOW" and result["message_time_ms"] >= result["lease_deadline_ms"]:
+        if result["decision"] == "ALLOW" and _wire_int(
+            result, "message_time_ms"
+        ) >= _wire_int(result, "lease_deadline_ms"):
             raise WireError("lease result deadline")
     elif stage == "watchdog_arm_request":
         if result["watchdog_deadline_ms"] != context.derived("watchdog_deadline_ms"):
             raise WireError("watchdog result derivation")
-        if result["decision"] == "ALLOW" and result["message_time_ms"] >= result["watchdog_deadline_ms"]:
+        if result["decision"] == "ALLOW" and _wire_int(
+            result, "message_time_ms"
+        ) >= _wire_int(result, "watchdog_deadline_ms"):
             raise WireError("watchdog arm result deadline")
     elif stage == "effect_permit_request":
         if result["watchdog_digest"] != context.derived("watchdog_digest"):
             raise WireError("permit result derivation")
         if result["decision"] == "ALLOW" and (
-            result["permit_deadline_ms"] > min(context.derived("lease_deadline_ms"), context.derived("watchdog_deadline_ms"))  # type: ignore[arg-type]
-            or result["message_time_ms"] >= result["permit_deadline_ms"]  # type: ignore[operator]
+            _wire_int(result, "permit_deadline_ms")
+            > min(
+                cast(int, context.derived("lease_deadline_ms")),
+                cast(int, context.derived("watchdog_deadline_ms")),
+            )
+            or _wire_int(result, "message_time_ms")
+            >= _wire_int(result, "permit_deadline_ms")
         ):
             raise WireError("permit result deadline")
     elif stage == "effect_receipt":
@@ -1341,7 +1402,9 @@ def _validate_stage_result(
                 raise WireError("receipt ACK derivation")
         if result["decision"] != context.derived("required_ack_decision"):
             raise WireError("receipt ACK decision")
-        if result["message_time_ms"] >= context.derived("completion_deadline_ms"):  # type: ignore[operator]
+        if _wire_int(result, "message_time_ms") >= cast(
+            int, context.derived("completion_deadline_ms")
+        ):
             raise WireError("receipt ACK deadline")
     elif stage == "watchdog_terminal":
         if (
@@ -1353,7 +1416,7 @@ def _validate_stage_result(
         ):
             raise WireError("watchdog final result derivation")
         deadline = context.derived("completion_deadline_ms")
-        if deadline != 0 and result["message_time_ms"] >= deadline:  # type: ignore[operator]
+        if deadline != 0 and _wire_int(result, "message_time_ms") >= cast(int, deadline):
             raise WireError("watchdog final result deadline")
     if result["decision"] in {"ALLOW", "ACK"}:
         artifact = {
@@ -1366,7 +1429,7 @@ def _validate_stage_result(
 
 
 def _validate_completed_lifecycle(
-    messages: list[dict[str, object]], start: int, *,
+    messages: list[dict[str, WireValue]], start: int, *,
     registry: TrustRegistry, admission: AdmissionPolicy,
 ) -> None:
     """Validate every already-present authority transition, even before a later DENY."""
@@ -1407,11 +1470,16 @@ def _validate_completed_lifecycle(
         if item.get("decision") == "DENY":
             continue
         for field in fields:
-            if item["message_time_ms"] >= item[field]:
+            if _wire_int(item, "message_time_ms") >= _wire_int(item, field):
                 raise WireError("expired authority lifecycle deadline")
     if present > 9:
         permit_request, permit_result = messages[start + 8], messages[start + 9]
-        if permit_result["decision"] == "ALLOW" and permit_result["permit_deadline_ms"] > min(permit_request["lease_deadline_ms"], permit_request["watchdog_deadline_ms"]):
+        if permit_result["decision"] == "ALLOW" and _wire_int(
+            permit_result, "permit_deadline_ms"
+        ) > min(
+            _wire_int(permit_request, "lease_deadline_ms"),
+            _wire_int(permit_request, "watchdog_deadline_ms"),
+        ):
             raise WireError("permit deadline widening")
     # Replay the pure transition semantics of every completed result. A caller
     # may supply an arbitrary signed historical prefix, so prior successful
@@ -1435,7 +1503,7 @@ def _validate_completed_lifecycle(
 
 
 def _validate_completed_result_semantics(
-    stage: str, request: Mapping[str, object], result: Mapping[str, object], *,
+    stage: str, request: Mapping[str, WireValue], result: Mapping[str, WireValue], *,
     context: AuthenticatedStageContext,
 ) -> None:
     artifact = _ARTIFACT_RESULT_FIELD.get(stage)
@@ -1469,20 +1537,37 @@ def _validate_completed_result_semantics(
             raise WireError("zero authority artifact: permit")
         if result["watchdog_digest"] != request["watchdog_digest"]:
             raise WireError("permit result derivation")
-        if result["permit_deadline_ms"] > min(request["lease_deadline_ms"], request["watchdog_deadline_ms"]):  # type: ignore[arg-type]
+        if _wire_int(result, "permit_deadline_ms") > min(
+            _wire_int(request, "lease_deadline_ms"),
+            _wire_int(request, "watchdog_deadline_ms"),
+        ):
             raise WireError("permit deadline widening")
 
 
 def _derive_mode_request(
-    messages: list[dict[str, object]], mode: str, request_index: int,
+    messages: list[dict[str, WireValue]], mode: str, request_index: int,
     admission: AdmissionPolicy,
 ) -> tuple[tuple[str, str, str, str], str]:
     request = messages[request_index]
     if mode == "MODE_1":
         release_request, release_result, a, b, witness = messages[:5]
-        checkpoint_a = rendezvous_checkpoint_digest("A", release_request["traversal_id"], release_request["challenge"], release_request["worker_a_id"], release_request["a_process_digest"])
-        checkpoint_b = rendezvous_checkpoint_digest("B", release_request["traversal_id"], release_request["challenge"], release_request["worker_b_id"], release_request["b_process_digest"])
-        release = rendezvous_release_digest(checkpoint_a, checkpoint_b, release_request["rendezvous_opened_at_ms"], release_result["rendezvous_released_at_ms"])
+        checkpoint_a = rendezvous_checkpoint_digest(
+            "A", _wire_str(release_request, "traversal_id"),
+            _wire_str(release_request, "challenge"),
+            _wire_str(release_request, "worker_a_id"),
+            _wire_str(release_request, "a_process_digest"),
+        )
+        checkpoint_b = rendezvous_checkpoint_digest(
+            "B", _wire_str(release_request, "traversal_id"),
+            _wire_str(release_request, "challenge"),
+            _wire_str(release_request, "worker_b_id"),
+            _wire_str(release_request, "b_process_digest"),
+        )
+        release = rendezvous_release_digest(
+            checkpoint_a, checkpoint_b,
+            _wire_int(release_request, "rendezvous_opened_at_ms"),
+            _wire_int(release_result, "rendezvous_released_at_ms"),
+        )
         if (
             release_request["a_checkpoint_digest"] != checkpoint_a
             or release_request["b_checkpoint_digest"] != checkpoint_b
@@ -1492,7 +1577,11 @@ def _derive_mode_request(
             or release_result["rendezvous_opened_at_ms"] != release_request["rendezvous_opened_at_ms"]
             or release_result["rendezvous_release_digest"] != release
             or release_result["decision"] != "ALLOW"
-            or not release_request["not_before_ms"] <= release_request["rendezvous_opened_at_ms"] <= release_request["message_time_ms"] <= release_result["rendezvous_released_at_ms"] <= release_result["message_time_ms"]
+            or not _wire_int(release_request, "not_before_ms")
+            <= _wire_int(release_request, "rendezvous_opened_at_ms")
+            <= _wire_int(release_request, "message_time_ms")
+            <= _wire_int(release_result, "rendezvous_released_at_ms")
+            <= _wire_int(release_result, "message_time_ms")
         ):
             raise WireError("Mode 1 admitted causal release evidence")
         if a["projection_digest"] != b["projection_digest"]:
@@ -1524,11 +1613,21 @@ def _derive_mode_request(
         for side, statement in (("a", a), ("b", b)):
             if witness[f"statement_{side}_digest"] != statement["transcript_digest"] or witness[f"worker_{side}_id"] != statement["worker_id"] or witness[f"{side}_start_ms"] != statement["substantive_start_ms"] or witness[f"{side}_end_ms"] != statement["substantive_end_ms"]:
                 raise WireError("Mode 1 witness mismatch")
-            if not statement["not_before_ms"] <= statement["substantive_start_ms"] < statement["substantive_end_ms"] <= statement["message_time_ms"]:
+            if not _wire_int(statement, "not_before_ms") <= _wire_int(
+                statement, "substantive_start_ms"
+            ) < _wire_int(statement, "substantive_end_ms") <= _wire_int(
+                statement, "message_time_ms"
+            ):
                 raise WireError("Mode 1 branch time evidence")
-        if witness["message_time_ms"] < max(witness["a_end_ms"], witness["b_end_ms"]):
+        if _wire_int(witness, "message_time_ms") < max(
+            _wire_int(witness, "a_end_ms"), _wire_int(witness, "b_end_ms")
+        ):
             raise WireError("Mode 1 witness predates branch completion")
-        if not witness["not_before_ms"] <= witness["rendezvous_opened_at_ms"] <= witness["rendezvous_released_at_ms"] <= witness["message_time_ms"]:
+        if not _wire_int(witness, "not_before_ms") <= _wire_int(
+            witness, "rendezvous_opened_at_ms"
+        ) <= _wire_int(witness, "rendezvous_released_at_ms") <= _wire_int(
+            witness, "message_time_ms"
+        ):
             raise WireError("Mode 1 rendezvous time bounds")
         if witness["a_process_digest"] == witness["b_process_digest"]:
             raise WireError("Mode 1 process identity not distinct")
@@ -1539,42 +1638,70 @@ def _derive_mode_request(
             or witness["release_result_digest"] != release_result["transcript_digest"]
             or witness["rendezvous_opened_at_ms"] != release_request["rendezvous_opened_at_ms"]
             or witness["rendezvous_released_at_ms"] != release_result["rendezvous_released_at_ms"]
-            or witness["a_ack_digest"] != rendezvous_ack_digest("A", release, a["transcript_digest"])
-            or witness["b_ack_digest"] != rendezvous_ack_digest("B", release, b["transcript_digest"])
-            or witness["rendezvous_released_at_ms"] > min(witness["a_start_ms"], witness["b_start_ms"])
-            or release_result["rendezvous_released_at_ms"] > min(a["substantive_start_ms"], b["substantive_start_ms"])
+            or witness["a_ack_digest"] != rendezvous_ack_digest("A", release, _wire_str(a, "transcript_digest"))
+            or witness["b_ack_digest"] != rendezvous_ack_digest("B", release, _wire_str(b, "transcript_digest"))
+            or _wire_int(witness, "rendezvous_released_at_ms")
+            > min(_wire_int(witness, "a_start_ms"), _wire_int(witness, "b_start_ms"))
+            or _wire_int(release_result, "rendezvous_released_at_ms")
+            > min(_wire_int(a, "substantive_start_ms"), _wire_int(b, "substantive_start_ms"))
         ):
             raise WireError("Mode 1 causal rendezvous evidence")
-        if max(witness["a_start_ms"], witness["b_start_ms"]) >= min(witness["a_end_ms"], witness["b_end_ms"]):
+        if max(_wire_int(witness, "a_start_ms"), _wire_int(witness, "b_start_ms")) >= min(
+            _wire_int(witness, "a_end_ms"), _wire_int(witness, "b_end_ms")
+        ):
             raise WireError("Mode 1 substantive work did not overlap")
-        refs = (a["transcript_digest"], b["transcript_digest"], witness["transcript_digest"], a["projection_digest"])
+        refs = (
+            _wire_str(a, "transcript_digest"),
+            _wire_str(b, "transcript_digest"),
+            _wire_str(witness, "transcript_digest"),
+            _wire_str(a, "projection_digest"),
+        )
     elif mode == "MODE_2":
         primary, cert = messages[:2]
         if primary["callable_digest"] != admission.branch_a_callable_digest or primary["code_provenance_digest"] != admission.branch_a_code_provenance_digest or cert["validator_code_digest"] != admission.validator_code_digest or cert["validator_provenance_digest"] != admission.validator_provenance_digest:
             raise WireError("Mode 2 semantic provenance not admitted")
         if cert["primary_statement_digest"] != primary["transcript_digest"]:
             raise WireError("Mode 2 primary reference")
-        ci, co = _parse_set(cert["candidate_input_set"]), _parse_set(cert["candidate_output_set"])
-        pi, po = _parse_set(cert["pathway_input_set"]), _parse_set(cert["pathway_output_set"])
+        ci, co = _parse_set(_wire_str(cert, "candidate_input_set")), _parse_set(_wire_str(cert, "candidate_output_set"))
+        pi, po = _parse_set(_wire_str(cert, "pathway_input_set")), _parse_set(_wire_str(cert, "pathway_output_set"))
         if not co or not po or not co <= ci or not po <= pi:
             raise WireError("Mode 2 no-widening/reduction")
-        _check_rejections(ci - co, cert["candidate_rejections"])
-        _check_rejections(pi - po, cert["pathway_rejections"])
-        if primary["projection_candidate_digest"] != set_digest(cert["candidate_input_set"]) or primary["projection_pathway_digest"] != set_digest(cert["pathway_input_set"]) or cert["projection_candidate_digest"] != set_digest(cert["candidate_output_set"]) or cert["projection_pathway_digest"] != set_digest(cert["pathway_output_set"]):
+        _check_rejections(ci - co, _wire_str(cert, "candidate_rejections"))
+        _check_rejections(pi - po, _wire_str(cert, "pathway_rejections"))
+        if primary["projection_candidate_digest"] != set_digest(_wire_str(cert, "candidate_input_set")) or primary["projection_pathway_digest"] != set_digest(_wire_str(cert, "pathway_input_set")) or cert["projection_candidate_digest"] != set_digest(_wire_str(cert, "candidate_output_set")) or cert["projection_pathway_digest"] != set_digest(_wire_str(cert, "pathway_output_set")):
             raise WireError("Mode 2 set/projection mismatch")
         unchanged = _PROJECTION - {"projection_digest", "projection_candidate_digest", "projection_pathway_digest"}
         if any(primary[key] != cert[key] for key in unchanged):
             raise WireError("Mode 2 non-set projection widening")
-        refs = (primary["transcript_digest"], cert["transcript_digest"], cert["transcript_digest"], cert["projection_digest"])
+        refs = (
+            _wire_str(primary, "transcript_digest"),
+            _wire_str(cert, "transcript_digest"),
+            _wire_str(cert, "transcript_digest"),
+            _wire_str(cert, "projection_digest"),
+        )
     else:
         proof = messages[0]
         if proof["single_state_callable_digest"] != admission.single_state_callable_digest or proof["single_state_provenance_digest"] != admission.single_state_provenance_digest:
             raise WireError("Mode 3 semantic provenance not admitted")
-        seal = mode3_state_seal_digest(proof["state_digest"], proof["projection_mode_freeze_digest"], proof["projection_digest"], proof["traversal_id"], proof["challenge"])
-        derived_proof = mode3_single_state_proof_digest(seal, proof["single_state_callable_digest"], proof["single_state_provenance_digest"])
+        seal = mode3_state_seal_digest(
+            _wire_str(proof, "state_digest"),
+            _wire_str(proof, "projection_mode_freeze_digest"),
+            _wire_str(proof, "projection_digest"),
+            _wire_str(proof, "traversal_id"),
+            _wire_str(proof, "challenge"),
+        )
+        derived_proof = mode3_single_state_proof_digest(
+            seal,
+            _wire_str(proof, "single_state_callable_digest"),
+            _wire_str(proof, "single_state_provenance_digest"),
+        )
         if proof["state_seal_digest"] != seal or proof["single_state_proof_digest"] != derived_proof:
             raise WireError("Mode 3 proof derivation")
-        refs = (proof["transcript_digest"], ZERO, proof["transcript_digest"], proof["projection_digest"])
+        refs = (
+            _wire_str(proof, "transcript_digest"), ZERO,
+            _wire_str(proof, "transcript_digest"),
+            _wire_str(proof, "projection_digest"),
+        )
     expected_convergence = convergence_digest(*refs)
     actual = (request["evidence_a_digest"], request["evidence_b_digest"], request["mode_evidence_digest"], request["projection_digest"])
     if actual != refs or request["convergence_digest"] != expected_convergence:
@@ -1582,7 +1709,7 @@ def _derive_mode_request(
     return refs, expected_convergence
 
 
-def _validate_mode_prefix(messages: list[dict[str, object]], mode: str, result_index: int, admission: AdmissionPolicy) -> None:
+def _validate_mode_prefix(messages: list[dict[str, WireValue]], mode: str, result_index: int, admission: AdmissionPolicy) -> None:
     result = messages[result_index]
     refs, expected_convergence = _derive_mode_request(messages, mode, result_index - 1, admission)
     actual = (result["evidence_a_digest"], result["evidence_b_digest"], result["mode_evidence_digest"], result["projection_digest"])
@@ -1590,7 +1717,7 @@ def _validate_mode_prefix(messages: list[dict[str, object]], mode: str, result_i
         raise WireError("invented or mismatched convergence result")
 
 
-def _validate_post_lifecycle(messages: list[dict[str, object]], start: int, base: int, denied: bool) -> None:
+def _validate_post_lifecycle(messages: list[dict[str, WireValue]], start: int, base: int, denied: bool) -> None:
     prepare_req, prepare_res, commit_req, commit_res, lease_req, lease_res, arm_req, arm_res, permit_req, permit_res = messages[start:base]
     links = (
         (messages[start - 1], "convergence_digest", prepare_req, "convergence_digest"),
@@ -1613,22 +1740,26 @@ def _validate_post_lifecycle(messages: list[dict[str, object]], start: int, base
         if left[lk] != right[rk]:
             raise WireError("authority lifecycle handoff")
     if not (
-        lease_req["message_time_ms"] < lease_req["lease_deadline_ms"]
-        and lease_res["message_time_ms"] < lease_res["lease_deadline_ms"]
-        and arm_req["message_time_ms"] < arm_req["watchdog_deadline_ms"]
-        and arm_res["message_time_ms"] < arm_res["watchdog_deadline_ms"]
-        and permit_req["message_time_ms"] < permit_req["lease_deadline_ms"]
-        and permit_req["message_time_ms"] < permit_req["watchdog_deadline_ms"]
-        and permit_res["message_time_ms"] < permit_res["permit_deadline_ms"]
+        _wire_int(lease_req, "message_time_ms") < _wire_int(lease_req, "lease_deadline_ms")
+        and _wire_int(lease_res, "message_time_ms") < _wire_int(lease_res, "lease_deadline_ms")
+        and _wire_int(arm_req, "message_time_ms") < _wire_int(arm_req, "watchdog_deadline_ms")
+        and _wire_int(arm_res, "message_time_ms") < _wire_int(arm_res, "watchdog_deadline_ms")
+        and _wire_int(permit_req, "message_time_ms") < _wire_int(permit_req, "lease_deadline_ms")
+        and _wire_int(permit_req, "message_time_ms") < _wire_int(permit_req, "watchdog_deadline_ms")
+        and _wire_int(permit_res, "message_time_ms") < _wire_int(permit_res, "permit_deadline_ms")
     ):
         raise WireError("expired authority lifecycle deadline")
-    if permit_res["permit_deadline_ms"] > min(permit_req["lease_deadline_ms"], permit_req["watchdog_deadline_ms"]):
+    if _wire_int(permit_res, "permit_deadline_ms") > min(
+        _wire_int(permit_req, "lease_deadline_ms"),
+        _wire_int(permit_req, "watchdog_deadline_ms"),
+    ):
         raise WireError("permit deadline widening")
     tail = messages[base:]
     if tail[0]["kind"] == "watchdog_terminal":
         fail_close_deadline = min(
-            lease_res["lease_deadline_ms"], permit_res["permit_deadline_ms"],
-            arm_res["watchdog_deadline_ms"],
+            _wire_int(lease_res, "lease_deadline_ms"),
+            _wire_int(permit_res, "permit_deadline_ms"),
+            _wire_int(arm_res, "watchdog_deadline_ms"),
         )
         if (
             len(tail) != 2
@@ -1646,9 +1777,14 @@ def _validate_post_lifecycle(messages: list[dict[str, object]], start: int, base
             or (
                 tail[0]["message_time_ms"] != fail_close_deadline
                 if tail[0]["watchdog_status"] == "TIMEOUT"
-                else not permit_res["message_time_ms"] <= tail[0]["message_time_ms"] <= fail_close_deadline
+                else not _wire_int(permit_res, "message_time_ms")
+                <= _wire_int(tail[0], "message_time_ms")
+                <= fail_close_deadline
             )
-            or not tail[0]["message_time_ms"] <= tail[1]["message_time_ms"] <= tail[0]["message_time_ms"] + FAIL_CLOSE_RESULT_MAX_DELAY_MS
+            or not _wire_int(tail[0], "message_time_ms")
+            <= _wire_int(tail[1], "message_time_ms")
+            <= _wire_int(tail[0], "message_time_ms")
+            + FAIL_CLOSE_RESULT_MAX_DELAY_MS
         ):
             raise WireError("invalid no-receipt fail-closed tail")
         return
@@ -1674,20 +1810,37 @@ def _validate_post_lifecycle(messages: list[dict[str, object]], start: int, base
     ):
         raise WireError("receipt tail binding")
     if (
-        not permit_res["message_time_ms"] <= receipt["adapter_consumed_at_ms"] < min(lease_res["lease_deadline_ms"], permit_res["permit_deadline_ms"], arm_res["watchdog_deadline_ms"])
-        or receipt["adapter_consumed_at_ms"] > receipt["message_time_ms"]
-        or receipt["message_time_ms"] >= min(lease_res["lease_deadline_ms"], permit_res["permit_deadline_ms"], arm_res["watchdog_deadline_ms"])
+        not _wire_int(permit_res, "message_time_ms")
+        <= _wire_int(receipt, "adapter_consumed_at_ms")
+        < min(
+            _wire_int(lease_res, "lease_deadline_ms"),
+            _wire_int(permit_res, "permit_deadline_ms"),
+            _wire_int(arm_res, "watchdog_deadline_ms"),
+        )
+        or _wire_int(receipt, "adapter_consumed_at_ms")
+        > _wire_int(receipt, "message_time_ms")
+        or _wire_int(receipt, "message_time_ms")
+        >= min(
+            _wire_int(lease_res, "lease_deadline_ms"),
+            _wire_int(permit_res, "permit_deadline_ms"),
+            _wire_int(arm_res, "watchdog_deadline_ms"),
+        )
     ):
         raise WireError("adapter atomic consumption freshness")
     completion_deadline = min(
-        lease_res["lease_deadline_ms"], permit_res["permit_deadline_ms"],
-        arm_res["watchdog_deadline_ms"],
+        _wire_int(lease_res, "lease_deadline_ms"),
+        _wire_int(permit_res, "permit_deadline_ms"),
+        _wire_int(arm_res, "watchdog_deadline_ms"),
     )
-    if any(item["message_time_ms"] >= completion_deadline for item in (ack, terminal, result)):
+    if any(_wire_int(item, "message_time_ms") >= completion_deadline for item in (ack, terminal, result)):
         raise WireError("success/failure tail completion deadline")
     expected_consumption = adapter_consumption_digest(
-        receipt["durable_consumption_digest"], receipt["permit_digest"], receipt["effect_digest"],
-        receipt["adapter_digest"], receipt["adapter_consumed_at_ms"], receipt["effect_outcome"],
+        _wire_str(receipt, "durable_consumption_digest"),
+        _wire_str(receipt, "permit_digest"),
+        _wire_str(receipt, "effect_digest"),
+        _wire_str(receipt, "adapter_digest"),
+        _wire_int(receipt, "adapter_consumed_at_ms"),
+        _wire_str(receipt, "effect_outcome"),
     )
     if receipt["adapter_consumption_digest"] != expected_consumption:
         raise WireError("adapter consumption derivation")
@@ -1699,7 +1852,7 @@ def _validate_post_lifecycle(messages: list[dict[str, object]], start: int, base
         "FAILED": ("FAILURE_RECORDED", "FAILURE_ACK", "STOP", "BLOCK", True),
         "UNKNOWN": ("UNKNOWN_BLOCKED", "FAILURE_ACK", "STOP", "BLOCK", True),
     }
-    expected = outcomes[receipt["effect_outcome"]]
+    expected = outcomes[_wire_str(receipt, "effect_outcome")]
     if (ack["receipt_status"], ack["decision"], terminal["watchdog_status"], result["decision"], denied) != expected:
         raise WireError("effect/watchdog fail-closed semantics")
 
@@ -1714,17 +1867,30 @@ def _validate_structure(fields: Mapping[str, object], *, check_digest: bool) -> 
                 raise WireError("integer field")
         elif type(value) is not str or not value or any(ord(c) < 0x20 or ord(c) > 0x7E for c in value) or '"' in value or "\\" in value:
             raise WireError("string field")
+    if not _is_wire_mapping(fields):
+        raise WireError("wire field type")
     for key, value in fields.items():
-        if (key.endswith("_digest") and key not in _DIGEST_EXCEPTIONS) or key in {"challenge", "nonce", "signer_key_id", "trust_root_digest", "trust_registry_digest"}:
-            if type(value) is not str or not _HEX128.fullmatch(value):
-                raise WireError(f"digest field {key}")
+        if (
+            (key.endswith("_digest") and key not in _DIGEST_EXCEPTIONS)
+            or key
+            in {
+                "challenge",
+                "nonce",
+                "signer_key_id",
+                "trust_root_digest",
+                "trust_registry_digest",
+            }
+        ) and (type(value) is not str or not _HEX128.fullmatch(value)):
+            raise WireError(f"digest field {key}")
     for key in ("runtime_subject", "runtime_tree"):
-        if not _HEX40_OR_128.fullmatch(fields[key]):  # type: ignore[arg-type]
+        if not _HEX40_OR_128.fullmatch(_wire_str(fields, key)):
             raise WireError("runtime identity")
-    if not _HEX32.fullmatch(fields["traversal_id"]) or not _HEX32.fullmatch(fields["operation_id"]):  # type: ignore[arg-type]
+    if not _HEX32.fullmatch(_wire_str(fields, "traversal_id")) or not _HEX32.fullmatch(
+        _wire_str(fields, "operation_id")
+    ):
         raise WireError("operation identity")
     for key in ("prepare_id", "capability_id", "lease_id", "permit_id"):
-        if key in fields and not _HEX32.fullmatch(fields[key]):  # type: ignore[arg-type]
+        if key in fields and not _HEX32.fullmatch(_wire_str(fields, key)):
             raise WireError("artifact identity")
     if fields["protocol"] != PROTOCOL or fields["oracle_sha512"] != ORACLE_SHA512 or fields["mode"] not in {"MODE_1", "MODE_2", "MODE_3"}:
         raise WireError("protocol/oracle/mode")
@@ -1732,15 +1898,21 @@ def _validate_structure(fields: Mapping[str, object], *, check_digest: bool) -> 
         raise WireError("authority class")
     if fields["authority_epoch"] == 0:
         raise WireError("authority epoch")
-    if not fields["not_before_ms"] <= fields["issued_at_ms"] <= fields["message_time_ms"] < fields["expires_at_ms"]:  # type: ignore[operator]
+    if not _wire_int(fields, "not_before_ms") <= _wire_int(
+        fields, "issued_at_ms"
+    ) <= _wire_int(fields, "message_time_ms") < _wire_int(fields, "expires_at_ms"):
         raise WireError("message validity")
     if fields["signer_role"] != _ROLE_BY_KIND[kind]:
         raise WireError("kind/signer role")
-    if fields["signer_key_class"] not in {"TEST_FIXTURE", "PRODUCTION_HSM", "PRODUCTION_TPM"} or fields["signature_algorithm"] not in {"TEST-SHA512", "ML-DSA-65", "ML-DSA-87"} or not _is_hex(fields["signing_public_key_hex"]) or not _is_hex(fields["signature_hex"]):
+    if fields["signer_key_class"] not in {"TEST_FIXTURE", "PRODUCTION_HSM", "PRODUCTION_TPM"} or fields["signature_algorithm"] not in {"TEST-SHA512", "ML-DSA-65", "ML-DSA-87"} or not _is_hex(_wire_str(fields, "signing_public_key_hex")) or not _is_hex(_wire_str(fields, "signature_hex")):
         raise WireError("signature structure")
-    if hashlib.sha512(bytes.fromhex(fields["signing_public_key_hex"])).hexdigest() != fields["signer_key_id"]:  # type: ignore[arg-type]
+    if hashlib.sha512(bytes.fromhex(_wire_str(fields, "signing_public_key_hex"))).hexdigest() != fields["signer_key_id"]:
         raise WireError("key ID derivation")
-    if kind in {"branch_a_statement", "branch_b_statement"} and not fields["not_before_ms"] <= fields["substantive_start_ms"] < fields["substantive_end_ms"] <= fields["message_time_ms"]:  # type: ignore[operator]
+    if kind in {"branch_a_statement", "branch_b_statement"} and not _wire_int(
+        fields, "not_before_ms"
+    ) <= _wire_int(fields, "substantive_start_ms") < _wire_int(
+        fields, "substantive_end_ms"
+    ) <= _wire_int(fields, "message_time_ms"):
         raise WireError("branch substantive time")
     if kind in {"branch_a_statement", "branch_b_statement", "mode2_validator_certificate", "mode3_single_state_proof"}:
         if fields["projection_schema"] != "SBP-LEX-EXEC-PROJECTION/2" or fields["projection_digest"] != projection_digest(fields):

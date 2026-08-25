@@ -41,8 +41,13 @@ def build_rust_dependency_inputs(binding: PObjectBinding) -> dict[str, Any]:
             for raw in raw_packages:
                 if type(raw) is not dict or type(raw.get("name")) is not str or type(raw.get("version")) is not str:
                     raise reject("SUPPLY_CHAIN_RUST_LOCK_PACKAGE_INVALID")
-                source = raw.get("source") if type(raw.get("source")) is str else "LOCAL_OR_UNSPECIFIED"
-                identity = (raw["name"].casefold(), raw["version"], source)
+                name = raw.get("name")
+                version = raw.get("version")
+                if type(name) is not str or type(version) is not str:
+                    raise reject("SUPPLY_CHAIN_RUST_LOCK_PACKAGE_INVALID")
+                raw_source = raw.get("source")
+                source = raw_source if isinstance(raw_source, str) else "LOCAL_OR_UNSPECIFIED"
+                identity = (name.casefold(), version, source)
                 if identity in seen:
                     raise reject("SUPPLY_CHAIN_RUST_LOCK_PACKAGE_DUPLICATE")
                 seen.add(identity)
@@ -53,7 +58,7 @@ def build_rust_dependency_inputs(binding: PObjectBinding) -> dict[str, Any]:
                 if checksum is not None and type(checksum) is not str:
                     raise reject("SUPPLY_CHAIN_RUST_LOCK_CHECKSUM_INVALID")
                 lock_packages.append({
-                    "name": raw["name"], "version": raw["version"], "source": source,
+                    "name": name, "version": version, "source": source,
                     "checksum": checksum, "dependencies": sorted(dependencies),
                 })
         workspaces.append({

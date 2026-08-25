@@ -24,8 +24,10 @@ The current repository-local execution record is
 `docs/validation/V2_CURRENT_REPOSITORY_VALIDATION_STATUS.md`.
 
 - The repository contains substantial Python mechanisms and automated test
-  source. The complete suite currently passes under both CPython 3.11.9 and
-  CPython 3.12.13: 660 tests and 269 subtests in each environment.
+  source. The dated baseline recorded 660 tests and 269 subtests under both
+  CPython 3.11.9 and CPython 3.12.13. This protocol does not promote that
+  baseline into a current result; `V2_CANONICAL_STATUS.md` records the latest
+  CPython 3.12.13 regression, and no post-baseline CPython 3.11 claim is made.
 - The isolated `security_core/` contains all 19 requested responsibility areas.
   The current strict-dual hardening run recorded 35/35 passing Rust tests,
   formatting, and strict Clippy with warnings denied.
@@ -602,7 +604,7 @@ separately and cannot inherit the engineering result.
 | Dependency | Required property | Baseline status |
 |---|---|---|
 | Canonical Python dependency admission remains unsealed | Reproducible Python dependency resolution | `evidence/v2/python311-resolution-evidence.json` binds a clean CPython 3.11.9/win-amd64 environment to 17 exact wheel hashes, sizes, installed versions and active dependency edges; the canonical `python-dependencies.lock.json` remains unavailable until genuine accepted-attempt/rollback history and the final freeze binding exist |
-| Canonical launcher | One reproducible university execution entrypoint | `main:app` through Uvicorn is the canonical V2 launcher; independent clean-host execution remains required |
+| Canonical launcher | One reproducible university execution entrypoint | `main.run_v2` and the one-shot `python main.py` CLI are the canonical V2 surfaces; independent clean-host execution remains required |
 | Windows host with operational TPM and supported provider | Non-exportable key custody and provider-backed signing | Unvalidated; provider returned `NTE_DEVICE_NOT_READY` in current observation |
 | Production key provisioning/role registry | Correct signer identity, rotation and revocation | Not present or established in current deployment evidence |
 | Trusted monotonic time | Expiry/freshness and point-of-use windows | Not established |

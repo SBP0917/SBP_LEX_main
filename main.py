@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+import argparse
+import json
+from pathlib import Path
+import sys
+from typing import Any, Dict, Sequence, TextIO
 
-from fastapi import FastAPI
-from pydantic import BaseModel, ConfigDict
-
-from sbp_lex.pipeline.runner import PipelineHybridTrustContexts, run_v2
+from sbp_lex.pipeline.runner import (
+    PipelineHybridTrustContexts,
+    run_v2 as _pipeline_run_v2,
+)
 from sbp_lex.security.signature_provider import SignatureProvider
 from sbp_lex.governance.three_p_doctrine import ThreePCoreEvaluator
 from sbp_lex.governance.filed_frameworks import FiledFrameworkEvaluator
@@ -29,7 +33,7 @@ from sbp_lex.baseline.request_controls import (
 # SBP-LEX V2 SINGLE-PIPELINE ENTRY POINT
 # ─────────────────────────────────────────────
 
-def run_sbp_lex(
+def run_v2(
     request: Dict[str, Any],
     pre_context_signals: Dict[str, Any] | None = None,
     *,
@@ -62,7 +66,7 @@ def run_sbp_lex(
     hybrid_trust_contexts: PipelineHybridTrustContexts | None = None,
 ) -> Dict[str, Any]:
     """
-    External entry point for the SBP-LEX V2 single pipeline.
+    Canonical library entry point for the SBP-LEX V2 single pipeline.
 
     Accepts:
     - request (action, payload, context)
@@ -72,7 +76,7 @@ def run_sbp_lex(
 
     Delegates execution to the deterministic pipeline.
     """
-    return run_v2(
+    return _pipeline_run_v2(
         request,
         pre_context_signals,
         signature_provider=signature_provider,
@@ -111,50 +115,79 @@ def run_sbp_lex(
     )
 
 
-class SBPLexV2RequestEnvelope(BaseModel):
-    """Closed HTTP request envelope for the canonical V2 launcher."""
+def run_sbp_lex(
+    request: Dict[str, Any],
+    pre_context_signals: Dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """Compatibility wrapper for callers using the former public name."""
 
-    model_config = ConfigDict(extra="forbid")
-
-    request: Dict[str, Any]
-    pre_context_signals: Dict[str, Any] | None = None
-
-
-app = FastAPI(
-    title="SBP-LEX V2",
-    version="2.0.0",
-    description="Fail-closed SBP-LEX V2 governance pipeline.",
-)
+    return run_v2(request, pre_context_signals, **kwargs)
 
 
-@app.get("/health")
-def health() -> Dict[str, Any]:
-    return {
-        "service": "SBP-LEX V2",
-        "process_status": "AVAILABLE",
-        "production_authority_status": "NOT_ADMITTED",
-        "production_ready": False,
-    }
+def _json_object(value: str, *, label: str) -> Dict[str, Any]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"{label}_JSON_INVALID:{error.msg}") from error
+    if type(parsed) is not dict:
+        raise ValueError(f"{label}_JSON_OBJECT_REQUIRED")
+    return parsed
 
 
-@app.post("/v2/evaluate")
-def evaluate_v2(envelope: SBPLexV2RequestEnvelope) -> Dict[str, Any]:
-    return run_sbp_lex(
-        envelope.request,
-        envelope.pre_context_signals,
+def _read_json_object(path: str, *, label: str) -> Dict[str, Any]:
+    try:
+        content = Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise ValueError(f"{label}_FILE_UNREADABLE:{type(error).__name__}") from error
+    return _json_object(content, label=label)
+
+
+def _build_cli_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="sbp-lex-v2",
+        description=(
+            "Run one fail-closed SBP-LEX V2 evaluation. The CLI does not "
+            "inject or admit production authorities."
+        ),
     )
+    request = parser.add_mutually_exclusive_group(required=True)
+    request.add_argument("--request-json")
+    request.add_argument("--request-file")
+    signals = parser.add_mutually_exclusive_group()
+    signals.add_argument("--signals-json")
+    signals.add_argument("--signals-file")
+    return parser
 
 
-# ─────────────────────────────────────────────
-# LOCAL TEST ENTRY (OPTIONAL)
-# ─────────────────────────────────────────────
+def cli(
+    argv: Sequence[str] | None = None,
+    *,
+    stdout: TextIO | None = None,
+) -> int:
+    """Canonical one-shot CLI launcher."""
+
+    parser = _build_cli_parser()
+    arguments = parser.parse_args(argv)
+    try:
+        request = (
+            _json_object(arguments.request_json, label="REQUEST")
+            if arguments.request_json is not None
+            else _read_json_object(arguments.request_file, label="REQUEST")
+        )
+        signals = None
+        if arguments.signals_json is not None:
+            signals = _json_object(arguments.signals_json, label="SIGNALS")
+        elif arguments.signals_file is not None:
+            signals = _read_json_object(arguments.signals_file, label="SIGNALS")
+    except ValueError as error:
+        parser.error(str(error))
+    result = run_v2(request, signals)
+    output = stdout if stdout is not None else sys.stdout
+    json.dump(result, output, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    output.write("\n")
+    return 0
+
 
 if __name__ == "__main__":
-    test_request = {
-        "action": "test_action",
-        "payload": {},
-        "context": {},
-    }
-
-    result = run_sbp_lex(test_request)
-    print(result)
+    raise SystemExit(cli())

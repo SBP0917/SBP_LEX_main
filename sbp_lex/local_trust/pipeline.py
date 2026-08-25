@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, TypedDict
 
 from .adversarial_harness import build_adversarial_harness, validate_adversarial_harness
 from .artifact import build_trusted_time_evidence, validate_artifact_chain
@@ -16,7 +17,10 @@ from .constants import (
     PASS,
     STAGE_ORDER,
 )
-from .constitutional_gates import build_constitutional_gates, validate_constitutional_gates
+from .constitutional_gates import (
+    build_constitutional_gates,
+    validate_constitutional_gates,
+)
 from .deployment import DeploymentTrust, DeploymentTrustError
 from .digests import digest, digest_equal
 from .dossier import build_claims_evidence_dossier, validate_claims_evidence_dossier
@@ -25,16 +29,27 @@ from .execution_envelope import build_execution_envelope, validate_execution_env
 from .history import validate_accepted_package_history
 from .manifest import build_manifest, validate_manifest
 from .regression_matrix import build_regression_matrix, validate_regression_matrix
-from .release_integrity import build_release_integrity_bundle, validate_release_integrity_bundle
-from .signing import HybridSigningContext
+from .release_integrity import (
+    build_release_integrity_bundle,
+    validate_release_integrity_bundle,
+)
+from .signing import HybridSigningContext, HybridVerificationContext
 from .toolchain_guard import (
     build_toolchain_guard,
     collect_isolated_assurance_evidence,
     validate_toolchain_guard,
 )
 
-
 PACKAGE_SCHEMA = "SBP_LEX_V2_LOCAL_TRUST_PACKAGE_V1"
+
+
+class _ValidationTrustArgs(TypedDict):
+    trust_context: HybridVerificationContext
+    owner_pinned_context_digest: str
+    clock_trust_context: HybridVerificationContext
+    owner_pinned_clock_context_digest: str
+
+
 _PACKAGE_UNSIGNED_FIELDS = {
     "package_schema",
     "composition_class",
@@ -264,6 +279,16 @@ def validate_local_trust_package(
         minimum_sequence=deployment.minimum_accepted_history_sequence,
     )
     failures.extend(history["validation_failures"])
+    history_digest = history.get("history_digest")
+    history_sequence = history.get("sequence")
+    history_live_head_digest = history.get("live_head_digest")
+    if (
+        type(history_digest) is not str
+        or type(history_sequence) is not int
+        or type(history_live_head_digest) is not str
+    ):
+        failures.append("accepted_history_binding_invalid")
+        return {"status": FAIL, "validation_failures": sorted(set(failures))}
     expected_fields = {
         "package_schema": PACKAGE_SCHEMA,
         "composition_class": deployment.composition_class,
@@ -271,9 +296,9 @@ def validate_local_trust_package(
         "artifact_context_digest": deployment.owner_pinned_artifact_context_digest,
         "clock_context_digest": deployment.owner_pinned_clock_context_digest,
         "history_context_digest": deployment.owner_pinned_history_context_digest,
-        "accepted_history_digest": history.get("history_digest"),
-        "accepted_history_sequence": history.get("sequence"),
-        "accepted_history_live_head_digest": history.get("live_head_digest"),
+        "accepted_history_digest": history_digest,
+        "accepted_history_sequence": history_sequence,
+        "accepted_history_live_head_digest": history_live_head_digest,
         "stage_order": list(STAGE_ORDER),
         "no_authority": NO_AUTHORITY,
         "detached_boundary": DETACHED_BOUNDARY,
@@ -298,7 +323,7 @@ def validate_local_trust_package(
         failures.append("package_artifacts_invalid")
         return {"status": FAIL, "validation_failures": sorted(set(failures))}
     manifest, envelope, evidence, matrix, gates, toolchain, capstone, release, adversarial, dossier = artifacts
-    common = {
+    common: _ValidationTrustArgs = {
         "trust_context": artifact_context,
         "owner_pinned_context_digest": artifact_pin,
         "clock_trust_context": clock_context,
@@ -312,9 +337,9 @@ def validate_local_trust_package(
             expected_time_sequence=1,
             expected_prior_time_digest=GENESIS,
             expected_repository_identity_digest=deployment.repository_identity.identity_digest,
-            expected_accepted_history_digest=history.get("history_digest"),
-            expected_accepted_history_sequence=history.get("sequence"),
-            expected_accepted_history_live_head_digest=history.get("live_head_digest"),
+            expected_accepted_history_digest=history_digest,
+            expected_accepted_history_sequence=history_sequence,
+            expected_accepted_history_live_head_digest=history_live_head_digest,
         ),
         validate_execution_envelope(
             envelope,
@@ -355,6 +380,8 @@ def validate_local_trust_package(
             expected_manifest_digest=manifest.get("artifact_digest"),
             expected_envelope_digest=envelope.get("artifact_digest"),
             expected_assurance_evidence=collect_isolated_assurance_evidence(manifest, envelope),
+            expected_accepted_history_sequence=history_sequence,
+            expected_accepted_history_digest=history_digest,
             expected_time_sequence=6,
             expected_prior_time_digest=gates.get("time_evidence_digest"),
         ),

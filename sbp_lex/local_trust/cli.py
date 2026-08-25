@@ -29,8 +29,9 @@ def _validate(args: argparse.Namespace) -> int:
         raise ValueError("cli_production_composition_rejected_use_external_provider_api")
     package = load_local_trust_package(args.package)
     accepted_history = strict_load_json(Path(args.accepted_history))
+    repository_root = Path(args.repository_root)
     repository_identity = RepositoryIdentity.measure(
-        Path(args.repository_root).resolve(), repository_id=args.repository_id
+        repository_root, repository_id=args.repository_id
     )
     if not digest_equal(
         repository_identity.identity_digest, args.expected_repository_identity_digest
@@ -59,7 +60,7 @@ def _validate(args: argparse.Namespace) -> int:
     )
     result = verify_local_trust_package(
         package,
-        Path(args.repository_root).resolve(),
+        repository_root,
         deployment=deployment,
         accepted_history=accepted_history,
     )

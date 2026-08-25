@@ -13,7 +13,7 @@ import hmac
 import unicodedata
 from dataclasses import dataclass
 from hashlib import sha512
-from typing import Any, Final, Mapping, Protocol
+from typing import Any, Final, Mapping, Protocol, TypeGuard
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
@@ -640,13 +640,44 @@ class HybridMLDSA87Ed448SoftwareProvider:
         key_version: str = "1",
         **admission_flags: bool,
     ) -> "HybridMLDSA87Ed448SoftwareProvider":
+        admitted_flags = {
+            "three_p_attestation_admitted",
+            "framework_attestation_admitted",
+            "licence_attestation_admitted",
+            "skg_attestation_admitted",
+            "lifecycle_attestation_admitted",
+            "release_integrity_attestation_admitted",
+            "release_admission_attestation_admitted",
+        }
+        if set(admission_flags) - admitted_flags:
+            raise HybridSignatureError("HYBRID_SOFTWARE_PROVIDER_FLAG_INVALID")
         return cls(
             _mldsa87_private_key=mldsa87_private_key,
             _ed448_private_key=ed448_private_key,
             provider_id=provider_id,
             key_epoch=key_epoch,
             key_version=key_version,
-            **admission_flags,
+            three_p_attestation_admitted=admission_flags.get(
+                "three_p_attestation_admitted", False
+            ),
+            framework_attestation_admitted=admission_flags.get(
+                "framework_attestation_admitted", False
+            ),
+            licence_attestation_admitted=admission_flags.get(
+                "licence_attestation_admitted", False
+            ),
+            skg_attestation_admitted=admission_flags.get(
+                "skg_attestation_admitted", False
+            ),
+            lifecycle_attestation_admitted=admission_flags.get(
+                "lifecycle_attestation_admitted", False
+            ),
+            release_integrity_attestation_admitted=admission_flags.get(
+                "release_integrity_attestation_admitted", False
+            ),
+            release_admission_attestation_admitted=admission_flags.get(
+                "release_admission_attestation_admitted", False
+            ),
         )
 
     @property
@@ -683,7 +714,7 @@ class HybridMLDSA87Ed448SoftwareProvider:
         )
 
 
-def is_hybrid_provider(provider: Any) -> bool:
+def is_hybrid_provider(provider: Any) -> TypeGuard[HybridSignatureProvider]:
     if provider is None:
         return False
     try:
@@ -1042,6 +1073,7 @@ def verify_hybrid_signed_object(
         AttributeError,
         InvalidSignature,
         KeyError,
+        RecursionError,
         TypeError,
         ValueError,
     ):

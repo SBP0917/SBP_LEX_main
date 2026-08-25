@@ -8,7 +8,7 @@ Stakeholder class is descriptive only and never grants rights or authority.
 """
 
 from copy import deepcopy
-from typing import Any, Final, Protocol
+from typing import Any, Final, Protocol, TypeGuard
 
 from sbp_lex.security.integrity import (
     GENESIS_HASH,
@@ -156,11 +156,11 @@ def _safe_hash(value: Any) -> str | None:
         return None
 
 
-def _text(value: Any) -> bool:
+def _text(value: Any) -> TypeGuard[str]:
     return type(value) is str and bool(value)
 
 
-def _text_list(value: Any) -> bool:
+def _text_list(value: Any) -> TypeGuard[list[str]]:
     return (
         type(value) is list
         and bool(value)
@@ -180,7 +180,9 @@ def _provider_admitted(provider: SignatureProvider | None) -> bool:
     )
 
 
-def _evaluator_contract_exact(evaluator: Any) -> bool:
+def _evaluator_contract_exact(
+    evaluator: Any,
+) -> TypeGuard[AuthorityBoundaryEvaluator]:
     metadata = (
         getattr(evaluator, "evaluator_id", None),
         getattr(evaluator, "evaluator_version", None),
@@ -219,7 +221,7 @@ def _snapshot(
     }
 
 
-def _snapshot_exact(snapshot: Any) -> bool:
+def _snapshot_exact(snapshot: Any) -> TypeGuard[dict[str, Any]]:
     return (
         type(snapshot) is dict
         and set(snapshot) == _SNAPSHOT_FIELDS
@@ -347,6 +349,8 @@ def _determination_error(
         return "AUTHORITY_BOUNDARY_INDEPENDENT_AUTHORITY_PROHIBITED"
 
     evaluation_time = snapshot.get("evaluation_time")
+    if type(evaluation_time) is not int:
+        return "AUTHORITY_BOUNDARY_EVALUATION_TIME_INVALID"
     mandate_active_now = (
         determination["participant_status"] == PARTICIPANT_ACTIVE
         and determination["mandate_status"] == MANDATE_ACTIVE
@@ -461,14 +465,16 @@ def evaluate_authority_boundary(
     if error is None and evaluator is None:
         error = "AUTHORITY_BOUNDARY_EVALUATOR_NOT_INJECTED"
     if error is None:
-        method = getattr(evaluator, "evaluate_authority_boundary", None)
         if not _evaluator_contract_exact(evaluator):
             error = "AUTHORITY_BOUNDARY_EVALUATOR_CONTRACT_INVALID"
         elif not _provider_admitted(attestation_provider):
             error = "AUTHORITY_BOUNDARY_PROVIDER_NOT_INJECTED_OR_ADMITTED"
         else:
             try:
-                source = method(stage=stage, snapshot=deepcopy(snapshot))
+                source = evaluator.evaluate_authority_boundary(
+                    stage=stage,
+                    snapshot=deepcopy(snapshot),
+                )
             except Exception as exc:
                 error = (
                     "AUTHORITY_BOUNDARY_EVALUATOR_ERROR:"
@@ -614,6 +620,10 @@ def verify_authority_boundary(
                 return False
             snapshot = record.get("evaluation_snapshot")
             source = record.get("evaluation_source")
+            if not _snapshot_exact(snapshot):
+                return False
+            if type(source) is not dict:
+                return False
             if (
                 record.get("contract_id") != AUTHORITY_BOUNDARY_CONTRACT_ID
                 or record.get("schema_status")
@@ -628,7 +638,6 @@ def verify_authority_boundary(
                     record.get(field) is not False
                     for field in record_false_flags
                 )
-                or not _snapshot_exact(snapshot)
                 or snapshot.get("stage") != record.get("stage")
                 or snapshot.get("evaluation_sequence") != sequence
                 or snapshot.get("prior_boundary_digest") != prior_digest
@@ -670,7 +679,9 @@ def verify_authority_boundary(
             return True
 
         chain = state.get("hash_chain")
-        if not verify_hash_chain_entries(chain, state.get("state_hash")):
+        if type(chain) is not list or not verify_hash_chain_entries(
+            chain, state.get("state_hash")
+        ):
             return False
         previous_index = -1
         for sequence, record in enumerate(trace, start=1):

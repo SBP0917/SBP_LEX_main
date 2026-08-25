@@ -13,7 +13,6 @@ from typing import Any
 
 from .digests import digest, digest_equal, is_sha512
 
-
 MLKEM1024_EVIDENCE_SCHEMA_ID = "sbp.lex.v2.ml-kem-1024-channel-capability-evidence/2"
 MLKEM1024_CONTRACT_VERSION = "SBP_LEX_V2_ML_KEM_1024_CHANNEL_CAPABILITY_V2"
 MLKEM1024_ALGORITHM = "ML-KEM-1024"
@@ -142,10 +141,14 @@ def validate_mlkem1024_capability_evidence(
     try:
         if type(value) is not dict or set(value) != _FIELDS:
             return False
+        observed_at_ms = value.get("observed_at_ms")
+        evidence_sequence = value.get("evidence_sequence")
+        if type(observed_at_ms) is not int or type(evidence_sequence) is not int:
+            return False
         expected = build_mlkem1024_capability_evidence(
             external_pins=external_pins,
-            observed_at_ms=value.get("observed_at_ms"),
-            evidence_sequence=value.get("evidence_sequence"),
+            observed_at_ms=observed_at_ms,
+            evidence_sequence=evidence_sequence,
         )
         return value == expected and digest_equal(
             value.get("evidence_sha512"), expected["evidence_sha512"]

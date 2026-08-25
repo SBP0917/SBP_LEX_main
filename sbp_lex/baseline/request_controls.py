@@ -50,6 +50,7 @@ from sbp_lex.provenance.digital_provenance import (
     DIGITAL_PROVENANCE_CONTRACT_ID,
     NO_AUTHORIZATION_EFFECT as PROVENANCE_NO_AUTHORIZATION_EFFECT,
     ProvenanceDecision,
+    ProvenanceDeploymentTrustContext,
     verify_digital_provenance,
     verify_provenance_verification_receipt,
 )
@@ -163,7 +164,9 @@ def _unique_binding(
     payload: dict[str, Any],
 ) -> tuple[int, dict[str, Any]] | None:
     chain = state.get("hash_chain")
-    if not verify_hash_chain_entries(chain, state.get("state_hash")):
+    if type(chain) is not list or not verify_hash_chain_entries(
+        chain, state.get("state_hash")
+    ):
         return None
     expected_payload_hash = canonical_integrity_hash(payload)
     matches = [
@@ -225,19 +228,31 @@ def run_digital_provenance_stage(
             return _set_provenance_failure(
                 target, "DIGITAL_PROVENANCE_DEPENDENCIES_MISSING"
             )
+        trust_context = dependencies.provenance_trust_context
+        request_fingerprint = target.get("request_fingerprint")
+        release_manifest_digest = target.get("release_manifest_digest")
+        runtime_measurement_digest = target.get("runtime_measurement_digest")
+        if (
+            not isinstance(trust_context, ProvenanceDeploymentTrustContext)
+            or not isinstance(request_fingerprint, str)
+            or not is_sha512(request_fingerprint)
+            or not isinstance(release_manifest_digest, str)
+            or not is_sha512(release_manifest_digest)
+            or not isinstance(runtime_measurement_digest, str)
+            or not is_sha512(runtime_measurement_digest)
+        ):
+            return _set_provenance_failure(
+                target, "DIGITAL_PROVENANCE_DEPENDENCIES_INVALID"
+            )
         decision = verify_digital_provenance(
             target.get("digital_provenance_graph"),
             registry_snapshot=deepcopy(
                 dependencies.provenance_registry_snapshot
             ),
-            trust_context=dependencies.provenance_trust_context,
-            expected_request_fingerprint=target.get("request_fingerprint"),
-            expected_release_manifest_digest=target.get(
-                "release_manifest_digest"
-            ),
-            expected_runtime_measurement_digest=target.get(
-                "runtime_measurement_digest"
-            ),
+            trust_context=trust_context,
+            expected_request_fingerprint=request_fingerprint,
+            expected_release_manifest_digest=release_manifest_digest,
+            expected_runtime_measurement_digest=runtime_measurement_digest,
         )
         target.update(_provenance_projection(decision))
         if (
@@ -245,7 +260,7 @@ def run_digital_provenance_stage(
             or not decision.admitted
             or not verify_provenance_verification_receipt(
                 decision.verification_receipt,
-                trust_context=dependencies.provenance_trust_context,
+                trust_context=trust_context,
             )
         ):
             return target
@@ -328,6 +343,9 @@ def verify_digital_provenance_state(
     try:
         if not isinstance(dependencies, FoundationalRequestDependencies):
             return False
+        trust_context = dependencies.provenance_trust_context
+        if not isinstance(trust_context, ProvenanceDeploymentTrustContext):
+            return False
         if any(key not in state for key in _PROVENANCE_PROJECTION_KEYS):
             return False
         receipt = state["digital_provenance_verification_receipt"]
@@ -358,7 +376,7 @@ def verify_digital_provenance_state(
             or receipt.get("trace_digest") != canonical_integrity_hash(trace)
             or not verify_provenance_verification_receipt(
                 receipt,
-                trust_context=dependencies.provenance_trust_context,
+                trust_context=trust_context,
             )
             or any(
                 receipt.get(field) is not expected
@@ -599,6 +617,12 @@ def _append_impersonation_upstream_bindings(
         raise ValueError("IMPERSONATION_CONTEXT_RECORD_INVALID")
     context_id = context_record.get("context_id")
     context_digest = context_record.get("digest")
+    if (
+        type(context_id) is not str
+        or not isinstance(context_digest, str)
+        or not is_sha512(context_digest)
+    ):
+        raise ValueError("IMPERSONATION_CONTEXT_BINDING_INVALID")
     identity_binding = context_record.get("sovereign_identity_verifier")
     authority_binding = context_record.get("authority_boundary_verifier")
     if type(identity_binding) is not dict or type(authority_binding) is not dict:
@@ -762,8 +786,8 @@ def run_australian_minor_access_stage(
             raise ValueError("AUSTRALIAN_MINOR_ACCESS_VERIFICATION_FAILED")
         return target
     except Exception:
-        record = target.get("australian_minor_access")
-        if type(record) is not dict:
+        existing_record = target.get("australian_minor_access")
+        if type(existing_record) is not dict:
             target["australian_minor_access"] = {
                 "stage": AUSTRALIAN_MINOR_ACCESS_STAGE,
                 "result": "ESCALATE",

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any, Mapping
+from typing import Any
 
 from .artifact import build_signed_artifact, validate_signed_artifact
 from .constants import FAIL, PASS
 from .signing import HybridSigningContext, HybridVerificationContext
-
 
 PAYLOAD_SCHEMA = "SBP_LEX_V2_LOCAL_TRUST_REGRESSION_MATRIX_PAYLOAD_V1"
 REQUIRED_CASES = (
@@ -54,6 +54,8 @@ def run_regression_cases(
     owner_pinned_clock_context_digest: str,
 ) -> list[dict[str, Any]]:
     expected_prior = evidence_chain.get("prior_artifact_digest")
+    if type(expected_prior) is not str:
+        expected_prior = ""
     time_evidence = evidence_chain.get("time_evidence", {})
     baseline = validate_signed_artifact(
         evidence_chain,

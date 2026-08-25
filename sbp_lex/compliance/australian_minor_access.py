@@ -12,13 +12,21 @@ import base64
 import binascii
 import hmac
 from copy import deepcopy
+from dataclasses import dataclass
 from hashlib import sha512
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from sbp_lex.assurance.envelope import canonical_json_bytes
+from sbp_lex.security.hybrid_signature import (
+    HYBRID_SUITE_ID,
+    PRODUCTION_SIGNER,
+    HybridSignatureError,
+    HybridVerificationContext,
+    verify_hybrid_signed_object,
+)
 from sbp_lex.security.integrity import (
     GENESIS_HASH,
     build_hash_chain_entry,
@@ -26,7 +34,6 @@ from sbp_lex.security.integrity import (
     is_sha512,
     verify_hash_chain_entries,
 )
-
 
 MINIMUM_ACCOUNT_AGE: Final = 16
 
@@ -62,9 +69,36 @@ AGE_PRIVACY_LANES: Final = LANES[3:]
 
 SCHEMA: Final = "SBP-LEX-AU-MINOR-ACCESS-V3"
 AUSTRALIAN_MINOR_ACCESS_STAGE: Final = "australian_minor_access"
+PRODUCTION_MODE: Final = "PRODUCTION"
+TEST_ONLY_MODE: Final = "TEST_ONLY"
+AUSTRALIAN_MINOR_ACCESS_OWNER_PURPOSE: Final = (
+    "SBP_LEX_V2_AUSTRALIAN_MINOR_ACCESS_OWNER"
+)
+AUSTRALIAN_MINOR_ACCESS_REGISTRY_PURPOSE: Final = (
+    "SBP_LEX_V2_AUSTRALIAN_MINOR_ACCESS_REGISTRY"
+)
+AUSTRALIAN_MINOR_ACCESS_CLOCK_PURPOSE: Final = (
+    "SBP_LEX_V2_AUSTRALIAN_MINOR_ACCESS_CLOCK"
+)
+AUSTRALIAN_MINOR_ACCESS_REVOCATION_PURPOSE: Final = (
+    "SBP_LEX_V2_AUSTRALIAN_MINOR_ACCESS_REVOCATION"
+)
+AUSTRALIAN_MINOR_ACCESS_REPLAY_HEAD_PURPOSE: Final = (
+    "SBP_LEX_V2_AUSTRALIAN_MINOR_ACCESS_REPLAY_HEAD"
+)
+AUSTRALIAN_MINOR_ACCESS_REPLAY_RECEIPT_PURPOSE: Final = (
+    "SBP_LEX_V2_AUSTRALIAN_MINOR_ACCESS_REPLAY_RECEIPT"
+)
+AUSTRALIAN_MINOR_ACCESS_DURABLE_PROVIDER_ADMISSION_PURPOSE: Final = (
+    "SBP_LEX_V2_AUSTRALIAN_MINOR_ACCESS_DURABLE_PROVIDER_ADMISSION"
+)
+AUSTRALIAN_MINOR_ACCESS_LANE_PURPOSE_PREFIX: Final = (
+    "SBP_LEX_V2_AUSTRALIAN_MINOR_ACCESS_LANE:"
+)
 DEPLOYMENT_DEPENDENCIES: Final = (
     "Production owner pins and composition installation must be sealed outside "
-    "runtime caller input; this module exposes only a TEST_ONLY bootstrap hook.",
+    "runtime caller input; the production installer requires externally supplied "
+    "hybrid verification contexts and independent owner-pin digests.",
     "Replay and revocation stores must be durable, transactional production "
     "services whose persisted heads survive process and host restarts.",
     "Owner, registry, revocation, clock, replay, and lane signing keys require "
@@ -98,6 +132,7 @@ _SIGNATURE_KEYS = {
     "signature_b64",
 }
 _ENVELOPE_KEYS = {"payload", "payload_digest", "signature"}
+_HYBRID_RESERVED_FIELDS = {"digest", "signature", "verified"}
 _OWNER_KEYS = {
     "schema",
     "context_id",
@@ -222,6 +257,27 @@ _REPLAY_RECEIPT_KEYS = {
     "status",
     "effect_authority",
 }
+_DURABLE_PROVIDER_ADMISSION_SCHEMA: Final = (
+    "SBP-LEX-AU-MINOR-DURABLE-PROVIDER-ADMISSION-V1"
+)
+_DURABLE_PROVIDER_KINDS: Final = ("clock", "revocation", "replay")
+_DURABLE_PROVIDER_ADMISSION_KEYS = {
+    "schema",
+    "context_id",
+    "provider_kind",
+    "provider_id",
+    "provider_version",
+    "storage_class",
+    "durability_evidence_sha512",
+    "admission_sequence",
+    "status",
+    "restart_durable",
+    "transactional",
+    "corruption_fail_closed",
+    "rollback_protected",
+    "production_durable_storage_admitted",
+    "effect_authority",
+}
 _SUCCESS_RECORD_KEYS = {
     "schema",
     "stage",
@@ -331,6 +387,65 @@ def _raw_key(
     return raw
 
 
+def _production_binding_exact(
+    binding: Any,
+    *,
+    label: str,
+    trust_context: HybridVerificationContext | None,
+    owner_pinned_context_digest: str | None,
+) -> dict[str, Any]:
+    checked = _exact_dict(binding, _BINDING_KEYS, f"{label}_BINDING")
+    if (
+        not isinstance(trust_context, HybridVerificationContext)
+        or trust_context.signer_class != PRODUCTION_SIGNER
+        or trust_context.allow_test_only
+        or trust_context.effect_authority is not False
+        or not trust_context.external_custody_admitted
+        or type(owner_pinned_context_digest) is not str
+        or not is_sha512(owner_pinned_context_digest)
+        or not hmac.compare_digest(
+            trust_context.context_digest,
+            owner_pinned_context_digest,
+        )
+    ):
+        raise AustralianMinorAccessError(f"UNTRUSTED_{label}_HYBRID_CONTEXT")
+    expected_public_hex = (
+        trust_context.mldsa87_public_key_bytes
+        + trust_context.ed448_public_key_bytes
+    ).hex()
+    expected = {
+        "provider_id": trust_context.provider_id,
+        "algorithm": HYBRID_SUITE_ID,
+        "public_key_hex": expected_public_hex,
+        "key_fingerprint": trust_context.context_digest,
+        "custody_class": trust_context.custody_class,
+        "effect_authority": False,
+    }
+    _text(checked.get("credential_id"), f"{label}_CREDENTIAL_ID")
+    if any(checked.get(field) != value for field, value in expected.items()):
+        raise AustralianMinorAccessError(f"UNTRUSTED_{label}_HYBRID_BINDING")
+    return checked
+
+
+def _hybrid_binding(
+    trust_context: HybridVerificationContext,
+    *,
+    credential_id: str,
+) -> dict[str, Any]:
+    return {
+        "provider_id": trust_context.provider_id,
+        "credential_id": credential_id,
+        "algorithm": HYBRID_SUITE_ID,
+        "public_key_hex": (
+            trust_context.mldsa87_public_key_bytes
+            + trust_context.ed448_public_key_bytes
+        ).hex(),
+        "key_fingerprint": trust_context.context_digest,
+        "custody_class": trust_context.custody_class,
+        "effect_authority": False,
+    }
+
+
 def _verify_signed(
     envelope: Any,
     binding: dict[str, Any],
@@ -338,7 +453,57 @@ def _verify_signed(
     payload_keys: set[str],
     label: str,
     allow_legacy_test_only: bool = False,
+    deployment_mode: str = TEST_ONLY_MODE,
+    hybrid_trust_context: HybridVerificationContext | None = None,
+    owner_pinned_context_digest: str | None = None,
+    expected_purpose: str | None = None,
 ) -> dict[str, Any]:
+    if deployment_mode == PRODUCTION_MODE:
+        if allow_legacy_test_only:
+            raise AustralianMinorAccessError(f"LEGACY_{label}_PRODUCTION_REJECTED")
+        if type(envelope) is not dict:
+            raise AustralianMinorAccessError(f"MALFORMED_{label}_ENVELOPE")
+        payload = _exact_dict(
+            {
+                key: value
+                for key, value in envelope.items()
+                if key not in _HYBRID_RESERVED_FIELDS
+            },
+            payload_keys,
+            f"{label}_PAYLOAD",
+        )
+        _production_binding_exact(
+            binding,
+            label=label,
+            trust_context=hybrid_trust_context,
+            owner_pinned_context_digest=owner_pinned_context_digest,
+        )
+        if (
+            not isinstance(hybrid_trust_context, HybridVerificationContext)
+            or type(owner_pinned_context_digest) is not str
+        ):
+            raise AustralianMinorAccessError(
+                f"UNTRUSTED_{label}_HYBRID_CONTEXT"
+            )
+        if not isinstance(expected_purpose, str) or not expected_purpose:
+            raise AustralianMinorAccessError(f"INVALID_{label}_PURPOSE")
+        try:
+            valid = verify_hybrid_signed_object(
+                envelope,
+                trust_context=hybrid_trust_context,
+                owner_pinned_context_digest=owner_pinned_context_digest,
+                expected_purpose=expected_purpose,
+                require_effect_authority=False,
+            )
+        except (HybridSignatureError, TypeError, ValueError) as exc:
+            raise AustralianMinorAccessError(
+                f"INVALID_{label}_HYBRID_SIGNATURE"
+            ) from exc
+        if not valid:
+            raise AustralianMinorAccessError(f"INVALID_{label}_HYBRID_SIGNATURE")
+        return payload
+    if deployment_mode != TEST_ONLY_MODE or allow_legacy_test_only is not True:
+        raise AustralianMinorAccessError(f"LEGACY_{label}_NOT_TEST_ONLY")
     env = _exact_dict(envelope, _ENVELOPE_KEYS, f"{label}_ENVELOPE")
     payload = _exact_dict(env["payload"], payload_keys, f"{label}_PAYLOAD")
     digest = canonical_integrity_hash(payload)
@@ -365,47 +530,122 @@ def _envelope_digest(envelope: dict[str, Any]) -> str:
     return canonical_integrity_hash(envelope)
 
 
+class _EvidenceResolver(Protocol):
+    def resolve(self, snapshot: dict[str, Any]) -> dict[str, Any]: ...
+
+
+class _TrustedClock(Protocol):
+    id: str
+    version: str
+
+    def current_time_chain(self, context_id: str) -> list[dict[str, Any]]: ...
+
+    def is_current(self, context_id: str, digest: str, sequence: int) -> bool: ...
+
+
+class _RevocationStore(Protocol):
+    id: str
+    version: str
+
+    def current_head_chain(self, context_id: str) -> list[dict[str, Any]]: ...
+
+    def is_current(self, context_id: str, digest: str, sequence: int) -> bool: ...
+
+
+class _ReplayStore(Protocol):
+    id: str
+    version: str
+
+    def current_head(
+        self,
+        namespace: str,
+        subject_binding: str,
+        now: int,
+    ) -> dict[str, Any]: ...
+
+    def claim_once(self, claim: dict[str, Any]) -> dict[str, Any]: ...
+
+    def is_claimed(
+        self,
+        namespace: str,
+        replay_key: str,
+        receipt_digest: str,
+    ) -> bool: ...
+
+    def persisted_receipt(
+        self,
+        namespace: str,
+        replay_key: str,
+    ) -> dict[str, Any] | None: ...
+
+
+@dataclass(frozen=True, slots=True)
 class _DeploymentComposition:
-    __slots__ = (
-        "context_id",
-        "context_digest",
-        "owner",
-        "registry",
-        "registry_payload",
-        "revocation_store",
-        "replay_store",
-        "clock",
-        "pseudonymization_key",
-        "resolvers",
-        "bindings",
-    )
-
-    def __init__(self, **values: Any) -> None:
-        for key, value in values.items():
-            object.__setattr__(self, key, value)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        raise AttributeError("deployment composition is immutable")
+    context_id: str
+    context_digest: str
+    deployment_mode: str
+    owner: dict[str, Any]
+    registry: dict[str, Any]
+    registry_payload: dict[str, Any]
+    revocation_store: _RevocationStore
+    replay_store: _ReplayStore
+    clock: _TrustedClock
+    pseudonymization_key: bytes
+    resolvers: dict[str, _EvidenceResolver]
+    bindings: dict[str, dict[str, Any]]
+    hybrid_trust_contexts: dict[str, HybridVerificationContext]
+    owner_pinned_context_digests: dict[str, str]
 
 
 _ACTIVE_COMPOSITION: _DeploymentComposition | None = None
 
 
-def _install_australian_minor_access_deployment_for_tests(
+def _install_australian_minor_access_deployment(
     composition: dict[str, Any],
     *,
     fixed_context_id: str,
     fixed_context_digest: str,
-    owner_public_key_hex: str,
+    owner_public_key_hex: str | None,
     test_only: bool,
+    owner_trust_context: HybridVerificationContext | None = None,
+    owner_pinned_context_digest: str | None = None,
+    signer_trust_contexts: dict[str, HybridVerificationContext] | None = None,
+    signer_owner_pinned_context_digests: dict[str, str] | None = None,
 ) -> None:
-    """TEST_ONLY bootstrap hook; no runtime production installer is exposed."""
+    """Install one sealed TEST_ONLY legacy or PRODUCTION hybrid composition."""
 
     global _ACTIVE_COMPOSITION
-    if test_only is not True:
-        raise AustralianMinorAccessError("TEST_ONLY_INSTALL_REQUIRED")
     if _ACTIVE_COMPOSITION is not None:
         raise AustralianMinorAccessError("DEPLOYMENT_ALREADY_REGISTERED")
+    deployment_mode = TEST_ONLY_MODE if test_only else PRODUCTION_MODE
+    trust_names = {"registry", "revocation", "replay", "clock", *LANES}
+    hybrid_contexts: dict[str, HybridVerificationContext] = {}
+    hybrid_pins: dict[str, str] = {}
+    if test_only:
+        if any(
+            value is not None
+            for value in (
+                owner_trust_context,
+                owner_pinned_context_digest,
+                signer_trust_contexts,
+                signer_owner_pinned_context_digests,
+            )
+        ):
+            raise AustralianMinorAccessError(
+                "PRODUCTION_HYBRID_TRUST_NOT_ADMITTED_IN_TEST_ONLY"
+            )
+    else:
+        if (
+            type(signer_trust_contexts) is not dict
+            or set(signer_trust_contexts) != trust_names
+            or type(signer_owner_pinned_context_digests) is not dict
+            or set(signer_owner_pinned_context_digests) != trust_names
+        ):
+            raise AustralianMinorAccessError(
+                "PRODUCTION_HYBRID_TRUST_BUNDLE_REQUIRED"
+            )
+        hybrid_contexts = dict(signer_trust_contexts)
+        hybrid_pins = dict(signer_owner_pinned_context_digests)
     required = {
         "owner_record",
         "registry",
@@ -416,28 +656,49 @@ def _install_australian_minor_access_deployment_for_tests(
         "resolvers",
     }
     _exact_dict(composition, required, "DEPLOYMENT_COMPOSITION")
-    try:
-        owner_raw = bytes.fromhex(owner_public_key_hex)
-    except (TypeError, ValueError) as exc:
-        raise AustralianMinorAccessError("INVALID_OWNER_PIN") from exc
-    if len(owner_raw) != 32:
-        raise AustralianMinorAccessError("INVALID_OWNER_PIN")
-    owner_binding = {
-        "provider_id": "DEPLOYMENT_OWNER",
-        "credential_id": f"owner:{sha512(owner_raw).hexdigest()}",
-        "algorithm": "Ed25519",
-        "public_key_hex": owner_raw.hex(),
-        "key_fingerprint": sha512(owner_raw).hexdigest(),
-        "custody_class": "DEPLOYMENT_OWNER_ROOT",
-        "effect_authority": False,
-    }
-    owner = _verify_signed(
-        composition["owner_record"],
-        owner_binding,
-        payload_keys=_OWNER_KEYS,
-        label="OWNER",
-        allow_legacy_test_only=True,
-    )
+    if test_only:
+        try:
+            owner_raw = bytes.fromhex(owner_public_key_hex or "")
+        except (TypeError, ValueError) as exc:
+            raise AustralianMinorAccessError("INVALID_OWNER_PIN") from exc
+        if len(owner_raw) != 32:
+            raise AustralianMinorAccessError("INVALID_OWNER_PIN")
+        owner_binding = {
+            "provider_id": "DEPLOYMENT_OWNER",
+            "credential_id": f"owner:{sha512(owner_raw).hexdigest()}",
+            "algorithm": "Ed25519",
+            "public_key_hex": owner_raw.hex(),
+            "key_fingerprint": sha512(owner_raw).hexdigest(),
+            "custody_class": "DEPLOYMENT_OWNER_ROOT",
+            "effect_authority": False,
+        }
+        owner = _verify_signed(
+            composition["owner_record"],
+            owner_binding,
+            payload_keys=_OWNER_KEYS,
+            label="OWNER",
+            allow_legacy_test_only=True,
+            deployment_mode=TEST_ONLY_MODE,
+        )
+    else:
+        if not isinstance(owner_trust_context, HybridVerificationContext):
+            raise AustralianMinorAccessError(
+                "PRODUCTION_OWNER_HYBRID_CONTEXT_REQUIRED"
+            )
+        owner_binding = _hybrid_binding(
+            owner_trust_context,
+            credential_id=f"owner:{owner_trust_context.context_digest}",
+        )
+        owner = _verify_signed(
+            composition["owner_record"],
+            owner_binding,
+            payload_keys=_OWNER_KEYS,
+            label="OWNER",
+            deployment_mode=PRODUCTION_MODE,
+            hybrid_trust_context=owner_trust_context,
+            owner_pinned_context_digest=owner_pinned_context_digest,
+            expected_purpose=AUSTRALIAN_MINOR_ACCESS_OWNER_PURPOSE,
+        )
     if owner["schema"] != SCHEMA or owner["context_id"] != fixed_context_id:
         raise AustralianMinorAccessError("OWNER_CONTEXT_PIN_MISMATCH")
     actual_context_digest = _envelope_digest(composition["owner_record"])
@@ -445,8 +706,8 @@ def _install_australian_minor_access_deployment_for_tests(
         raise AustralianMinorAccessError("OWNER_CONTEXT_DIGEST_MISMATCH")
     if owner["status"] != "ACTIVE" or owner["effect_authority"] is not False:
         raise AustralianMinorAccessError("OWNER_CONTEXT_INACTIVE")
-    if owner["deployment_mode"] != "TEST_ONLY":
-        raise AustralianMinorAccessError("TEST_ONLY_CONTEXT_REQUIRED")
+    if owner["deployment_mode"] != deployment_mode:
+        raise AustralianMinorAccessError("OWNER_DEPLOYMENT_MODE_MISMATCH")
     _integer(owner["valid_from"], "OWNER_VALID_FROM")
     _integer(owner["valid_until"], "OWNER_VALID_UNTIL")
     if owner["valid_until"] <= owner["valid_from"]:
@@ -457,14 +718,30 @@ def _install_australian_minor_access_deployment_for_tests(
     bindings: dict[str, dict[str, Any]] = {}
     for name in ("registry", "revocation", "replay", "clock"):
         binding = deepcopy(owner[f"{name}_binding"])
-        _raw_key(binding, name.upper(), allow_legacy_test_only=True)
+        if test_only:
+            _raw_key(binding, name.upper(), allow_legacy_test_only=True)
+        else:
+            _production_binding_exact(
+                binding,
+                label=name.upper(),
+                trust_context=hybrid_contexts[name],
+                owner_pinned_context_digest=hybrid_pins[name],
+            )
         bindings[name] = binding
     lane_bindings = owner["lane_bindings"]
     if not isinstance(lane_bindings, dict) or set(lane_bindings) != set(LANES):
         raise AustralianMinorAccessError("INVALID_LANE_BINDINGS")
     for lane in LANES:
         binding = deepcopy(lane_bindings[lane])
-        _raw_key(binding, lane, allow_legacy_test_only=True)
+        if test_only:
+            _raw_key(binding, lane, allow_legacy_test_only=True)
+        else:
+            _production_binding_exact(
+                binding,
+                label=lane,
+                trust_context=hybrid_contexts[lane],
+                owner_pinned_context_digest=hybrid_pins[lane],
+            )
         bindings[lane] = binding
 
     lane_provider_ids = [bindings[lane]["provider_id"] for lane in LANES]
@@ -492,7 +769,11 @@ def _install_australian_minor_access_deployment_for_tests(
         bindings["registry"],
         payload_keys=_REGISTRY_KEYS,
         label="REGISTRY",
-        allow_legacy_test_only=True,
+        allow_legacy_test_only=test_only,
+        deployment_mode=deployment_mode,
+        hybrid_trust_context=hybrid_contexts.get("registry"),
+        owner_pinned_context_digest=hybrid_pins.get("registry"),
+        expected_purpose=AUSTRALIAN_MINOR_ACCESS_REGISTRY_PURPOSE,
     )
     registry_digest = _envelope_digest(composition["registry"])
     if not hmac.compare_digest(registry_digest, owner["registry_digest"]):
@@ -541,6 +822,7 @@ def _install_australian_minor_access_deployment_for_tests(
     _ACTIVE_COMPOSITION = _DeploymentComposition(
         context_id=fixed_context_id,
         context_digest=fixed_context_digest,
+        deployment_mode=deployment_mode,
         owner=deepcopy(owner),
         registry=deepcopy(composition["registry"]),
         registry_payload=deepcopy(registry_payload),
@@ -550,6 +832,195 @@ def _install_australian_minor_access_deployment_for_tests(
         pseudonymization_key=bytes(pseudonymization_key),
         resolvers=dict(resolvers),
         bindings=bindings,
+        hybrid_trust_contexts=hybrid_contexts,
+        owner_pinned_context_digests=hybrid_pins,
+    )
+
+
+def _install_australian_minor_access_deployment_for_tests(
+    composition: dict[str, Any],
+    *,
+    fixed_context_id: str,
+    fixed_context_digest: str,
+    owner_public_key_hex: str,
+    test_only: bool,
+) -> None:
+    """Install the explicit legacy TEST_ONLY, non-effect compatibility model."""
+
+    if test_only is not True:
+        raise AustralianMinorAccessError("TEST_ONLY_INSTALL_REQUIRED")
+    _install_australian_minor_access_deployment(
+        composition,
+        fixed_context_id=fixed_context_id,
+        fixed_context_digest=fixed_context_digest,
+        owner_public_key_hex=owner_public_key_hex,
+        test_only=True,
+    )
+
+
+def _verify_durable_provider_admissions(
+    composition: dict[str, Any],
+    *,
+    fixed_context_id: str,
+    admissions: dict[str, dict[str, Any]] | None,
+    owner_pinned_admission_digests: dict[str, str] | None,
+    trust_context: HybridVerificationContext | None,
+    owner_pinned_context_digest: str | None,
+    prohibited_context_digests: set[str],
+) -> None:
+    """Verify external, independently pinned production-store admissions."""
+
+    if (
+        type(admissions) is not dict
+        or set(admissions) != set(_DURABLE_PROVIDER_KINDS)
+        or not isinstance(trust_context, HybridVerificationContext)
+        or type(owner_pinned_context_digest) is not str
+    ):
+        raise AustralianMinorAccessError(
+            "PRODUCTION_DURABLE_PROVIDER_ADMISSION_REQUIRED"
+        )
+    if (
+        trust_context.signer_class != PRODUCTION_SIGNER
+        or trust_context.allow_test_only
+        or trust_context.effect_authority is not False
+        or not trust_context.external_custody_admitted
+        or not is_sha512(owner_pinned_context_digest)
+        or not hmac.compare_digest(
+            trust_context.context_digest, owner_pinned_context_digest
+        )
+    ):
+        raise AustralianMinorAccessError(
+            "PRODUCTION_DURABLE_PROVIDER_ADMISSION_PIN_INVALID"
+        )
+    if trust_context.context_digest in prohibited_context_digests:
+        raise AustralianMinorAccessError(
+            "PRODUCTION_DURABLE_PROVIDER_ADMISSION_NOT_INDEPENDENT"
+        )
+    if (
+        type(owner_pinned_admission_digests) is not dict
+        or set(owner_pinned_admission_digests)
+        != set(_DURABLE_PROVIDER_KINDS)
+        or any(
+            not is_sha512(value)
+            for value in owner_pinned_admission_digests.values()
+        )
+    ):
+        raise AustralianMinorAccessError(
+            "PRODUCTION_DURABLE_PROVIDER_DOCUMENT_PINS_REQUIRED"
+        )
+
+    providers = {
+        "clock": composition.get("clock"),
+        "revocation": composition.get("revocation_store"),
+        "replay": composition.get("replay_store"),
+    }
+    seen_evidence: set[str] = set()
+    for kind in _DURABLE_PROVIDER_KINDS:
+        signed = admissions[kind]
+        if (
+            type(signed) is not dict
+            or set(signed)
+            != _DURABLE_PROVIDER_ADMISSION_KEYS | _HYBRID_RESERVED_FIELDS
+            or not verify_hybrid_signed_object(
+                signed,
+                trust_context=trust_context,
+                owner_pinned_context_digest=owner_pinned_context_digest,
+                expected_purpose=(
+                    AUSTRALIAN_MINOR_ACCESS_DURABLE_PROVIDER_ADMISSION_PURPOSE
+                ),
+            )
+        ):
+            raise AustralianMinorAccessError(
+                "PRODUCTION_DURABLE_PROVIDER_ADMISSION_INVALID"
+            )
+        if not hmac.compare_digest(
+            canonical_integrity_hash(signed),
+            owner_pinned_admission_digests[kind],
+        ):
+            raise AustralianMinorAccessError(
+                "PRODUCTION_DURABLE_PROVIDER_DOCUMENT_PIN_MISMATCH"
+            )
+        provider = providers[kind]
+        if (
+            signed["schema"] != _DURABLE_PROVIDER_ADMISSION_SCHEMA
+            or signed["context_id"] != fixed_context_id
+            or signed["provider_kind"] != kind
+            or signed["provider_id"] != getattr(provider, "id", None)
+            or signed["provider_version"] != getattr(provider, "version", None)
+            or type(signed["storage_class"]) is not str
+            or not signed["storage_class"]
+            or not is_sha512(signed["durability_evidence_sha512"])
+            or type(signed["admission_sequence"]) is not int
+            or signed["admission_sequence"] < 1
+            or signed["status"] != "ACTIVE"
+            or signed["restart_durable"] is not True
+            or signed["transactional"] is not True
+            or signed["corruption_fail_closed"] is not True
+            or signed["rollback_protected"] is not True
+            or signed["production_durable_storage_admitted"] is not True
+            or signed["effect_authority"] is not False
+        ):
+            raise AustralianMinorAccessError(
+                "PRODUCTION_DURABLE_PROVIDER_ADMISSION_CLAIMS_INVALID"
+            )
+        evidence_digest = signed["durability_evidence_sha512"]
+        if evidence_digest in seen_evidence:
+            raise AustralianMinorAccessError(
+                "PRODUCTION_DURABLE_PROVIDER_ADMISSION_EVIDENCE_REUSED"
+            )
+        seen_evidence.add(evidence_digest)
+
+
+def install_australian_minor_access_production(
+    composition: dict[str, Any],
+    *,
+    fixed_context_id: str,
+    fixed_context_digest: str,
+    owner_trust_context: HybridVerificationContext,
+    owner_pinned_context_digest: str,
+    signer_trust_contexts: dict[str, HybridVerificationContext],
+    signer_owner_pinned_context_digests: dict[str, str],
+    durable_provider_admissions: dict[str, dict[str, Any]] | None = None,
+    durable_provider_owner_pinned_admission_digests: dict[str, str] | None = None,
+    durable_provider_trust_context: HybridVerificationContext | None = None,
+    durable_provider_owner_pinned_context_digest: str | None = None,
+) -> None:
+    """Install externally owner-pinned production hybrid verification roots."""
+
+    candidate_contexts: list[object] = [owner_trust_context]
+    if type(signer_trust_contexts) is dict:
+        candidate_contexts.extend(signer_trust_contexts.values())
+    prohibited_context_digests = {
+        context.context_digest
+        for context in candidate_contexts
+        if isinstance(context, HybridVerificationContext)
+    }
+    _verify_durable_provider_admissions(
+        composition,
+        fixed_context_id=fixed_context_id,
+        admissions=durable_provider_admissions,
+        owner_pinned_admission_digests=(
+            durable_provider_owner_pinned_admission_digests
+        ),
+        trust_context=durable_provider_trust_context,
+        owner_pinned_context_digest=(
+            durable_provider_owner_pinned_context_digest
+        ),
+        prohibited_context_digests=prohibited_context_digests,
+    )
+
+    _install_australian_minor_access_deployment(
+        composition,
+        fixed_context_id=fixed_context_id,
+        fixed_context_digest=fixed_context_digest,
+        owner_public_key_hex=None,
+        test_only=False,
+        owner_trust_context=owner_trust_context,
+        owner_pinned_context_digest=owner_pinned_context_digest,
+        signer_trust_contexts=signer_trust_contexts,
+        signer_owner_pinned_context_digests=(
+            signer_owner_pinned_context_digests
+        ),
     )
 
 
@@ -570,6 +1041,62 @@ def _composition() -> _DeploymentComposition:
     return _ACTIVE_COMPOSITION
 
 
+def _signature_contract(label: str) -> tuple[str, str]:
+    if label == "CLOCK":
+        return "clock", AUSTRALIAN_MINOR_ACCESS_CLOCK_PURPOSE
+    if label == "REVOCATION_HEAD":
+        return "revocation", AUSTRALIAN_MINOR_ACCESS_REVOCATION_PURPOSE
+    if label == "REPLAY_HEAD":
+        return "replay", AUSTRALIAN_MINOR_ACCESS_REPLAY_HEAD_PURPOSE
+    if label == "REPLAY_RECEIPT":
+        return "replay", AUSTRALIAN_MINOR_ACCESS_REPLAY_RECEIPT_PURPOSE
+    if label in LANES:
+        return label, f"{AUSTRALIAN_MINOR_ACCESS_LANE_PURPOSE_PREFIX}{label}"
+    raise AustralianMinorAccessError("UNKNOWN_SIGNATURE_CONTRACT")
+
+
+def _verify_composition_signed(
+    comp: _DeploymentComposition,
+    envelope: Any,
+    *,
+    payload_keys: set[str],
+    label: str,
+) -> dict[str, Any]:
+    binding_name, purpose = _signature_contract(label)
+    return _verify_signed(
+        envelope,
+        comp.bindings[binding_name],
+        payload_keys=payload_keys,
+        label=label,
+        allow_legacy_test_only=comp.deployment_mode == TEST_ONLY_MODE,
+        deployment_mode=comp.deployment_mode,
+        hybrid_trust_context=comp.hybrid_trust_contexts.get(binding_name),
+        owner_pinned_context_digest=(
+            comp.owner_pinned_context_digests.get(binding_name)
+        ),
+        expected_purpose=purpose,
+    )
+
+
+def _signed_payload(
+    comp: _DeploymentComposition,
+    envelope: dict[str, Any],
+) -> dict[str, Any]:
+    if comp.deployment_mode == TEST_ONLY_MODE:
+        payload = envelope.get("payload")
+    elif comp.deployment_mode == PRODUCTION_MODE:
+        payload = {
+            key: value
+            for key, value in envelope.items()
+            if key not in _HYBRID_RESERVED_FIELDS
+        }
+    else:
+        raise AustralianMinorAccessError("DEPLOYMENT_MODE_INVALID")
+    if type(payload) is not dict:
+        raise AustralianMinorAccessError("SIGNED_PAYLOAD_INVALID")
+    return payload
+
+
 def _trusted_time(
     comp: _DeploymentComposition,
 ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
@@ -581,12 +1108,11 @@ def _trusted_time(
     previous_sequence = 0
     previous_time = -1
     for index, envelope in enumerate(chain):
-        payload = _verify_signed(
+        payload = _verify_composition_signed(
+            comp,
             envelope,
-            comp.bindings["clock"],
             payload_keys=_CLOCK_KEYS,
             label="CLOCK",
-            allow_legacy_test_only=True,
         )
         digest = _envelope_digest(envelope)
         if (
@@ -611,7 +1137,7 @@ def _trusted_time(
         previous_sequence = payload["time_sequence"]
         previous_time = payload["observed_at"]
     envelope = verified[-1]
-    payload = chain[-1]["payload"]
+    payload = _signed_payload(comp, chain[-1])
     if not comp.clock.is_current(
         comp.context_id,
         _envelope_digest(envelope),
@@ -646,12 +1172,11 @@ def _live_revocation(
     previous_sequence = 0
     previous_revoked: set[str] = set()
     for index, envelope in enumerate(chain):
-        payload = _verify_signed(
+        payload = _verify_composition_signed(
+            comp,
             envelope,
-            comp.bindings["revocation"],
             payload_keys=_REVOCATION_KEYS,
             label="REVOCATION_HEAD",
-            allow_legacy_test_only=True,
         )
         digest = _envelope_digest(envelope)
         revoked = payload["revoked_evidence_digests"]
@@ -675,14 +1200,16 @@ def _live_revocation(
             or payload["revocation_sequence"] != comp.owner["revocation_sequence"]
         ):
             raise AustralianMinorAccessError("REVOCATION_OWNER_ANCHOR_MISMATCH")
-        if index > 0 and payload["revocation_sequence"] < chain[index - 1]["payload"]["revocation_sequence"]:
+        if index > 0 and payload["revocation_sequence"] < _signed_payload(
+            comp, chain[index - 1]
+        )["revocation_sequence"]:
             raise AustralianMinorAccessError("REVOCATION_SEQUENCE_ROLLBACK")
         verified.append(deepcopy(envelope))
         previous_digest = digest
         previous_sequence = payload["head_sequence"]
         previous_revoked = set(revoked)
     envelope = verified[-1]
-    payload = chain[-1]["payload"]
+    payload = _signed_payload(comp, chain[-1])
     digest = _envelope_digest(envelope)
     if not comp.revocation_store.is_current(
         comp.context_id,
@@ -752,12 +1279,11 @@ def _evidence(
     payloads: dict[str, dict[str, Any]] = {}
     for lane in lanes:
         envelope = comp.resolvers[lane].resolve(deepcopy(snapshot))
-        payload = _verify_signed(
+        payload = _verify_composition_signed(
+            comp,
             envelope,
-            comp.bindings[lane],
             payload_keys=_EVIDENCE_KEYS,
             label=lane,
-            allow_legacy_test_only=True,
         )
         binding = comp.bindings[lane]
         if (
@@ -918,12 +1444,11 @@ def _replay_head(
     now: int,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     envelope = comp.replay_store.current_head(namespace, subject_binding, now)
-    payload = _verify_signed(
+    payload = _verify_composition_signed(
+        comp,
         envelope,
-        comp.bindings["replay"],
         payload_keys=_REPLAY_HEAD_KEYS,
         label="REPLAY_HEAD",
-        allow_legacy_test_only=True,
     )
     if (
         payload["schema"] != SCHEMA
@@ -990,12 +1515,11 @@ def _claim_replay(
         "effect_authority": False,
     }
     receipt = comp.replay_store.claim_once(deepcopy(claim))
-    receipt_payload = _verify_signed(
+    receipt_payload = _verify_composition_signed(
+        comp,
         receipt,
-        comp.bindings["replay"],
         payload_keys=_REPLAY_RECEIPT_KEYS,
         label="REPLAY_RECEIPT",
-        allow_legacy_test_only=True,
     )
     if receipt_payload != claim:
         raise AustralianMinorAccessError("REPLAY_RECEIPT_CLAIM_MISMATCH")
@@ -1152,6 +1676,13 @@ def _verify_australian_minor_access_core(state: dict[str, Any]) -> bool:
             return False
         if record.get("record_digest") != _record_digest(record):
             return False
+        recorded_revocation_head = record.get("revocation_head")
+        recorded_clock_receipt = record.get("clock_receipt")
+        if (
+            type(recorded_revocation_head) is not dict
+            or type(recorded_clock_receipt) is not dict
+        ):
+            return False
         if (
             record.get("context_id") != comp.context_id
             or record.get("schema") != SCHEMA
@@ -1161,9 +1692,9 @@ def _verify_australian_minor_access_core(state: dict[str, Any]) -> bool:
             != comp.owner["composition_sequence"]
             or record.get("registry") != comp.registry
             or record.get("registry_digest") != comp.owner["registry_digest"]
-            or _envelope_digest(record.get("revocation_head"))
+            or _envelope_digest(recorded_revocation_head)
             != record.get("revocation_head_digest")
-            or _envelope_digest(record.get("clock_receipt"))
+            or _envelope_digest(recorded_clock_receipt)
             != record.get("clock_receipt_digest")
             or record.get("reason") != "AUTHENTICATED_DETERMINATION"
             or record.get("privacy_data_destroyed")
@@ -1221,12 +1752,11 @@ def _verify_australian_minor_access_core(state: dict[str, Any]) -> bool:
             return False
         for lane in expected_lanes:
             env = evidence[lane]
-            payload = _verify_signed(
+            payload = _verify_composition_signed(
+                comp,
                 env,
-                comp.bindings[lane],
                 payload_keys=_EVIDENCE_KEYS,
                 label=lane,
-                allow_legacy_test_only=True,
             )
             if (
                 payload["request_fingerprint"] != snapshot["request_fingerprint"]
@@ -1260,12 +1790,11 @@ def _verify_australian_minor_access_core(state: dict[str, Any]) -> bool:
         if canonical_integrity_hash(decision_core) != record["decision_digest"]:
             return False
         receipt = record["replay_receipt"]
-        receipt_payload = _verify_signed(
+        receipt_payload = _verify_composition_signed(
+            comp,
             receipt,
-            comp.bindings["replay"],
             payload_keys=_REPLAY_RECEIPT_KEYS,
             label="REPLAY_RECEIPT",
-            allow_legacy_test_only=True,
         )
         replay = record["replay"]
         if (
@@ -1300,7 +1829,7 @@ def _verify_australian_minor_access_core(state: dict[str, Any]) -> bool:
             or receipt_payload["stage"] != record["stage"]
             or receipt_payload["registry_digest"] != comp.owner["registry_digest"]
             or receipt_payload["claimed_at"]
-            != record["clock_receipt"]["payload"]["observed_at"]
+            != _signed_payload(comp, record["clock_receipt"])["observed_at"]
             or receipt_payload["status"] != "PERSISTED"
             or receipt_payload["effect_authority"] is not False
             or receipt_payload["minor_access_request_binding_digest"]
@@ -1315,15 +1844,21 @@ def _verify_australian_minor_access_core(state: dict[str, Any]) -> bool:
             != receipt
         ):
             return False
-        live_head_envelope, live_head = _replay_head(
+        _, live_head = _replay_head(
             comp,
             receipt_payload["namespace"],
             snapshot["subject_session_binding_digest"],
             clock["observed_at"],
         )
+        recorded_head = _verify_composition_signed(
+            comp,
+            record["replay_post_head"],
+            payload_keys=_REPLAY_HEAD_KEYS,
+            label="REPLAY_HEAD",
+        )
         if (
             live_head["sequence"] != receipt_payload["sequence"]
-            or live_head_envelope != record["replay_post_head"]
+            or live_head != recorded_head
         ):
             return False
         return True
@@ -1347,6 +1882,8 @@ def _verify_hash_binding(state: dict[str, Any]) -> bool:
     try:
         chain = state.get("hash_chain")
         state_hash = state.get("state_hash")
+        if type(chain) is not list:
+            return False
         if not verify_hash_chain_entries(chain, state_hash):
             return False
         index = state.get("australian_minor_access_hash_binding_index")

@@ -1,4 +1,6 @@
-ENGINE_REGISTRY = {}
+from collections.abc import Callable
+
+ENGINE_REGISTRY: dict[str, Callable[..., object]] = {}
 
 
 def register(name: str):

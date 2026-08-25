@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from .artifact import build_signed_artifact, validate_signed_artifact
 from .constants import DIRTY, FAIL, GENESIS, PASS
@@ -11,7 +12,6 @@ from .digests import digest_equal
 from .paths import LocalTrustPathError, measure_file, validated_root
 from .repository import collect_repository_provenance, collect_v2_evidence_inventory
 from .signing import HybridSigningContext, HybridVerificationContext
-
 
 PAYLOAD_SCHEMA = "SBP_LEX_V2_LOCAL_TRUST_ROOT_MANIFEST_PAYLOAD_V1"
 _PAYLOAD_FIELDS = {
@@ -124,8 +124,12 @@ def validate_manifest(
                         if type(expected) is not dict:
                             failures.append("evidence_record_invalid")
                             break
+                        expected_path = expected.get("path")
+                        if type(expected_path) is not str:
+                            failures.append("evidence_record_invalid")
+                            break
                         try:
-                            observed = measure_file(root, expected.get("path"))
+                            observed = measure_file(root, expected_path)
                         except LocalTrustPathError:
                             failures.append("evidence_file_unavailable")
                             break

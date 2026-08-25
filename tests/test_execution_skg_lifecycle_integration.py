@@ -129,11 +129,22 @@ def test_execution_gate_enforces_exact_governance_prerequisite_order(
     calls: list[str] = []
     _patch_gate_prerequisites(monkeypatch, calls)
     skg_evaluator = object()
-    skg_provider = object()
+    governance_provider = BoundaryEvidenceProvider(
+        role="execution-gate-prerequisite-order",
+        effect_authority=False,
+        three_p_attestation_admitted=False,
+        framework_attestation_admitted=True,
+        licence_attestation_admitted=True,
+        skg_attestation_admitted=True,
+        lifecycle_attestation_admitted=True,
+        governance_integrity_attestation_admitted=True,
+    )
+    governance_context = governance_provider.hybrid_verification_context()
+    skg_provider = governance_provider
     lifecycle_evaluator = object()
-    lifecycle_provider = object()
+    lifecycle_provider = governance_provider
     governance_integrity_evaluator = object()
-    governance_integrity_provider = object()
+    governance_integrity_provider = governance_provider
     application_bundle = object.__new__(ApplicationIntegrityRuntimeBundle)
     foundational_dependencies = FoundationalRequestDependencies(
         provenance_registry_snapshot=None,
@@ -149,13 +160,35 @@ def test_execution_gate_enforces_exact_governance_prerequisite_order(
         _gate_state(),
         skg_evaluator=skg_evaluator,
         skg_attestation_provider=skg_provider,
+        skg_attestation_trust_context=governance_context,
+        skg_owner_pinned_context_digest=governance_context.context_digest,
+        filed_framework_attestation_provider=governance_provider,
+        filed_framework_attestation_trust_context=governance_context,
+        filed_framework_owner_pinned_context_digest=(
+            governance_context.context_digest
+        ),
+        filed_licence_attestation_provider=governance_provider,
+        filed_licence_attestation_trust_context=governance_context,
+        filed_licence_owner_pinned_context_digest=(
+            governance_context.context_digest
+        ),
         filed_lifecycle_evaluator=lifecycle_evaluator,
         filed_lifecycle_attestation_provider=lifecycle_provider,
+        filed_lifecycle_attestation_trust_context=governance_context,
+        filed_lifecycle_owner_pinned_context_digest=(
+            governance_context.context_digest
+        ),
         filed_governance_integrity_evaluator=(
             governance_integrity_evaluator
         ),
         filed_governance_integrity_attestation_provider=(
             governance_integrity_provider
+        ),
+        filed_governance_integrity_attestation_trust_context=(
+            governance_context
+        ),
+        filed_governance_integrity_owner_pinned_context_digest=(
+            governance_context.context_digest
         ),
         application_integrity_bundle=application_bundle,
         application_integrity_result={},
@@ -214,9 +247,33 @@ def test_execution_gate_fails_closed_on_new_prerequisites(
         skg_result=skg_result,
         lifecycle_result=lifecycle_result,
     )
+    governance_provider = BoundaryEvidenceProvider(
+        role="execution-gate-prerequisite-failure",
+        effect_authority=False,
+        three_p_attestation_admitted=False,
+        framework_attestation_admitted=True,
+        licence_attestation_admitted=True,
+        skg_attestation_admitted=True,
+        lifecycle_attestation_admitted=True,
+        governance_integrity_attestation_admitted=True,
+    )
+    governance_context = governance_provider.hybrid_verification_context()
 
     state = execution_gate.run_execution_gate(
         _gate_state(),
+        skg_attestation_provider=governance_provider,
+        skg_attestation_trust_context=governance_context,
+        skg_owner_pinned_context_digest=governance_context.context_digest,
+        filed_framework_attestation_provider=governance_provider,
+        filed_framework_attestation_trust_context=governance_context,
+        filed_framework_owner_pinned_context_digest=(
+            governance_context.context_digest
+        ),
+        filed_lifecycle_attestation_provider=governance_provider,
+        filed_lifecycle_attestation_trust_context=governance_context,
+        filed_lifecycle_owner_pinned_context_digest=(
+            governance_context.context_digest
+        ),
         application_integrity_bundle=object.__new__(
             ApplicationIntegrityRuntimeBundle
         ),
@@ -376,18 +433,28 @@ def test_adapter_mint_uses_stored_governance_dependencies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter = object.__new__(local_adapter.ControlledLocalAdapter)
+    governance_provider = BoundaryEvidenceProvider(
+        role="stored-governance-dependencies",
+        effect_authority=False,
+        three_p_attestation_admitted=False,
+        framework_attestation_admitted=True,
+        licence_attestation_admitted=True,
+        skg_attestation_admitted=True,
+        lifecycle_attestation_admitted=True,
+        governance_integrity_attestation_admitted=True,
+    )
     skg_evaluator = object()
-    skg_provider = object()
+    skg_provider = governance_provider
     lifecycle_evaluator = object()
-    lifecycle_provider = object()
+    lifecycle_provider = governance_provider
     governance_integrity_evaluator = object()
-    governance_integrity_provider = object()
+    governance_integrity_provider = governance_provider
     adapter._skg_evaluator = skg_evaluator
     adapter._skg_attestation_provider = skg_provider
     adapter._filed_framework_evaluator = object()
-    adapter._filed_framework_attestation_provider = object()
+    adapter._filed_framework_attestation_provider = governance_provider
     adapter._filed_licence_evaluator = object()
-    adapter._filed_licence_attestation_provider = object()
+    adapter._filed_licence_attestation_provider = governance_provider
     adapter._filed_lifecycle_evaluator = lifecycle_evaluator
     adapter._filed_lifecycle_attestation_provider = lifecycle_provider
     adapter._filed_governance_integrity_evaluator = (
@@ -520,6 +587,16 @@ def test_adapter_dispatch_fails_closed_when_lifecycle_is_not_current(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter = object.__new__(local_adapter.ControlledLocalAdapter)
+    governance_provider = BoundaryEvidenceProvider(
+        role="dispatch-lifecycle-currentness",
+        effect_authority=False,
+        three_p_attestation_admitted=False,
+        framework_attestation_admitted=True,
+        licence_attestation_admitted=True,
+        skg_attestation_admitted=True,
+        lifecycle_attestation_admitted=True,
+        governance_integrity_attestation_admitted=True,
+    )
     adapter._max_permit_ttl_ms = 1_000
     permit_fields = {
         "schema",
@@ -620,15 +697,17 @@ def test_adapter_dispatch_fails_closed_when_lifecycle_is_not_current(
             authority_provider=object(),
             three_p_attestation_provider=object(),
             skg_evaluator=object(),
-            skg_attestation_provider=object(),
+            skg_attestation_provider=governance_provider,
             filed_framework_evaluator=object(),
-            filed_framework_attestation_provider=object(),
+            filed_framework_attestation_provider=governance_provider,
             filed_licence_evaluator=object(),
-            filed_licence_attestation_provider=object(),
+            filed_licence_attestation_provider=governance_provider,
             filed_lifecycle_evaluator=object(),
-            filed_lifecycle_attestation_provider=object(),
+            filed_lifecycle_attestation_provider=governance_provider,
             filed_governance_integrity_evaluator=object(),
-            filed_governance_integrity_attestation_provider=object(),
+            filed_governance_integrity_attestation_provider=(
+                governance_provider
+            ),
             application_integrity_bundle=None,
             application_integrity_result=None,
             foundational_request_dependencies=None,

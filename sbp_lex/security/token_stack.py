@@ -450,7 +450,7 @@ def _signature_envelope_exact(value: Any) -> bool:
     if value.get("algorithm") != "Ed25519" or value.get("effect_authority") is not False:
         return False
     encoded = value.get("signature_b64")
-    if not _exact_text(encoded):
+    if type(encoded) is not str or not _exact_text(encoded):
         return False
     try:
         return bool(base64.b64decode(encoded, validate=True))
@@ -485,7 +485,7 @@ def _skg_evidence_exact(value: Any) -> bool:
         }:
             return False
         evidence_id = item.get("evidence_id")
-        if not _exact_text(evidence_id) or evidence_id in evidence_ids:
+        if type(evidence_id) is not str or not _exact_text(evidence_id) or evidence_id in evidence_ids:
             return False
         evidence_ids.add(evidence_id)
         if not _exact_text(item.get("source")) or not is_sha512(
@@ -557,6 +557,7 @@ def _expected_skg_token_payload(
             if type(determination) is dict
             else None
         )
+        evaluation_time = snapshot.get("evaluation_time")
         if (
             snapshot.get("contract_id") != SKG_V2_CONTRACT_ID
             or snapshot.get("schema_status") != SKG_SCHEMA_STATUS
@@ -568,8 +569,8 @@ def _expected_skg_token_payload(
             != state.get("request_fingerprint")
             or snapshot.get("evaluation_time") != state.get("evaluation_time")
             or not is_sha512(snapshot.get("request_fingerprint"))
-            or type(snapshot.get("evaluation_time")) is not int
-            or snapshot.get("evaluation_time") < 0
+            or type(evaluation_time) is not int
+            or evaluation_time < 0
             or (
                 snapshot.get("prior_skg_digest") is not None
                 and not is_sha512(snapshot.get("prior_skg_digest"))
@@ -647,7 +648,7 @@ def _lifecycle_evidence_exact(value: Any) -> bool:
         }:
             return False
         evidence_id = item.get("evidence_id")
-        if not _exact_text(evidence_id) or evidence_id in evidence_ids:
+        if type(evidence_id) is not str or not _exact_text(evidence_id) or evidence_id in evidence_ids:
             return False
         evidence_ids.add(evidence_id)
         if not _exact_text(item.get("source")) or not is_sha512(
@@ -926,6 +927,9 @@ def _governance_integrity_prefix_payload(
                 if type(snapshot) is dict
                 else None
             )
+            revocation_sequence = (
+                revocation.get("sequence") if type(revocation) is dict else None
+            )
             if (
                 type(snapshot) is not dict
                 or type(source) is not dict
@@ -978,19 +982,18 @@ def _governance_integrity_prefix_payload(
                 or type(revocation) is not dict
                 or set(revocation) != {"status", "sequence", "digest"}
                 or revocation.get("status") != "ACTIVE"
-                or type(revocation.get("sequence")) is not int
-                or revocation.get("sequence") < 0
+                or type(revocation_sequence) is not int
+                or revocation_sequence < 0
                 or revocation.get("digest")
                 != _safe_integrity_hash(
                     {
                         "status": "ACTIVE",
-                        "sequence": revocation.get("sequence"),
+                        "sequence": revocation_sequence,
                     }
                 )
                 or (
                     prior_revocation_sequence is not None
-                    and revocation.get("sequence")
-                    < prior_revocation_sequence
+                    and revocation_sequence < prior_revocation_sequence
                 )
                 or source.get("governance_integrity_function")
                 != governance_function
@@ -1234,9 +1237,11 @@ def _authority_provenance_bindings_valid(state: Dict[str, Any]) -> bool:
             and state.get("authority_provenance_result")
             == AUTHORITY_PROVENANCE_PASS
             and record.get("result") == AUTHORITY_PROVENANCE_PASS
+            and type(chain) is list
             and verify_hash_chain_entries(chain, state.get("state_hash"))
-            and sum(
-                1
+            and len(
+                [
+                entry
                 for entry in chain
                 if type(entry) is dict
                 and entry.get("stage") == AUTHORITY_PROVENANCE_STAGE
@@ -1244,6 +1249,7 @@ def _authority_provenance_bindings_valid(state: Dict[str, Any]) -> bool:
                 == canonical_integrity_hash(
                     authority_provenance_hash_payload(state)
                 )
+                ]
             )
             == 1
         )
@@ -1360,7 +1366,9 @@ def _three_p_preceded_authority_provenance(
     try:
         provenance = state.get("authority_provenance_record")
         three_p = state.get("three_p_core_record")
-        snapshot = three_p.get("evaluation_snapshot")
+        snapshot = (
+            three_p.get("evaluation_snapshot") if type(three_p) is dict else None
+        )
         chain = state.get("hash_chain")
         if (
             type(provenance) is not dict
@@ -1452,6 +1460,9 @@ def build_token(
     three_p_trust_context: HybridVerificationContext | None = None,
     three_p_owner_pinned_context_digest: str | None = None,
 ) -> Dict[str, Any]:
+    if provider is None:
+        raise ValueError("TOKEN_ISSUANCE_HYBRID_SIGNATURE_REQUIRED")
+    signature_provider: SignatureProvider = provider
     if not is_hybrid_provider(provider):
         raise ValueError("TOKEN_ISSUANCE_HYBRID_SIGNATURE_REQUIRED")
     expected_contract = _TOKEN_ISSUANCE_CONTRACTS.get(token_name)
@@ -1461,7 +1472,7 @@ def build_token(
         raise ValueError("TOKEN_ISSUANCE_CONTRACT_MISMATCH")
     chain = state.get("hash_chain")
     state_hash = state.get("state_hash")
-    if not verify_hash_chain_entries(chain, state_hash):
+    if type(chain) is not list or not verify_hash_chain_entries(chain, state_hash):
         raise ValueError("TOKEN_ISSUANCE_HASH_CHAIN_INVALID")
     three_p_current = (
         _three_p_preceded_authority_provenance(
@@ -1515,10 +1526,12 @@ def build_token(
         }
         if set(token_body) != _FOUNDATIONAL_TOKEN_BODY_FIELDS:
             raise ValueError("TOKEN_ISSUANCE_FOUNDATIONAL_SCHEMA_INVALID")
-        return build_signed_object(token_body, provider=provider)
+        return build_signed_object(token_body, provider=signature_provider)
     if not _authority_provenance_bindings_valid(state):
         raise ValueError("TOKEN_ISSUANCE_AUTHORITY_PROVENANCE_INVALID")
     provenance_bindings = authority_provenance_token_bindings(state)
+    if provenance_bindings is None:
+        raise ValueError("TOKEN_ISSUANCE_AUTHORITY_PROVENANCE_INVALID")
     if token_name == "authority_provenance":
         expected_payload = authority_provenance_hash_payload(state)
         if (
@@ -1546,19 +1559,19 @@ def build_token(
             raise ValueError(
                 "TOKEN_ISSUANCE_AUTHORITY_PROVENANCE_SCHEMA_INVALID"
             )
-        return build_signed_object(token_body, provider=provider)
+        return build_signed_object(token_body, provider=signature_provider)
     if token_name == "skg":
-        expected_payload = _expected_skg_token_payload(
+        skg_payload = _expected_skg_token_payload(
             state, issued_chain_index
         )
-        if expected_payload is None or payload != expected_payload:
+        if skg_payload is None or payload != skg_payload:
             raise ValueError("TOKEN_ISSUANCE_SKG_BINDING_INVALID")
     lifecycle_binding = _LIFECYCLE_TOKEN_BINDINGS.get(token_name)
     if lifecycle_binding is not None:
-        expected_payload = _expected_lifecycle_token_payload(
+        lifecycle_payload = _expected_lifecycle_token_payload(
             state, token_name, issued_chain_index
         )
-        if expected_payload is None or payload != expected_payload:
+        if lifecycle_payload is None or payload != lifecycle_payload:
             raise ValueError(
                 "TOKEN_ISSUANCE_FILED_LIFECYCLE_BINDING_INVALID"
             )
@@ -1566,16 +1579,16 @@ def build_token(
         _GOVERNANCE_INTEGRITY_TOKEN_BINDINGS.get(token_name)
     )
     if governance_integrity_binding is not None:
-        expected_payload = _expected_governance_integrity_token_payload(
+        governance_integrity_payload = _expected_governance_integrity_token_payload(
             state, token_name, issued_chain_index
         )
-        if expected_payload is None or payload != expected_payload:
+        if governance_integrity_payload is None or payload != governance_integrity_payload:
             raise ValueError(
                 "TOKEN_ISSUANCE_FILED_GOVERNANCE_INTEGRITY_BINDING_INVALID"
             )
     if token_name == "governance":
-        expected_payload = _expected_governance_token_payload(state)
-        if expected_payload is None or payload != expected_payload:
+        governance_payload = _expected_governance_token_payload(state)
+        if governance_payload is None or payload != governance_payload:
             raise ValueError(
                 "TOKEN_ISSUANCE_GOVERNANCE_LIFECYCLE_BINDING_INVALID"
             )
@@ -1637,7 +1650,7 @@ def build_token(
         "payload": payload,
     }
 
-    signed = build_signed_object(token_body, provider=provider)
+    signed = build_signed_object(token_body, provider=signature_provider)
     return signed
 
 
@@ -1724,7 +1737,9 @@ def verify_token(
         return False
 
     chain = state.get("hash_chain")
-    if not verify_hash_chain_entries(chain, state.get("state_hash")):
+    if type(chain) is not list or not verify_hash_chain_entries(
+        chain, state.get("state_hash")
+    ):
         return False
     issued_chain_index = token.get("issued_chain_index")
     if (
@@ -1766,6 +1781,8 @@ def verify_token(
     if not _authority_provenance_bindings_valid(state):
         return False
     provenance_bindings = authority_provenance_token_bindings(state)
+    if provenance_bindings is None:
+        return False
     if any(
         token.get(field) != value
         for field, value in provenance_bindings.items()

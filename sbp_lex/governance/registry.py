@@ -1,6 +1,8 @@
-ENGINE_REGISTRY = {}
+from collections.abc import Callable
 
 from sbp_lex.aurion15.core.registry import aurion_registry
+
+ENGINE_REGISTRY: dict[str, Callable[..., object]] = {}
 
 
 def register(name: str):

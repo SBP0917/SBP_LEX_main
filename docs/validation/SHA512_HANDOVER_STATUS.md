@@ -1,5 +1,8 @@
 # SBP-LEX V2 SHA-512 Handover Status
 
+> Historical handover snapshot. It is preserved for provenance but is not the
+> current canonical status. See `V2_CANONICAL_STATUS.md`.
+
 ## Purpose and scope
 
 This document is a handover record for the beginning of external inspection and validation of the SBP-LEX V2 repository. It records the implemented SHA-512 migration, the verification evidence produced during that migration, its deliberate legacy exceptions, and the material gaps that remain before an end-to-end 256-bit classical-security claim could be considered.
@@ -140,7 +143,9 @@ failed to supply an AI-generated requirement.
     `python-dependencies.lock.json` remains unavailable because genuine
     accepted-attempt/rollback history and the final freeze binding do not yet
     exist; neither was fabricated.
-11. **Canonical launcher reproduction:** `main:app` through Uvicorn is now the canonical V2 launcher; a clean independent execution remains required.
+11. **Historical launcher observation:** this snapshot evaluated the former
+    `main:app` proposal. The current canonical surface is the V2 library/CLI in
+    `V2_CANONICAL_STATUS.md`.
 
 ## External reviewer checklist
 

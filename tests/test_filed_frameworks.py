@@ -699,6 +699,13 @@ class FiledFrameworkTests(unittest.TestCase):
                 filed_framework_owner_pinned_context_digest=(
                     self.owner_pinned_context_digest
                 ),
+                skg_attestation_provider=self.provider,
+                skg_attestation_trust_context=(
+                    self.attestation_trust_context
+                ),
+                skg_owner_pinned_context_digest=(
+                    self.owner_pinned_context_digest
+                ),
                 foundational_request_dependencies=(
                     FoundationalRequestDependencies(
                         provenance_registry_snapshot=None,

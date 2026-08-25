@@ -37,6 +37,7 @@ from sbp_lex.security.signature_provider import (
     HybridVerificationContext,
     SignatureProvider,
 )
+from sbp_lex.security.hybrid_signature import is_hybrid_provider
 from sbp_lex.security.integrity import verify_hash_chain_entries
 from sbp_lex.governance.three_p_doctrine import verify_three_p_core
 from sbp_lex.governance.authority_provenance import (
@@ -456,13 +457,18 @@ def run_execution_gate(
     if not three_p_ok:
         return _halt(state, "three_p_core_failure")
 
-    skg_ok = verify_skg_authority(
+    skg_ok = (
+        is_hybrid_provider(skg_attestation_provider)
+        and skg_attestation_trust_context is not None
+        and skg_owner_pinned_context_digest is not None
+        and verify_skg_authority(
         state,
         evaluator=skg_evaluator,
         attestation_provider=skg_attestation_provider,
         attestation_trust_context=skg_attestation_trust_context,
         owner_pinned_context_digest=skg_owner_pinned_context_digest,
         require_hash_binding=True,
+        )
     )
     _append_trace(
         state,
@@ -498,13 +504,18 @@ def run_execution_gate(
     if not filed_licence_ok:
         return _halt(state, "filed_licence_failure")
 
-    filed_frameworks_ok = verify_filed_frameworks(
+    filed_frameworks_ok = (
+        is_hybrid_provider(filed_framework_attestation_provider)
+        and filed_framework_attestation_trust_context is not None
+        and filed_framework_owner_pinned_context_digest is not None
+        and verify_filed_frameworks(
         state,
         evaluator=filed_framework_evaluator,
         attestation_provider=filed_framework_attestation_provider,
         attestation_trust_context=filed_framework_attestation_trust_context,
         owner_pinned_context_digest=filed_framework_owner_pinned_context_digest,
         require_hash_binding=True,
+        )
     )
     _append_trace(
         state,
@@ -517,13 +528,18 @@ def run_execution_gate(
     if not filed_frameworks_ok:
         return _halt(state, "filed_framework_traversal_failure")
 
-    filed_lifecycle_ok = verify_filed_lifecycle(
+    filed_lifecycle_ok = (
+        is_hybrid_provider(filed_lifecycle_attestation_provider)
+        and filed_lifecycle_attestation_trust_context is not None
+        and filed_lifecycle_owner_pinned_context_digest is not None
+        and verify_filed_lifecycle(
         state,
         evaluator=filed_lifecycle_evaluator,
         attestation_provider=filed_lifecycle_attestation_provider,
         attestation_trust_context=filed_lifecycle_attestation_trust_context,
         owner_pinned_context_digest=filed_lifecycle_owner_pinned_context_digest,
         require_hash_binding=True,
+        )
     )
     _append_trace(
         state,
@@ -539,7 +555,13 @@ def run_execution_gate(
     if not filed_lifecycle_ok:
         return _halt(state, "filed_lifecycle_failure")
 
-    filed_governance_integrity_ok = verify_filed_governance_integrity(
+    filed_governance_integrity_ok = (
+        is_hybrid_provider(
+            filed_governance_integrity_attestation_provider
+        )
+        and filed_governance_integrity_attestation_trust_context is not None
+        and filed_governance_integrity_owner_pinned_context_digest is not None
+        and verify_filed_governance_integrity(
         state,
         evaluator=filed_governance_integrity_evaluator,
         attestation_provider=(
@@ -552,6 +574,7 @@ def run_execution_gate(
             filed_governance_integrity_owner_pinned_context_digest
         ),
         require_hash_binding=True,
+        )
     )
     _append_trace(
         state,

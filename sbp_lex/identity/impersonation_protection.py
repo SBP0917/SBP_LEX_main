@@ -22,7 +22,7 @@ import os
 from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha512
-from typing import Any, Final, Protocol
+from typing import Any, Final, Protocol, TypeGuard
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
@@ -33,9 +33,14 @@ from sbp_lex.governance.three_p_doctrine import THREE_P_DOCTRINE_ID
 from sbp_lex.identity.sovereign_identity import IDENTITY_VERIFIED
 from sbp_lex.interface.authority_boundary import (
     BOUNDARY_PASS,
-    MANDATE_ACTIVE,
-    PARTICIPANT_ACTIVE,
     STAKEHOLDER_CLASSES,
+)
+from sbp_lex.security.hybrid_signature import (
+    HYBRID_SUITE_ID,
+    PRODUCTION_SIGNER,
+    HybridSignatureError,
+    HybridVerificationContext,
+    is_hybrid_provider,
 )
 from sbp_lex.security.integrity import (
     GENESIS_HASH,
@@ -48,27 +53,15 @@ from sbp_lex.security.signature_provider import (
     SignatureProvider,
     verify_signed_object,
 )
-from sbp_lex.security.hybrid_signature import (
-    HYBRID_SUITE_ID,
-    PRODUCTION_SIGNER,
-    HybridSignatureError,
-    HybridVerificationContext,
-    is_hybrid_provider,
-)
 
-
-IMPERSONATION_PROTECTION_CONTRACT_ID: Final = (
-    "SBP_LEX_V2_IMPERSONATION_PROTECTION"
-)
+IMPERSONATION_PROTECTION_CONTRACT_ID: Final = "SBP_LEX_V2_IMPERSONATION_PROTECTION"
 IMPERSONATION_PROTECTION_SCHEMA_STATUS: Final = (
     "IMPLEMENTATION_DEFINED_V2_MECHANICS_NOT_FILED_SCHEMA"
 )
 IMPERSONATION_PROTECTION_SEMANTICS: Final = (
     "NO_BIOMETRIC_PROOF_NO_IDENTITY_ISSUANCE_NO_AUTHORITY_GRANT"
 )
-IMPERSONATION_PROTECTION_STAGE: Final = (
-    "impersonation_protection:proof_of_possession"
-)
+IMPERSONATION_PROTECTION_STAGE: Final = "impersonation_protection:proof_of_possession"
 
 TRUST_CONTEXT_SCHEMA: Final = "SBP_LEX_V2_IMPERSONATION_TRUST_CONTEXT"
 LIVE_REGISTRY_SCHEMA: Final = "SBP_LEX_V2_LIVE_TRUST_REGISTRY_RECORD"
@@ -84,9 +77,31 @@ CLOCK_HEAD_TRANSITION_SCHEMA: Final = (
 UPSTREAM_RECEIPT_SCHEMA: Final = (
     "SBP_LEX_V2_IMPERSONATION_UPSTREAM_VERIFICATION_RECEIPT"
 )
-REPLAY_PERSISTENCE_SCHEMA: Final = (
-    "SBP_LEX_V2_IMPERSONATION_REPLAY_PERSISTENCE_RECEIPT"
-)
+REPLAY_PERSISTENCE_SCHEMA: Final = "SBP_LEX_V2_IMPERSONATION_REPLAY_PERSISTENCE_RECEIPT"
+_DURABLE_ANCHOR_SCHEMA: Final = "SBP_LEX_V2_IMPERSONATION_DURABLE_STORE_ANCHOR"
+
+IMPERSONATION_SIGNING_PURPOSES: Final = {
+    TRUST_CONTEXT_SCHEMA: "SBP_LEX_V2_IMPERSONATION:TRUST_CONTEXT",
+    LIVE_REGISTRY_SCHEMA: "SBP_LEX_V2_IMPERSONATION:LIVE_REGISTRY",
+    POSSESSION_PROOF_SCHEMA: "SBP_LEX_V2_IMPERSONATION:POSSESSION_PROOF",
+    REPLAY_CLAIM_SCHEMA: "SBP_LEX_V2_IMPERSONATION:REPLAY_CLAIM",
+    REPLAY_HEAD_SCHEMA: "SBP_LEX_V2_IMPERSONATION:REPLAY_HEAD",
+    CLOCK_RECORD_SCHEMA: "SBP_LEX_V2_IMPERSONATION:CLOCK_RECORD",
+    CLOCK_HEAD_SCHEMA: "SBP_LEX_V2_IMPERSONATION:CLOCK_HEAD",
+    CLOCK_HEAD_TRANSITION_SCHEMA: "SBP_LEX_V2_IMPERSONATION:CLOCK_TRANSITION",
+    UPSTREAM_RECEIPT_SCHEMA: "SBP_LEX_V2_IMPERSONATION:UPSTREAM_RECEIPT",
+    REPLAY_PERSISTENCE_SCHEMA: "SBP_LEX_V2_IMPERSONATION:REPLAY_PERSISTENCE",
+    _DURABLE_ANCHOR_SCHEMA: "SBP_LEX_V2_IMPERSONATION:DURABLE_STORE_ANCHOR",
+}
+
+
+def impersonation_signing_purpose(schema: Any) -> str:
+    """Return the exact signature domain for an impersonation record schema."""
+
+    if type(schema) is not str or schema not in IMPERSONATION_SIGNING_PURPOSES:
+        raise ValueError("IMPERSONATION_SIGNING_SCHEMA_NOT_ADMITTED")
+    return IMPERSONATION_SIGNING_PURPOSES[schema]
+
 
 SOVEREIGN_IDENTITY_COMPONENT: Final = "sovereign_identity"
 AUTHORITY_BOUNDARY_COMPONENT: Final = "authority_boundary"
@@ -108,9 +123,19 @@ NO_AUTHORIZATION_EFFECT: Final = {
 
 DEPLOYMENT_DEPENDENCIES: Final = {
     "private_composition_root_isolation": "DEPLOYMENT_REQUIRED_NOT_PROVEN",
-    "durable_production_replay_storage": "DEPLOYMENT_REQUIRED_NOT_PROVEN",
-    "durable_clock_head_storage": "DEPLOYMENT_REQUIRED_NOT_PROVEN",
-    "signing_key_custody": "DEPLOYMENT_REQUIRED_NOT_PROVEN",
+    "owner_pinned_live_registry": (
+        "REPOSITORY_IMPLEMENTED_DEPLOYMENT_ADMISSION_REQUIRED"
+    ),
+    "durable_production_replay_storage": (
+        "REPOSITORY_IMPLEMENTED_DEPLOYMENT_ADMISSION_REQUIRED"
+    ),
+    "authenticated_trusted_time_source": (
+        "REPOSITORY_IMPLEMENTED_EXTERNAL_SOURCE_ADMISSION_REQUIRED"
+    ),
+    "durable_clock_head_storage": (
+        "REPOSITORY_IMPLEMENTED_DEPLOYMENT_ADMISSION_REQUIRED"
+    ),
+    "signing_key_custody": "EXTERNAL_HSM_OR_EQUIVALENT_REQUIRED_NOT_PROVEN",
 }
 
 _RUNTIME_MODE_PRODUCTION: Final = "PRODUCTION"
@@ -125,6 +150,18 @@ _PRODUCTION_CONTEXT_DIGEST: Final = os.environ.get(
 )
 _PRODUCTION_OWNER_HYBRID_CONTEXT_DIGEST: Final = os.environ.get(
     "SBP_LEX_IMPERSONATION_OWNER_HYBRID_CONTEXT_DIGEST"
+)
+_PRODUCTION_REGISTRY_ADMISSION_DIGEST: Final = os.environ.get(
+    "SBP_LEX_IMPERSONATION_REGISTRY_ADMISSION_DIGEST"
+)
+_PRODUCTION_REPLAY_ADMISSION_DIGEST: Final = os.environ.get(
+    "SBP_LEX_IMPERSONATION_REPLAY_ADMISSION_DIGEST"
+)
+_PRODUCTION_TRUSTED_CLOCK_ADMISSION_DIGEST: Final = os.environ.get(
+    "SBP_LEX_IMPERSONATION_TRUSTED_CLOCK_ADMISSION_DIGEST"
+)
+_PRODUCTION_CLOCK_HEAD_ADMISSION_DIGEST: Final = os.environ.get(
+    "SBP_LEX_IMPERSONATION_CLOCK_HEAD_ADMISSION_DIGEST"
 )
 
 _PROVIDER_BINDING_FIELDS: Final = {
@@ -388,9 +425,7 @@ _UPSTREAM_RECEIPT_PAYLOAD_FIELDS: Final = {
     "result",
     "authorization_effect",
 }
-_UPSTREAM_RECEIPT_FIELDS: Final = (
-    _UPSTREAM_RECEIPT_PAYLOAD_FIELDS | _SIGNED_FIELDS
-)
+_UPSTREAM_RECEIPT_FIELDS: Final = _UPSTREAM_RECEIPT_PAYLOAD_FIELDS | _SIGNED_FIELDS
 _REPLAY_PERSISTENCE_PAYLOAD_FIELDS: Final = {
     "schema",
     "contract_id",
@@ -409,9 +444,7 @@ _REPLAY_PERSISTENCE_PAYLOAD_FIELDS: Final = {
     "persisted",
     "authorization_effect",
 }
-_REPLAY_PERSISTENCE_FIELDS: Final = (
-    _REPLAY_PERSISTENCE_PAYLOAD_FIELDS | _SIGNED_FIELDS
-)
+_REPLAY_PERSISTENCE_FIELDS: Final = _REPLAY_PERSISTENCE_PAYLOAD_FIELDS | _SIGNED_FIELDS
 _FALSE_FLAG_FIELDS: Final = {
     "biometric_proof_established",
     "identity_issued",
@@ -676,10 +709,7 @@ def _register_impersonation_composition_boundary(
     if (
         context_id != pins.context_id
         or context_digest != pins.context_digest
-        or (
-            require_test_fixtures
-            and owner_public_key != pins.owner_public_key
-        )
+        or (require_test_fixtures and owner_public_key != pins.owner_public_key)
         or (
             not require_test_fixtures
             and (
@@ -689,6 +719,7 @@ def _register_impersonation_composition_boundary(
                 != pins.owner_hybrid_context_digest
             )
         )
+        or owner_public_key is None
         or not _verify_with_exact_ed25519_key(
             signed_context_record,
             provider=owner_provider,
@@ -720,12 +751,8 @@ def _register_impersonation_composition_boundary(
         )
         if public_key is None:
             raise ValueError("IMPERSONATION_PUBLIC_KEY_INVALID")
-        if (
-            not require_test_fixtures
-            and (
-                hybrid_context is None
-                or hybrid_context.signer_class != PRODUCTION_SIGNER
-            )
+        if not require_test_fixtures and (
+            hybrid_context is None or hybrid_context.signer_class != PRODUCTION_SIGNER
         ):
             raise ValueError("IMPERSONATION_PRODUCTION_HYBRID_REQUIRED")
         public_keys[role] = public_key
@@ -742,6 +769,86 @@ def _register_impersonation_composition_boundary(
         _public_keys=tuple(public_keys.items()),
         _pseudonym_key=bytes(pseudonym_key),
     )
+
+
+def _validate_production_durable_boundary_admissions(
+    *,
+    registry_provider: SignatureProvider,
+    replay_provider: SignatureProvider,
+    registry: OwnerPinnedTrustRegistry,
+    replay_guard: DurableImpersonationReplayGuard,
+    trusted_clock: ImpersonationTrustedClock,
+    clock_head_provider: DurableImpersonationClockHead,
+) -> None:
+    from sbp_lex.identity.durable_boundaries import (
+        AuthenticatedMonotonicClock,
+        SQLiteImpersonationClockHead,
+        SQLiteImpersonationReplayGuard,
+        SQLiteOwnerPinnedTrustRegistry,
+    )
+
+    boundaries = (
+        (
+            registry,
+            SQLiteOwnerPinnedTrustRegistry,
+            _PRODUCTION_REGISTRY_ADMISSION_DIGEST,
+            registry_provider,
+        ),
+        (
+            replay_guard,
+            SQLiteImpersonationReplayGuard,
+            _PRODUCTION_REPLAY_ADMISSION_DIGEST,
+            replay_provider,
+        ),
+        (
+            trusted_clock,
+            AuthenticatedMonotonicClock,
+            _PRODUCTION_TRUSTED_CLOCK_ADMISSION_DIGEST,
+            trusted_clock,
+        ),
+        (
+            clock_head_provider,
+            SQLiteImpersonationClockHead,
+            _PRODUCTION_CLOCK_HEAD_ADMISSION_DIGEST,
+            clock_head_provider,
+        ),
+    )
+    for boundary, expected_type, admitted_digest, expected_provider in boundaries:
+        admission_method = getattr(boundary, "production_admission_record", None)
+        validate_method = getattr(boundary, "validate_store", None)
+        if (
+            type(boundary) is not expected_type
+            or getattr(boundary, "fixture_class", None) != "PRODUCTION_BOUNDARY"
+            or not is_sha512(admitted_digest)
+            or not callable(admission_method)
+            or not callable(validate_method)
+        ):
+            raise ValueError(
+                "IMPERSONATION_PRODUCTION_DURABLE_BOUNDARY_ADMISSION_INVALID"
+            )
+        try:
+            admission_record = admission_method()
+            store_valid = validate_method()
+            expected_provider_context = _hybrid_verification_context(
+                expected_provider,
+                allow_test_only=False,
+            )
+        except Exception as exc:
+            raise ValueError(
+                "IMPERSONATION_PRODUCTION_DURABLE_BOUNDARY_ADMISSION_INVALID"
+            ) from exc
+        if (
+            store_valid is not True
+            or type(admission_record) is not dict
+            or admission_record.get("fixture_class") != "PRODUCTION_BOUNDARY"
+            or expected_provider_context is None
+            or admission_record.get("owner_pinned_signer_context_digest")
+            != expected_provider_context.context_digest
+            or canonical_integrity_hash(admission_record) != admitted_digest
+        ):
+            raise ValueError(
+                "IMPERSONATION_PRODUCTION_DURABLE_BOUNDARY_ADMISSION_INVALID"
+            )
 
 
 def install_production_impersonation_composition_boundary(
@@ -766,9 +873,15 @@ def install_production_impersonation_composition_boundary(
     pins = _pins_from_values(
         context_id=_PRODUCTION_CONTEXT_ID,
         context_digest=_PRODUCTION_CONTEXT_DIGEST,
-        owner_hybrid_context_digest=(
-            _PRODUCTION_OWNER_HYBRID_CONTEXT_DIGEST
-        ),
+        owner_hybrid_context_digest=(_PRODUCTION_OWNER_HYBRID_CONTEXT_DIGEST),
+    )
+    _validate_production_durable_boundary_admissions(
+        registry_provider=registry_provider,
+        replay_provider=replay_provider,
+        registry=registry,
+        replay_guard=replay_guard,
+        trusted_clock=trusted_clock,
+        clock_head_provider=clock_head_provider,
     )
     _register_impersonation_composition_boundary(
         pins=pins,
@@ -844,25 +957,44 @@ class ImpersonationTrustContext:
     match those independent pins exactly.
     """
 
+    _pinned_context_id: str
+    _pinned_context_digest: str
+    _pinned_owner_provider_binding: dict[str, Any]
+    _signed_context_record: dict[str, Any]
+    _owner_provider: SignatureProvider
+    _registry_provider: SignatureProvider
+    _subject_provider: SignatureProvider
+    _replay_provider: SignatureProvider
+    _registry: OwnerPinnedTrustRegistry
+    _replay_guard: DurableImpersonationReplayGuard
+    _sovereign_identity_verifier: AuthenticatedUpstreamVerifier
+    _sovereign_identity_dependencies: Any
+    _authority_boundary_verifier: AuthenticatedUpstreamVerifier
+    _authority_boundary_dependencies: Any
+    _trusted_clock: ImpersonationTrustedClock
+    _clock_head_provider: DurableImpersonationClockHead
+    _composition_boundary: _RegisteredCompositionBoundary | None
+    _sealed: bool
+
     __slots__ = (
-        "_pinned_context_id",
-        "_pinned_context_digest",
-        "_pinned_owner_provider_binding",
-        "_signed_context_record",
-        "_owner_provider",
-        "_registry_provider",
-        "_subject_provider",
-        "_replay_provider",
-        "_registry",
-        "_replay_guard",
-        "_sovereign_identity_verifier",
-        "_sovereign_identity_dependencies",
-        "_authority_boundary_verifier",
         "_authority_boundary_dependencies",
-        "_trusted_clock",
+        "_authority_boundary_verifier",
         "_clock_head_provider",
         "_composition_boundary",
+        "_owner_provider",
+        "_pinned_context_digest",
+        "_pinned_context_id",
+        "_pinned_owner_provider_binding",
+        "_registry",
+        "_registry_provider",
+        "_replay_guard",
+        "_replay_provider",
         "_sealed",
+        "_signed_context_record",
+        "_sovereign_identity_dependencies",
+        "_sovereign_identity_verifier",
+        "_subject_provider",
+        "_trusted_clock",
     )
 
     def __init__(
@@ -999,6 +1131,7 @@ class ImpersonationTrustContext:
     def clock_head_provider(self) -> DurableImpersonationClockHead:
         return self._clock_head_provider
 
+
 def _text(value: Any) -> bool:
     return type(value) is str and bool(value)
 
@@ -1022,7 +1155,7 @@ def _safe_hash(value: Any) -> str | None:
 def _safe_attribute(value: Any, name: str) -> Any:
     try:
         return getattr(value, name)
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -1031,7 +1164,7 @@ def _ed25519_public_key_bytes(provider: Any) -> bytes | None:
     if callable(key):
         try:
             key = key()
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None
     if not isinstance(key, Ed25519PublicKey):
         return None
@@ -1040,7 +1173,7 @@ def _ed25519_public_key_bytes(provider: Any) -> bytes | None:
             encoding=serialization.Encoding.Raw,
             format=serialization.PublicFormat.Raw,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -1052,12 +1185,10 @@ def _hybrid_verification_context(
     if not is_hybrid_provider(provider):
         return None
     try:
-        context = provider.hybrid_verification_context(
-            allow_test_only=allow_test_only
-        )
+        context = provider.hybrid_verification_context(allow_test_only=allow_test_only)
     except (HybridSignatureError, TypeError, ValueError):
         return None
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
     if (
         not isinstance(context, HybridVerificationContext)
@@ -1114,6 +1245,7 @@ def _verify_with_exact_ed25519_key(
             return verify_signed_object(
                 value,
                 provider=None,
+                purpose=impersonation_signing_purpose(value.get("schema")),
                 trust_context=hybrid_context,
                 owner_pinned_context_digest=hybrid_context.context_digest,
                 allow_legacy_non_effect=False,
@@ -1124,8 +1256,7 @@ def _verify_with_exact_ed25519_key(
         if (
             type(signature) is not dict
             or signature.get("algorithm") != "Ed25519"
-            or signature.get("provider_id")
-            != _safe_attribute(provider, "provider_id")
+            or signature.get("provider_id") != _safe_attribute(provider, "provider_id")
             or signature.get("key_id") != _safe_attribute(provider, "key_id")
             or signature.get("custody_class")
             != _safe_attribute(provider, "custody_class")
@@ -1133,9 +1264,7 @@ def _verify_with_exact_ed25519_key(
         ):
             return False
         payload = {
-            key: item
-            for key, item in value.items()
-            if key not in _SIGNED_FIELDS
+            key: item for key, item in value.items() if key not in _SIGNED_FIELDS
         }
         payload_bytes = canonical_json_bytes(payload)
         if value.get("digest") != sha512(payload_bytes).hexdigest():
@@ -1148,10 +1277,13 @@ def _verify_with_exact_ed25519_key(
             raw_signature,
             payload_bytes,
         )
-        return _signature_public_material(
-            provider,
-            allow_legacy_non_effect=True,
-        ) == exact_public_key
+        return (
+            _signature_public_material(
+                provider,
+                allow_legacy_non_effect=True,
+            )
+            == exact_public_key
+        )
     except (
         InvalidSignature,
         binascii.Error,
@@ -1159,7 +1291,7 @@ def _verify_with_exact_ed25519_key(
         ValueError,
     ):
         return False
-    except Exception:
+    except Exception:  # noqa: BLE001
         return False
 
 
@@ -1167,10 +1299,9 @@ def _registered_boundary_matches(context: Any) -> bool:
     if type(context) is not ImpersonationTrustContext:
         return False
     boundary = context._composition_boundary
-    if (
-        boundary is None
-        or _REGISTERED_COMPOSITION_BOUNDARIES.get(boundary.context_id) is not boundary
-    ):
+    if boundary is None:
+        return False
+    if _REGISTERED_COMPOSITION_BOUNDARIES.get(boundary.context_id) is not boundary:
         return False
     exact = {
         "owner_provider": context.owner_provider,
@@ -1180,13 +1311,9 @@ def _registered_boundary_matches(context: Any) -> bool:
         "registry": context.registry,
         "replay_guard": context.replay_guard,
         "sovereign_identity_verifier": context.sovereign_identity_verifier,
-        "sovereign_identity_dependencies": (
-            context.sovereign_identity_dependencies
-        ),
+        "sovereign_identity_dependencies": (context.sovereign_identity_dependencies),
         "authority_boundary_verifier": context.authority_boundary_verifier,
-        "authority_boundary_dependencies": (
-            context.authority_boundary_dependencies
-        ),
+        "authority_boundary_dependencies": (context.authority_boundary_dependencies),
         "trusted_clock": context.trusted_clock,
         "clock_head_provider": context.clock_head_provider,
     }
@@ -1216,9 +1343,7 @@ def _registered_boundary_matches(context: Any) -> bool:
     return all(
         _signature_public_material(
             provider,
-            allow_legacy_non_effect=(
-                _RUNTIME_MODE == _RUNTIME_MODE_TEST_ONLY
-            ),
+            allow_legacy_non_effect=(_RUNTIME_MODE == _RUNTIME_MODE_TEST_ONLY),
         )
         == public_keys.get(role)
         for role, provider in providers.items()
@@ -1244,7 +1369,7 @@ def _pseudonymous_binding(
             }
         )
         return hmac.new(boundary._pseudonym_key, message, sha512).hexdigest()
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -1252,7 +1377,14 @@ def _state_hash(value: Any) -> bool:
     return value == GENESIS_HASH or is_sha512(value)
 
 
-def _provider_binding(provider: SignatureProvider | None) -> dict[str, Any] | None:
+def _provider_binding(
+    provider: (
+        SignatureProvider
+        | ImpersonationTrustedClock
+        | DurableImpersonationClockHead
+        | None
+    ),
+) -> dict[str, Any] | None:
     if provider is None:
         return None
     allow_legacy = _RUNTIME_MODE == _RUNTIME_MODE_TEST_ONLY
@@ -1271,13 +1403,11 @@ def _provider_binding(provider: SignatureProvider | None) -> dict[str, Any] | No
         "custody_class": _safe_attribute(provider, "custody_class"),
         "effect_authority": _safe_attribute(provider, "effect_authority"),
         "ed25519_public_key_fingerprint": (
-            (
-                hybrid_context.context_digest
-                if hybrid_context is not None
-                else sha512(public_key).hexdigest()
-                if public_key is not None
-                else None
-            )
+            hybrid_context.context_digest
+            if hybrid_context is not None
+            else sha512(public_key).hexdigest()
+            if public_key is not None
+            else None
         ),
     }
     if (
@@ -1295,16 +1425,13 @@ def _provider_binding(provider: SignatureProvider | None) -> dict[str, Any] | No
                 or not callable(_safe_attribute(provider, "verify"))
             )
         )
-        or (
-            binding["algorithm"] == HYBRID_SUITE_ID
-            and hybrid_context is None
-        )
+        or (binding["algorithm"] == HYBRID_SUITE_ID and hybrid_context is None)
     ):
         return None
     return binding
 
 
-def _provider_binding_exact(value: Any) -> bool:
+def _provider_binding_exact(value: Any) -> TypeGuard[dict[str, Any]]:
     return (
         type(value) is dict
         and set(value) == _PROVIDER_BINDING_FIELDS
@@ -1316,7 +1443,7 @@ def _provider_binding_exact(value: Any) -> bool:
     )
 
 
-def _verifier_binding_exact(value: Any) -> bool:
+def _verifier_binding_exact(value: Any) -> TypeGuard[dict[str, Any]]:
     return (
         type(value) is dict
         and set(value) == _VERIFIER_BINDING_FIELDS
@@ -1346,7 +1473,7 @@ def _clock_record_error(
             context_id=boundary.context_id,
             context_digest=boundary.context_digest,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None, "IMPERSONATION_TRUSTED_CLOCK_UNAVAILABLE"
     if type(record) is not dict or set(record) != _CLOCK_RECORD_FIELDS:
         return None, "IMPERSONATION_TRUSTED_CLOCK_RECORD_INVALID"
@@ -1421,14 +1548,17 @@ def _clock_head_error(
     ):
         return "IMPERSONATION_CLOCK_HEAD_SEQUENCE_INVALID"
     if head_sequence == 0:
-        if any(
-            head.get(field) != GENESIS_HASH
-            for field in (
-                "clock_record_digest",
-                "prior_clock_record_digest",
-                "latest_transition_receipt_digest",
+        if (
+            any(
+                head.get(field) != GENESIS_HASH
+                for field in (
+                    "clock_record_digest",
+                    "prior_clock_record_digest",
+                    "latest_transition_receipt_digest",
+                )
             )
-        ) or observed_at_ms != 0:
+            or observed_at_ms != 0
+        ):
             return "IMPERSONATION_CLOCK_HEAD_GENESIS_INVALID"
     elif (
         not is_sha512(head.get("clock_record_digest"))
@@ -1437,10 +1567,7 @@ def _clock_head_error(
             clock_sequence == 1
             and head.get("prior_clock_record_digest") != GENESIS_HASH
         )
-        or (
-            clock_sequence > 1
-            and not is_sha512(head.get("prior_clock_record_digest"))
-        )
+        or (clock_sequence > 1 and not is_sha512(head.get("prior_clock_record_digest")))
     ):
         return "IMPERSONATION_CLOCK_HEAD_DIGEST_INVALID"
     return None
@@ -1477,7 +1604,7 @@ def _admit_clock_record(
             context_id=context_record["context_id"],
             context_digest=context_record["digest"],
         )
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None, "IMPERSONATION_CLOCK_HEAD_UNAVAILABLE"
     reason = _clock_head_error(
         pre_head,
@@ -1489,8 +1616,7 @@ def _admit_clock_record(
     clock_record_digest = _safe_hash(clock_record)
     if (
         clock_record["clock_sequence"] != pre_head["clock_sequence"] + 1
-        or clock_record["prior_clock_record_digest"]
-        != pre_head["clock_record_digest"]
+        or clock_record["prior_clock_record_digest"] != pre_head["clock_record_digest"]
         or clock_record_digest is None
     ):
         return None, "IMPERSONATION_CLOCK_HISTORY_NOT_MONOTONIC"
@@ -1514,7 +1640,7 @@ def _admit_clock_record(
         receipt = context.clock_head_provider.advance_once(
             transition=deepcopy(transition)
         )
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None, "IMPERSONATION_CLOCK_TRANSITION_UNAVAILABLE"
     reason = _clock_transition_error(
         receipt,
@@ -1529,7 +1655,7 @@ def _admit_clock_record(
             context_id=context_record["context_id"],
             context_digest=context_record["digest"],
         )
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None, "IMPERSONATION_CLOCK_HEAD_UNAVAILABLE"
     reason = _clock_head_error(
         post_head,
@@ -1567,7 +1693,7 @@ def _terminal_clock_head_error(
             context_id=context_record["context_id"],
             context_digest=context_record["digest"],
         )
-    except Exception:
+    except Exception:  # noqa: BLE001
         return "IMPERSONATION_CLOCK_HEAD_UNAVAILABLE"
     reason = _clock_head_error(
         head,
@@ -1609,8 +1735,7 @@ def _context_error(
             {key: value for key, value in record.items() if key not in _SIGNED_FIELDS}
         )
         != context.pinned_context_digest
-        or record.get("owner_provider_binding")
-        != context.pinned_owner_provider_binding
+        or record.get("owner_provider_binding") != context.pinned_owner_provider_binding
     ):
         return None, "IMPERSONATION_DEPLOYMENT_CONTEXT_PIN_MISMATCH"
     if (
@@ -1689,8 +1814,7 @@ def _context_error(
         or record["valid_until_ms"] <= record["valid_from_ms"]
         or not record["valid_from_ms"] <= now_ms < record["valid_until_ms"]
         or clock_sequence < record["minimum_clock_sequence"]
-        or record["pseudonym_key_id"]
-        != sha512(boundary._pseudonym_key).hexdigest()
+        or record["pseudonym_key_id"] != sha512(boundary._pseudonym_key).hexdigest()
     ):
         return None, "IMPERSONATION_CONTEXT_NOT_CURRENT"
     bindings = (
@@ -1707,8 +1831,7 @@ def _context_error(
         if record[field] != _provider_binding(provider):
             return None, "IMPERSONATION_CONTEXT_PROVIDER_SUBSTITUTION"
     public_key_fingerprints = [
-        record[field]["ed25519_public_key_fingerprint"]
-        for field, _ in bindings
+        record[field]["ed25519_public_key_fingerprint"] for field, _ in bindings
     ]
     if len(set(public_key_fingerprints)) != len(public_key_fingerprints):
         return None, "IMPERSONATION_CONTEXT_KEYS_NOT_SEPARATE"
@@ -1725,8 +1848,7 @@ def _context_error(
         )
         if (
             not _verifier_binding_exact(expected)
-            or _safe_attribute(verifier, "verifier_id")
-            != expected["verifier_id"]
+            or _safe_attribute(verifier, "verifier_id") != expected["verifier_id"]
             or _safe_attribute(verifier, "verifier_version")
             != expected["verifier_version"]
             or not callable(_safe_attribute(verifier, "verify_authenticated"))
@@ -1737,8 +1859,7 @@ def _context_error(
     clock = context.trusted_clock
     if (
         _safe_attribute(clock, "clock_id") != record["trusted_clock_id"]
-        or _safe_attribute(clock, "clock_version")
-        != record["trusted_clock_version"]
+        or _safe_attribute(clock, "clock_version") != record["trusted_clock_version"]
         or record["clock_provider_binding"] != _provider_binding(clock)
         or not callable(_safe_attribute(clock, "current_time_record"))
     ):
@@ -1746,8 +1867,7 @@ def _context_error(
     clock_head = context.clock_head_provider
     if (
         _safe_attribute(clock_head, "head_id") != record["clock_head_id"]
-        or _safe_attribute(clock_head, "head_version")
-        != record["clock_head_version"]
+        or _safe_attribute(clock_head, "head_version") != record["clock_head_version"]
         or record["clock_head_provider_binding"] != _provider_binding(clock_head)
         or not callable(_safe_attribute(clock_head, "current_head"))
         or not callable(_safe_attribute(clock_head, "advance_once"))
@@ -1860,6 +1980,8 @@ def _upstream_binding(
     chain = state.get("hash_chain")
     if not verify_hash_chain_entries(chain, state.get("state_hash")):
         return None, "IMPERSONATION_UPSTREAM_HASH_CHAIN_INVALID"
+    if type(chain) is not list:
+        return None, "IMPERSONATION_UPSTREAM_HASH_CHAIN_INVALID"
     payload = impersonation_upstream_hash_payload(
         state,
         component_id=component_id,
@@ -1900,7 +2022,7 @@ def _upstream_binding(
             dependencies=dependencies,
             expected_receipt=deepcopy(expected_receipt),
         )
-    except Exception:
+    except Exception:  # noqa: BLE001
         receipt = None
     boundary = context._composition_boundary
     receipt_key_role = (
@@ -1912,10 +2034,7 @@ def _upstream_binding(
         boundary is None
         or type(receipt) is not dict
         or set(receipt) != _UPSTREAM_RECEIPT_FIELDS
-        or any(
-            receipt.get(field) != value
-            for field, value in expected_receipt.items()
-        )
+        or any(receipt.get(field) != value for field, value in expected_receipt.items())
         or not _verify_with_exact_ed25519_key(
             receipt,
             provider=dependencies,
@@ -2052,7 +2171,7 @@ def _snapshot(
     }
 
 
-def _snapshot_exact(value: Any) -> bool:
+def _snapshot_exact(value: Any) -> TypeGuard[dict[str, Any]]:
     if type(value) is not dict or set(value) != _SNAPSHOT_FIELDS:
         return False
     if (
@@ -2071,8 +2190,7 @@ def _snapshot_exact(value: Any) -> bool:
         or value["clock_head_sequence"] < 1
         or not is_sha512(value.get("clock_head_digest"))
         or type(value.get("clock_transition_receipt")) is not dict
-        or set(value["clock_transition_receipt"])
-        != _CLOCK_HEAD_TRANSITION_FIELDS
+        or set(value["clock_transition_receipt"]) != _CLOCK_HEAD_TRANSITION_FIELDS
         or _safe_hash(value["clock_transition_receipt"])
         != value.get("clock_transition_receipt_digest")
         or not is_sha512(value.get("clock_transition_receipt_digest"))
@@ -2104,8 +2222,7 @@ def _snapshot_exact(value: Any) -> bool:
             or set(binding) != _UPSTREAM_BINDING_FIELDS
             or binding.get("component_id") != component
             or not all(
-                _text(binding.get(item))
-                for item in ("verifier_id", "verifier_version")
+                _text(binding.get(item)) for item in ("verifier_id", "verifier_version")
             )
             or not all(
                 is_sha512(binding.get(item))
@@ -2164,8 +2281,7 @@ def _registry_error(
         ("revocation_sequence", "minimum_revocation_sequence"),
     )
     if any(
-        type(record.get(field)) is not int
-        or record[field] < context_record[minimum]
+        type(record.get(field)) is not int or record[field] < context_record[minimum]
         for field, minimum in sequence_requirements
     ):
         return "IMPERSONATION_REGISTRY_SEQUENCE_INVALID"
@@ -2317,7 +2433,9 @@ def _head_error(
         "revocation_sequence",
         "claim_sequence",
     )
-    if any(type(head.get(field)) is not int or head[field] < 0 for field in integer_fields):
+    if any(
+        type(head.get(field)) is not int or head[field] < 0 for field in integer_fields
+    ):
         return "IMPERSONATION_REPLAY_HEAD_SEQUENCE_INVALID"
     latest = head.get("latest_claim_receipt_digest")
     if latest != GENESIS_HASH and not is_sha512(latest):
@@ -2539,8 +2657,16 @@ def evaluate_impersonation_protection(
         now_ms=now_ms,
         clock_sequence=clock_record["clock_sequence"],
     )
-    if reason is not None:
-        return _structured_deny(state, reason=reason, sequence=sequence)
+    if (
+        reason is not None
+        or context_record is None
+        or type(trust_context) is not ImpersonationTrustContext
+    ):
+        return _structured_deny(
+            state,
+            reason=reason or "IMPERSONATION_DEPLOYMENT_CONTEXT_REQUIRED",
+            sequence=sequence,
+        )
     if state.get("evaluation_time") != now_ms:
         return _structured_deny(
             state,
@@ -2579,7 +2705,7 @@ def evaluate_impersonation_protection(
             sequence=sequence,
             prior_digest=prior_digest,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001
         return _structured_deny(
             state,
             reason="IMPERSONATION_DEPENDENCY_OR_EVIDENCE_FAILURE",
@@ -2601,8 +2727,13 @@ def _evaluate_valid_context(
     prior_digest: str | None,
 ) -> dict[str, Any]:
     live, reason = _live_bindings(state, context_record, trust_context)
+    safe_live: dict[str, Any] = live if type(live) is dict else {}
+    if reason is None and type(live) is not dict:
+        reason = "IMPERSONATION_LIVE_BINDINGS_INVALID"
     sovereign_binding: dict[str, Any] | None = None
+    safe_sovereign_binding: dict[str, Any] = {}
     authority_binding: dict[str, Any] | None = None
+    safe_authority_binding: dict[str, Any] = {}
     if reason is None:
         sovereign_binding, reason = _upstream_binding(
             state,
@@ -2610,6 +2741,10 @@ def _evaluate_valid_context(
             context=trust_context,
             context_record=context_record,
         )
+        if type(sovereign_binding) is dict:
+            safe_sovereign_binding = sovereign_binding
+        elif reason is None:
+            reason = "IMPERSONATION_SOVEREIGN_IDENTITY_BINDING_INVALID"
     if reason is None:
         authority_binding, reason = _upstream_binding(
             state,
@@ -2617,37 +2752,46 @@ def _evaluate_valid_context(
             context=trust_context,
             context_record=context_record,
         )
-    snapshot = None
+        if type(authority_binding) is dict:
+            safe_authority_binding = authority_binding
+        elif reason is None:
+            reason = "IMPERSONATION_AUTHORITY_BOUNDARY_BINDING_INVALID"
+    snapshot: dict[str, Any] | None = None
+    safe_snapshot: dict[str, Any] = {}
+    clock_record_digest = _safe_hash(clock_record)
+    if reason is None and clock_record_digest is None:
+        reason = "IMPERSONATION_TRUSTED_CLOCK_RECORD_INVALID"
     if reason is None:
-        snapshot = _snapshot(
+        safe_snapshot = _snapshot(
             state,
             context_record=context_record,
-            live=live,
-            sovereign_binding=sovereign_binding,
-            authority_binding=authority_binding,
+            live=safe_live,
+            sovereign_binding=safe_sovereign_binding,
+            authority_binding=safe_authority_binding,
             evaluation_time=now_ms,
             clock_sequence=clock_record["clock_sequence"],
-            clock_record_digest=_safe_hash(clock_record),
+            clock_record_digest=clock_record_digest or "",
             clock_head_sequence=clock_admission["clock_head_sequence"],
             clock_head_digest=clock_admission["clock_head_digest"],
-            clock_transition_receipt=clock_admission[
-                "clock_transition_receipt"
-            ],
+            clock_transition_receipt=clock_admission["clock_transition_receipt"],
             clock_transition_receipt_digest=clock_admission[
                 "clock_transition_receipt_digest"
             ],
             sequence=sequence,
             prior_digest=prior_digest,
         )
-        if not _snapshot_exact(snapshot):
+        snapshot = safe_snapshot
+        if not _snapshot_exact(safe_snapshot):
             reason = "IMPERSONATION_SNAPSHOT_INVALID"
     registry_record: dict[str, Any] | None = None
+    safe_registry_record: dict[str, Any] = {}
     if reason is None:
         candidate = trust_context.registry.lookup_identity(
             subject_id=context_record["subject_id"],
             participant_id=context_record["participant_id"],
         )
         registry_record = candidate if type(candidate) is dict else None
+        safe_registry_record = registry_record if registry_record is not None else {}
         reason = _registry_error(
             registry_record,
             context_record=context_record,
@@ -2656,57 +2800,68 @@ def _evaluate_valid_context(
             now_ms=now_ms,
         )
     registry_digest = _safe_hash(registry_record) if registry_record else None
+    safe_registry_digest = registry_digest or ""
+    safe_possession_proof = possession_proof if type(possession_proof) is dict else {}
     if reason is None:
         reason = _proof_error(
             possession_proof,
             context_record=context_record,
-            registry_record=registry_record,
-            registry_digest=registry_digest,
+            registry_record=safe_registry_record,
+            registry_digest=safe_registry_digest,
             state=state,
-            live=live,
-            snapshot=snapshot,
+            live=safe_live,
+            snapshot=safe_snapshot,
             subject_provider=trust_context.subject_provider,
             context=trust_context,
             now_ms=now_ms,
         )
     pre_head: dict[str, Any] | None = None
+    safe_pre_head: dict[str, Any] = {}
     if reason is None:
         pre_head = trust_context.replay_guard.current_head(
             namespace=context_record["replay_namespace"],
-            subject_binding_digest=snapshot["subject_binding_digest"],
+            subject_binding_digest=safe_snapshot["subject_binding_digest"],
             observed_at_ms=now_ms,
         )
+        safe_pre_head = pre_head if type(pre_head) is dict else {}
         reason = _head_error(
             pre_head,
             context_record=context_record,
-            subject_binding_digest=snapshot["subject_binding_digest"],
+            subject_binding_digest=safe_snapshot["subject_binding_digest"],
             replay_provider=trust_context.replay_provider,
             context=trust_context,
             now_ms=now_ms,
         )
     if reason is None:
         current_sequences = (
-            registry_record["registry_sequence"],
-            registry_record["authority_sequence"],
-            registry_record["revocation_sequence"],
+            safe_registry_record["registry_sequence"],
+            safe_registry_record["authority_sequence"],
+            safe_registry_record["revocation_sequence"],
         )
         stored_sequences = (
-            pre_head["registry_sequence"],
-            pre_head["authority_sequence"],
-            pre_head["revocation_sequence"],
+            safe_pre_head["registry_sequence"],
+            safe_pre_head["authority_sequence"],
+            safe_pre_head["revocation_sequence"],
         )
-        if any(current < stored for current, stored in zip(current_sequences, stored_sequences)):
+        if any(
+            current < stored
+            for current, stored in zip(current_sequences, stored_sequences)
+        ):
             reason = "IMPERSONATION_DURABLE_SEQUENCE_ROLLBACK"
-    replay_key = None
-    receipt = None
-    post_head = None
+    replay_key: str | None = None
+    safe_replay_key = ""
+    receipt: dict[str, Any] | None = None
+    safe_receipt: dict[str, Any] = {}
+    post_head: dict[str, Any] | None = None
+    safe_post_head: dict[str, Any] = {}
     proof_digest = _safe_hash(possession_proof) if possession_proof else None
     if reason is None:
         replay_key = _replay_key(
             context_record=context_record,
-            snapshot=snapshot,
+            snapshot=safe_snapshot,
             context=trust_context,
         )
+        safe_replay_key = replay_key or ""
         claim = {
             "schema": REPLAY_CLAIM_SCHEMA,
             "contract_id": IMPERSONATION_PROTECTION_CONTRACT_ID,
@@ -2714,29 +2869,28 @@ def _evaluate_valid_context(
             "context_digest": context_record["digest"],
             "namespace": context_record["replay_namespace"],
             "replay_key": replay_key,
-            "claim_sequence": pre_head["claim_sequence"] + 1,
-            "prior_claim_receipt_digest": pre_head[
-                "latest_claim_receipt_digest"
-            ],
-            "pre_claim_head_digest": _safe_hash(pre_head),
+            "claim_sequence": safe_pre_head["claim_sequence"] + 1,
+            "prior_claim_receipt_digest": safe_pre_head["latest_claim_receipt_digest"],
+            "pre_claim_head_digest": _safe_hash(safe_pre_head),
             "claimed_at_ms": now_ms,
-            "expires_at_ms": possession_proof["expires_at_ms"],
-            "request_fingerprint": snapshot["request_fingerprint"],
-            "snapshot_digest": _safe_hash(snapshot),
-            "registry_record_digest": registry_digest,
+            "expires_at_ms": safe_possession_proof["expires_at_ms"],
+            "request_fingerprint": safe_snapshot["request_fingerprint"],
+            "snapshot_digest": _safe_hash(safe_snapshot),
+            "registry_record_digest": safe_registry_digest,
             "possession_proof_digest": proof_digest,
-            "subject_binding_digest": snapshot["subject_binding_digest"],
-            "session_binding_digest": snapshot["session_binding_digest"],
-            "challenge_binding_digest": snapshot["challenge_binding_digest"],
-            "registry_sequence": registry_record["registry_sequence"],
-            "authority_sequence": registry_record["authority_sequence"],
-            "revocation_sequence": registry_record["revocation_sequence"],
+            "subject_binding_digest": safe_snapshot["subject_binding_digest"],
+            "session_binding_digest": safe_snapshot["session_binding_digest"],
+            "challenge_binding_digest": safe_snapshot["challenge_binding_digest"],
+            "registry_sequence": safe_registry_record["registry_sequence"],
+            "authority_sequence": safe_registry_record["authority_sequence"],
+            "revocation_sequence": safe_registry_record["revocation_sequence"],
             "clock_sequence": clock_record["clock_sequence"],
             "clock_record_digest": _safe_hash(clock_record),
             "result": REPLAY_CLAIMED,
             "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
         }
         receipt = trust_context.replay_guard.claim_once(claim=deepcopy(claim))
+        safe_receipt = receipt if type(receipt) is dict else {}
         reason = _receipt_error(
             receipt,
             expected_claim=claim,
@@ -2746,13 +2900,14 @@ def _evaluate_valid_context(
     if reason is None:
         post_head = trust_context.replay_guard.current_head(
             namespace=context_record["replay_namespace"],
-            subject_binding_digest=snapshot["subject_binding_digest"],
+            subject_binding_digest=safe_snapshot["subject_binding_digest"],
             observed_at_ms=now_ms,
         )
+        safe_post_head = post_head if type(post_head) is dict else {}
         reason = _head_error(
             post_head,
             context_record=context_record,
-            subject_binding_digest=snapshot["subject_binding_digest"],
+            subject_binding_digest=safe_snapshot["subject_binding_digest"],
             replay_provider=trust_context.replay_provider,
             context=trust_context,
             now_ms=now_ms,
@@ -2760,36 +2915,40 @@ def _evaluate_valid_context(
     receipt_digest = _safe_hash(receipt) if receipt else None
     post_head_digest = _safe_hash(post_head) if post_head else None
     if reason is None and (
-        post_head["registry_sequence"] != registry_record["registry_sequence"]
-        or post_head["authority_sequence"] != registry_record["authority_sequence"]
-        or post_head["revocation_sequence"] != registry_record["revocation_sequence"]
-        or post_head["claim_sequence"] != receipt["claim_sequence"]
-        or post_head["latest_claim_receipt_digest"] != receipt_digest
+        safe_post_head["registry_sequence"] != safe_registry_record["registry_sequence"]
+        or safe_post_head["authority_sequence"]
+        != safe_registry_record["authority_sequence"]
+        or safe_post_head["revocation_sequence"]
+        != safe_registry_record["revocation_sequence"]
+        or safe_post_head["claim_sequence"] != safe_receipt["claim_sequence"]
+        or safe_post_head["latest_claim_receipt_digest"] != receipt_digest
     ):
         reason = "IMPERSONATION_DURABLE_REPLAY_RECEIPT_NOT_CURRENT"
     persistence_receipt = None
     if reason is None:
+        safe_receipt_digest = receipt_digest or ""
+        safe_post_head_digest = post_head_digest or ""
         persistence_receipt = trust_context.replay_guard.is_claimed(
             namespace=context_record["replay_namespace"],
-            replay_key=replay_key,
-            receipt_digest=receipt_digest,
-            subject_binding_digest=snapshot["subject_binding_digest"],
+            replay_key=safe_replay_key,
+            receipt_digest=safe_receipt_digest,
+            subject_binding_digest=safe_snapshot["subject_binding_digest"],
             observed_at_ms=now_ms,
-            current_head_digest=post_head_digest,
+            current_head_digest=safe_post_head_digest,
         )
         reason = _persistence_error(
             persistence_receipt,
             context_record=context_record,
             replay_provider=trust_context.replay_provider,
             context=trust_context,
-            replay_key=replay_key,
-            claim_receipt_digest=receipt_digest,
-            subject_binding_digest=snapshot["subject_binding_digest"],
-            claim_sequence=receipt["claim_sequence"],
-            current_head_digest=post_head_digest,
-            registry_sequence=registry_record["registry_sequence"],
-            authority_sequence=registry_record["authority_sequence"],
-            revocation_sequence=registry_record["revocation_sequence"],
+            replay_key=safe_replay_key,
+            claim_receipt_digest=safe_receipt_digest,
+            subject_binding_digest=safe_snapshot["subject_binding_digest"],
+            claim_sequence=safe_receipt["claim_sequence"],
+            current_head_digest=safe_post_head_digest,
+            registry_sequence=safe_registry_record["registry_sequence"],
+            authority_sequence=safe_registry_record["authority_sequence"],
+            revocation_sequence=safe_registry_record["revocation_sequence"],
             observed_at_ms=now_ms,
         )
     if reason is None:
@@ -2827,7 +2986,10 @@ def verify_impersonation_protection(
     """Verify the current pseudonymous receipt against all live trust state."""
 
     try:
-        if type(state) is not dict or type(trust_context) is not ImpersonationTrustContext:
+        if (
+            type(state) is not dict
+            or type(trust_context) is not ImpersonationTrustContext
+        ):
             return False
         clock_record, clock_error = _clock_record_error(trust_context)
         if clock_error is not None or clock_record is None:
@@ -2838,7 +3000,7 @@ def verify_impersonation_protection(
             now_ms=now_ms,
             clock_sequence=clock_record["clock_sequence"],
         )
-        if error is not None:
+        if error is not None or context_record is None:
             return False
         trace = state.get("impersonation_protection_trace")
         latest = state.get("impersonation_protection_record")
@@ -2852,8 +3014,7 @@ def verify_impersonation_protection(
             or latest.get("result") != IMPERSONATION_PASS
             or latest.get("reason") != "IMPERSONATION_PROTECTION_COMPLETED"
             or set(latest) != _RECORD_FIELDS
-            or latest.get("deployment_dependencies")
-            != DEPLOYMENT_DEPENDENCIES
+            or latest.get("deployment_dependencies") != DEPLOYMENT_DEPENDENCIES
             or any(latest.get(field) is not False for field in _FALSE_FLAG_FIELDS)
             or any(
                 state.get(f"impersonation_{field}") is not False
@@ -2866,13 +3027,13 @@ def verify_impersonation_protection(
             if type(record) is not dict or set(record) != _RECORD_FIELDS:
                 return False
             snapshot = record.get("evaluation_snapshot")
+            if not _snapshot_exact(snapshot):
+                return False
             if (
                 record.get("evaluation_sequence") != sequence
                 or any(record.get(field) is not False for field in _FALSE_FLAG_FIELDS)
                 or record.get("result") != IMPERSONATION_PASS
-                or record.get("deployment_dependencies")
-                != DEPLOYMENT_DEPENDENCIES
-                or not _snapshot_exact(snapshot)
+                or record.get("deployment_dependencies") != DEPLOYMENT_DEPENDENCIES
                 or snapshot["evaluation_sequence"] != sequence
                 or snapshot["prior_impersonation_digest"]
                 != (_safe_hash(prefix) if prefix else None)
@@ -2883,7 +3044,7 @@ def verify_impersonation_protection(
                 return False
             prefix.append(record)
         live, error = _live_bindings(state, context_record, trust_context)
-        if error is not None:
+        if error is not None or type(live) is not dict:
             return False
         sovereign_binding, error = _upstream_binding(
             state,
@@ -2891,7 +3052,7 @@ def verify_impersonation_protection(
             context=trust_context,
             context_record=context_record,
         )
-        if error is not None:
+        if error is not None or type(sovereign_binding) is not dict:
             return False
         authority_binding, error = _upstream_binding(
             state,
@@ -2899,9 +3060,11 @@ def verify_impersonation_protection(
             context=trust_context,
             context_record=context_record,
         )
-        if error is not None:
+        if error is not None or type(authority_binding) is not dict:
             return False
         audited_snapshot = latest["evaluation_snapshot"]
+        if type(audited_snapshot) is not dict:
+            return False
         if (
             state.get("evaluation_time") != audited_snapshot["evaluation_time"]
             or clock_record["clock_sequence"] != audited_snapshot["clock_sequence"]
@@ -2913,6 +3076,8 @@ def verify_impersonation_protection(
             context_id=context_record["context_id"],
             context_digest=context_record["digest"],
         )
+        if type(clock_head) is not dict:
+            return False
         if (
             _clock_head_error(
                 clock_head,
@@ -2920,8 +3085,7 @@ def verify_impersonation_protection(
                 context=trust_context,
             )
             is not None
-            or clock_head["head_sequence"]
-            != audited_snapshot["clock_head_sequence"]
+            or clock_head["head_sequence"] != audited_snapshot["clock_head_sequence"]
             or _safe_hash(clock_head) != audited_snapshot["clock_head_digest"]
             or clock_head["clock_record_digest"]
             != audited_snapshot["clock_record_digest"]
@@ -2930,6 +3094,8 @@ def verify_impersonation_protection(
         ):
             return False
         transition_receipt = audited_snapshot["clock_transition_receipt"]
+        if type(transition_receipt) is not dict:
+            return False
         prior_head_digest = transition_receipt.get("prior_head_digest")
         if not is_sha512(prior_head_digest):
             return False
@@ -2944,18 +3110,19 @@ def verify_impersonation_protection(
             "prior_head_digest": prior_head_digest,
             "clock_sequence": audited_snapshot["clock_sequence"],
             "clock_record_digest": audited_snapshot["clock_record_digest"],
-            "prior_clock_record_digest": clock_record[
-                "prior_clock_record_digest"
-            ],
+            "prior_clock_record_digest": clock_record["prior_clock_record_digest"],
             "observed_at_ms": audited_snapshot["evaluation_time"],
             "result": "ADVANCED",
             "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
         }
-        if _clock_transition_error(
-            transition_receipt,
-            expected_transition=expected_transition,
-            context=trust_context,
-        ) is not None:
+        if (
+            _clock_transition_error(
+                transition_receipt,
+                expected_transition=expected_transition,
+                context=trust_context,
+            )
+            is not None
+        ):
             return False
         current_snapshot = _snapshot(
             state,
@@ -2968,9 +3135,7 @@ def verify_impersonation_protection(
             clock_record_digest=audited_snapshot["clock_record_digest"],
             clock_head_sequence=audited_snapshot["clock_head_sequence"],
             clock_head_digest=audited_snapshot["clock_head_digest"],
-            clock_transition_receipt=audited_snapshot[
-                "clock_transition_receipt"
-            ],
+            clock_transition_receipt=audited_snapshot["clock_transition_receipt"],
             clock_transition_receipt_digest=audited_snapshot[
                 "clock_transition_receipt_digest"
             ],
@@ -2983,17 +3148,24 @@ def verify_impersonation_protection(
             subject_id=context_record["subject_id"],
             participant_id=context_record["participant_id"],
         )
-        if _registry_error(
-            registry_record,
-            context_record=context_record,
-            registry_provider=trust_context.registry_provider,
-            context=trust_context,
-            now_ms=now_ms,
-        ) is not None:
+        if type(registry_record) is not dict:
+            return False
+        if (
+            _registry_error(
+                registry_record,
+                context_record=context_record,
+                registry_provider=trust_context.registry_provider,
+                context=trust_context,
+                now_ms=now_ms,
+            )
+            is not None
+        ):
             return False
         if latest.get("registry_record_digest") != _safe_hash(registry_record):
             return False
         receipt = latest.get("replay_claim_receipt")
+        if type(receipt) is not dict:
+            return False
         receipt_digest = _safe_hash(receipt)
         if (
             receipt_digest is None
@@ -3004,16 +3176,16 @@ def verify_impersonation_protection(
             or now_ms >= receipt.get("expires_at_ms")
         ):
             return False
-        expected_claim = {
-            key: receipt[key]
-            for key in _REPLAY_CLAIM_PAYLOAD_FIELDS
-        }
-        if _receipt_error(
-            receipt,
-            expected_claim=expected_claim,
-            replay_provider=trust_context.replay_provider,
-            context=trust_context,
-        ) is not None:
+        expected_claim = {key: receipt[key] for key in _REPLAY_CLAIM_PAYLOAD_FIELDS}
+        if (
+            _receipt_error(
+                receipt,
+                expected_claim=expected_claim,
+                replay_provider=trust_context.replay_provider,
+                context=trust_context,
+            )
+            is not None
+        ):
             return False
         exact_receipt_bindings = {
             "context_id": context_record["context_id"],
@@ -3039,7 +3211,10 @@ def verify_impersonation_protection(
             "result": REPLAY_CLAIMED,
             "authorization_effect": NO_AUTHORIZATION_EFFECT,
         }
-        if any(receipt.get(field) != value for field, value in exact_receipt_bindings.items()):
+        if any(
+            receipt.get(field) != value
+            for field, value in exact_receipt_bindings.items()
+        ):
             return False
         if (
             type(receipt.get("claim_sequence")) is not int
@@ -3057,14 +3232,19 @@ def verify_impersonation_protection(
             subject_binding_digest=current_snapshot["subject_binding_digest"],
             observed_at_ms=now_ms,
         )
-        if _head_error(
-            head,
-            context_record=context_record,
-            subject_binding_digest=current_snapshot["subject_binding_digest"],
-            replay_provider=trust_context.replay_provider,
-            context=trust_context,
-            now_ms=now_ms,
-        ) is not None:
+        if type(head) is not dict:
+            return False
+        if (
+            _head_error(
+                head,
+                context_record=context_record,
+                subject_binding_digest=current_snapshot["subject_binding_digest"],
+                replay_provider=trust_context.replay_provider,
+                context=trust_context,
+                now_ms=now_ms,
+            )
+            is not None
+        ):
             return False
         if (
             head["registry_sequence"] != registry_record["registry_sequence"]
@@ -3074,6 +3254,8 @@ def verify_impersonation_protection(
         ):
             return False
         head_digest = _safe_hash(head)
+        if head_digest is None:
+            return False
         persistence_receipt = trust_context.replay_guard.is_claimed(
             namespace=context_record["replay_namespace"],
             replay_key=receipt["replay_key"],
@@ -3082,29 +3264,34 @@ def verify_impersonation_protection(
             observed_at_ms=now_ms,
             current_head_digest=head_digest,
         )
-        if _persistence_error(
-            persistence_receipt,
-            context_record=context_record,
-            replay_provider=trust_context.replay_provider,
-            context=trust_context,
-            replay_key=receipt["replay_key"],
-            claim_receipt_digest=receipt_digest,
-            subject_binding_digest=current_snapshot["subject_binding_digest"],
-            claim_sequence=receipt["claim_sequence"],
-            current_head_digest=head_digest,
-            registry_sequence=registry_record["registry_sequence"],
-            authority_sequence=registry_record["authority_sequence"],
-            revocation_sequence=registry_record["revocation_sequence"],
-            observed_at_ms=now_ms,
-        ) is not None:
+        if (
+            _persistence_error(
+                persistence_receipt,
+                context_record=context_record,
+                replay_provider=trust_context.replay_provider,
+                context=trust_context,
+                replay_key=receipt["replay_key"],
+                claim_receipt_digest=receipt_digest,
+                subject_binding_digest=current_snapshot["subject_binding_digest"],
+                claim_sequence=receipt["claim_sequence"],
+                current_head_digest=head_digest,
+                registry_sequence=registry_record["registry_sequence"],
+                authority_sequence=registry_record["authority_sequence"],
+                revocation_sequence=registry_record["revocation_sequence"],
+                observed_at_ms=now_ms,
+            )
+            is not None
+        ):
             return False
         return (
             latest.get("registry_sequence") == registry_record["registry_sequence"]
-            and latest.get("authority_sequence") == registry_record["authority_sequence"]
+            and latest.get("authority_sequence")
+            == registry_record["authority_sequence"]
             and latest.get("revocation_status") == TRUST_ACTIVE
-            and latest.get("revocation_sequence") == registry_record["revocation_sequence"]
+            and latest.get("revocation_sequence")
+            == registry_record["revocation_sequence"]
         )
-    except Exception:
+    except Exception:  # noqa: BLE001
         return False
 
 
@@ -3136,24 +3323,19 @@ def impersonation_protection_hash_payload(
 
 __all__ = [
     "AUTHORITY_BOUNDARY_COMPONENT",
-    "AuthenticatedUpstreamVerifier",
-    "CLOCK_RECORD_SCHEMA",
     "CLOCK_HEAD_SCHEMA",
     "CLOCK_HEAD_TRANSITION_SCHEMA",
+    "CLOCK_RECORD_SCHEMA",
     "DEPLOYMENT_DEPENDENCIES",
-    "DurableImpersonationReplayGuard",
-    "DurableImpersonationClockHead",
     "IMPERSONATION_DENY",
     "IMPERSONATION_PASS",
     "IMPERSONATION_PROTECTION_CONTRACT_ID",
     "IMPERSONATION_PROTECTION_SCHEMA_STATUS",
     "IMPERSONATION_PROTECTION_SEMANTICS",
     "IMPERSONATION_PROTECTION_STAGE",
-    "ImpersonationTrustContext",
-    "ImpersonationTrustedClock",
+    "IMPERSONATION_SIGNING_PURPOSES",
     "LIVE_REGISTRY_SCHEMA",
     "NO_AUTHORIZATION_EFFECT",
-    "OwnerPinnedTrustRegistry",
     "POSSESSION_PROOF_SCHEMA",
     "REPLAY_CLAIMED",
     "REPLAY_CLAIM_SCHEMA",
@@ -3164,8 +3346,15 @@ __all__ = [
     "TRUST_CONTEXT_SCHEMA",
     "TRUST_REVOKED",
     "UPSTREAM_RECEIPT_SCHEMA",
+    "AuthenticatedUpstreamVerifier",
+    "DurableImpersonationClockHead",
+    "DurableImpersonationReplayGuard",
+    "ImpersonationTrustContext",
+    "ImpersonationTrustedClock",
+    "OwnerPinnedTrustRegistry",
     "evaluate_impersonation_protection",
     "impersonation_protection_hash_payload",
+    "impersonation_signing_purpose",
     "impersonation_upstream_hash_payload",
     "install_production_impersonation_composition_boundary",
     "verify_impersonation_protection",

@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
+from ctypes import wintypes
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +53,163 @@ _REJECTED_GIT_ENVIRONMENT = frozenset(
         "GIT_WORK_TREE",
     }
 )
+
+
+class _JobBasicLimitInformation(ctypes.Structure):
+    _fields_ = [
+        ("per_process_user_time_limit", ctypes.c_longlong),
+        ("per_job_user_time_limit", ctypes.c_longlong),
+        ("limit_flags", wintypes.DWORD),
+        ("minimum_working_set_size", ctypes.c_size_t),
+        ("maximum_working_set_size", ctypes.c_size_t),
+        ("active_process_limit", wintypes.DWORD),
+        ("affinity", ctypes.c_size_t),
+        ("priority_class", wintypes.DWORD),
+        ("scheduling_class", wintypes.DWORD),
+    ]
+
+
+class _JobIoCounters(ctypes.Structure):
+    _fields_ = [
+        ("read_operation_count", ctypes.c_ulonglong),
+        ("write_operation_count", ctypes.c_ulonglong),
+        ("other_operation_count", ctypes.c_ulonglong),
+        ("read_transfer_count", ctypes.c_ulonglong),
+        ("write_transfer_count", ctypes.c_ulonglong),
+        ("other_transfer_count", ctypes.c_ulonglong),
+    ]
+
+
+class _JobExtendedLimitInformation(ctypes.Structure):
+    _fields_ = [
+        ("basic_limit_information", _JobBasicLimitInformation),
+        ("io_info", _JobIoCounters),
+        ("process_memory_limit", ctypes.c_size_t),
+        ("job_memory_limit", ctypes.c_size_t),
+        ("peak_process_memory_used", ctypes.c_size_t),
+        ("peak_job_memory_used", ctypes.c_size_t),
+    ]
+
+
+def _kernel32() -> Any:
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.argtypes = (ctypes.c_void_p, ctypes.c_wchar_p)
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = (
+        wintypes.HANDLE,
+        wintypes.INT,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    )
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.AssignProcessToJobObject.argtypes = (
+        wintypes.HANDLE,
+        wintypes.HANDLE,
+    )
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.TerminateJobObject.argtypes = (wintypes.HANDLE, wintypes.UINT)
+    kernel32.TerminateJobObject.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    return kernel32
+
+
+def _windows_process_handle(process: subprocess.Popen[bytes]) -> int:
+    handle = getattr(process, "_handle", None)
+    if not isinstance(handle, int) or handle <= 0:
+        raise reject("GIT_PROCESS_HANDLE_INVALID")
+    return handle
+
+
+def _resume_suspended_process(process: subprocess.Popen[bytes]) -> bool:
+    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+    ntdll.NtResumeProcess.argtypes = (wintypes.HANDLE,)
+    ntdll.NtResumeProcess.restype = wintypes.LONG
+    return (
+        ntdll.NtResumeProcess(
+            wintypes.HANDLE(_windows_process_handle(process))
+        )
+        == 0
+    )
+
+
+class _WindowsProcessTree:
+    _KILL_ON_JOB_CLOSE = 0x00002000
+    _EXTENDED_LIMIT_INFORMATION_CLASS = 9
+
+    def __init__(self, process: subprocess.Popen[bytes]) -> None:
+        self._handle: int | None = None
+        if os.name != "nt":
+            return
+        kernel32 = _kernel32()
+        handle = kernel32.CreateJobObjectW(None, None)
+        if not handle:
+            raise reject("GIT_PROCESS_TREE_CONTAINMENT_UNAVAILABLE")
+        self._handle = int(handle)
+        limits = _JobExtendedLimitInformation()
+        limits.basic_limit_information.limit_flags = self._KILL_ON_JOB_CLOSE
+        if not kernel32.SetInformationJobObject(
+            wintypes.HANDLE(self._handle),
+            self._EXTENDED_LIMIT_INFORMATION_CLASS,
+            ctypes.byref(limits),
+            ctypes.sizeof(limits),
+        ):
+            self.close()
+            raise reject("GIT_PROCESS_TREE_CONTAINMENT_UNAVAILABLE")
+        if not kernel32.AssignProcessToJobObject(
+            wintypes.HANDLE(self._handle),
+            wintypes.HANDLE(_windows_process_handle(process)),
+        ):
+            self.close()
+            raise reject("GIT_PROCESS_TREE_CONTAINMENT_UNAVAILABLE")
+        if not _resume_suspended_process(process):
+            self.terminate()
+            self.close()
+            raise reject("GIT_PROCESS_TREE_RESUME_FAILED")
+
+    def terminate(self) -> bool:
+        if self._handle is None:
+            return False
+        return bool(
+            _kernel32().TerminateJobObject(wintypes.HANDLE(self._handle), 1)
+        )
+
+    def close(self) -> None:
+        if self._handle is not None:
+            _kernel32().CloseHandle(wintypes.HANDLE(self._handle))
+            self._handle = None
+
+
+def _process_creation_flags() -> int:
+    if os.name != "nt":
+        return 0
+    return (
+        getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        | getattr(subprocess, "CREATE_SUSPENDED", 0x00000004)
+    )
+
+
+def _terminate_process_tree(
+    process: subprocess.Popen[bytes],
+    windows_tree: _WindowsProcessTree | None,
+) -> bool:
+    try:
+        if os.name == "nt":
+            if windows_tree is None or not windows_tree.terminate():
+                return False
+        else:
+            kill_process_group = getattr(os, "killpg", None)
+            kill_signal = getattr(signal, "SIGKILL", None)
+            if not callable(kill_process_group) or not isinstance(kill_signal, int):
+                return False
+            try:
+                kill_process_group(process.pid, kill_signal)
+            except ProcessLookupError:
+                return process.poll() is not None
+        process.wait(timeout=5)
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -358,39 +518,95 @@ class GitObjectDatabase:
         )
         try:
             with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
-                process = subprocess.Popen(
-                    command,
-                    stdin=subprocess.DEVNULL,
-                    stdout=stdout_file,
-                    stderr=stderr_file,
-                    shell=False,
-                    env=self._environment(),
-                )
-                deadline = time.monotonic() + MAX_GIT_SUBPROCESS_SECONDS
-                exceeded = False
-                while process.poll() is None:
+                process: subprocess.Popen[bytes] | None = None
+                windows_tree: _WindowsProcessTree | None = None
+                tree_terminated = False
+                try:
+                    process = subprocess.Popen(
+                        command,
+                        stdin=subprocess.DEVNULL,
+                        stdout=stdout_file,
+                        stderr=stderr_file,
+                        shell=False,
+                        env=self._environment(),
+                        start_new_session=os.name != "nt",
+                        creationflags=_process_creation_flags(),
+                    )
+                    try:
+                        windows_tree = _WindowsProcessTree(process)
+                    except BaseException as exc:
+                        try:
+                            process.kill()
+                            process.wait(timeout=5)
+                            tree_terminated = True
+                        except (OSError, subprocess.SubprocessError) as cleanup_exc:
+                            raise reject(
+                                "GIT_PROCESS_TREE_TERMINATION_FAILED"
+                            ) from cleanup_exc
+                        raise exc
+                    deadline = time.monotonic() + MAX_GIT_SUBPROCESS_SECONDS
+                    exceeded = False
+                    while process.poll() is None:
+                        if (
+                            os.fstat(stdout_file.fileno()).st_size > stdout_limit
+                            or os.fstat(stderr_file.fileno()).st_size
+                            > MAX_GIT_SUBPROCESS_METADATA_BYTES
+                        ):
+                            exceeded = True
+                            tree_terminated = _terminate_process_tree(
+                                process, windows_tree
+                            )
+                            if not tree_terminated:
+                                raise reject(
+                                    "GIT_PROCESS_TREE_TERMINATION_FAILED"
+                                )
+                            break
+                        if time.monotonic() >= deadline:
+                            tree_terminated = _terminate_process_tree(
+                                process, windows_tree
+                            )
+                            if not tree_terminated:
+                                raise reject(
+                                    "GIT_PROCESS_TREE_TERMINATION_FAILED"
+                                )
+                            raise reject("GIT_OBJECT_READ_TIMEOUT")
+                        time.sleep(0.01)
+                    returncode = process.wait(timeout=5)
+                    if not tree_terminated:
+                        tree_terminated = _terminate_process_tree(
+                            process, windows_tree
+                        )
+                        if not tree_terminated:
+                            raise reject(
+                                "GIT_PROCESS_TREE_TERMINATION_FAILED"
+                            )
+                    stdout_size = os.fstat(stdout_file.fileno()).st_size
+                    stderr_size = os.fstat(stderr_file.fileno()).st_size
                     if (
-                        os.fstat(stdout_file.fileno()).st_size > stdout_limit
-                        or os.fstat(stderr_file.fileno()).st_size
-                        > MAX_GIT_SUBPROCESS_METADATA_BYTES
+                        exceeded
+                        or stdout_size > stdout_limit
+                        or stderr_size > MAX_GIT_SUBPROCESS_METADATA_BYTES
                     ):
-                        exceeded = True
-                        process.kill()
-                        break
-                    if time.monotonic() >= deadline:
-                        process.kill()
-                        process.wait(timeout=5)
-                        raise reject("GIT_OBJECT_READ_TIMEOUT")
-                    time.sleep(0.01)
-                returncode = process.wait(timeout=5)
-                stdout_size = os.fstat(stdout_file.fileno()).st_size
-                stderr_size = os.fstat(stderr_file.fileno()).st_size
-                if exceeded or stdout_size > stdout_limit or stderr_size > MAX_GIT_SUBPROCESS_METADATA_BYTES:
-                    raise reject("GIT_SUBPROCESS_OUTPUT_LIMIT_EXCEEDED")
-                stdout_file.seek(0)
-                stderr_file.seek(0)
-                stdout = stdout_file.read(stdout_limit + 1)
-                stderr = stderr_file.read(MAX_GIT_SUBPROCESS_METADATA_BYTES + 1)
+                        raise reject("GIT_SUBPROCESS_OUTPUT_LIMIT_EXCEEDED")
+                    stdout_file.seek(0)
+                    stderr_file.seek(0)
+                    stdout = stdout_file.read(stdout_limit + 1)
+                    stderr = stderr_file.read(
+                        MAX_GIT_SUBPROCESS_METADATA_BYTES + 1
+                    )
+                except BaseException as exc:
+                    if process is not None and not tree_terminated:
+                        tree_terminated = _terminate_process_tree(
+                            process, windows_tree
+                        )
+                        if not tree_terminated:
+                            raise reject(
+                                "GIT_PROCESS_TREE_TERMINATION_FAILED"
+                            ) from exc
+                    raise
+                finally:
+                    if windows_tree is not None:
+                        windows_tree.close()
         except PTDEVerificationError:
             raise
         except (OSError, subprocess.SubprocessError, ValueError) as exc:

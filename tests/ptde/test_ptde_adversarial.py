@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import shutil
 import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -23,6 +26,9 @@ from sbp_ptde import (
     verify_ptde_chain,
     verify_ptde_result,
 )
+from sbp_ptde.canonical import canonical_json_document_bytes
+from sbp_ptde.cli import _read_accepted_attempt_history_file, main as ptde_cli_main
+from sbp_ptde import git_objects as git_objects_module
 
 
 def _verify(chain: Any, **overrides: Any) -> dict[str, Any]:
@@ -42,6 +48,61 @@ def _init_bare(path: Path) -> None:
     )
     if completed.returncode != 0:
         raise AssertionError(completed.stderr.decode(errors="replace"))
+
+
+def test_git_timeout_terminates_descendant_process_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = tmp_path / "escaped.txt"
+    ready = tmp_path / "ready.txt"
+    child_code = (
+        "import pathlib,sys,time;"
+        "time.sleep(1.5);"
+        "pathlib.Path(sys.argv[1]).write_text('escaped', encoding='utf-8')"
+    )
+    parent_code = (
+        "import pathlib,subprocess,sys,time;"
+        "subprocess.Popen([sys.executable,'-c',sys.argv[1],sys.argv[2]]);"
+        "pathlib.Path(sys.argv[3]).write_text('ready', encoding='utf-8');"
+        "time.sleep(30)"
+    )
+    real_popen = subprocess.Popen
+
+    def launch_descendant_tree(
+        _command: Any, **options: Any
+    ) -> subprocess.Popen[bytes]:
+        return real_popen(
+            [
+                sys.executable,
+                "-c",
+                parent_code,
+                child_code,
+                str(marker),
+                str(ready),
+            ],
+            **options,
+        )
+
+    database: Any = object.__new__(git_objects_module.GitObjectDatabase)
+    database._git_executable = Path(sys.executable)
+    database._git_dir = tmp_path
+    database._expected_git_executable_sha512 = "0" * 128
+    database._git_executable_measurement = object()
+    database._environment = os.environ.copy
+    monkeypatch.setattr(
+        git_objects_module,
+        "_verify_pinned_executable",
+        lambda _path, _digest, baseline: baseline,
+    )
+    monkeypatch.setattr(git_objects_module.subprocess, "Popen", launch_descendant_tree)
+    monkeypatch.setattr(git_objects_module, "MAX_GIT_SUBPROCESS_SECONDS", 1)
+
+    with pytest.raises(PTDEVerificationError, match="GIT_OBJECT_READ_TIMEOUT"):
+        database._run("version")
+
+    assert ready.read_text(encoding="utf-8") == "ready"
+    time.sleep(0.75)
+    assert not marker.exists()
 
 
 def test_fixed_policy_and_success_claim_are_exact() -> None:
@@ -97,6 +158,58 @@ def test_fixed_policy_and_success_claim_are_exact() -> None:
     assert policy_document_bytes().endswith(b"\n")
     assert not policy_document_bytes().endswith(b"\n\n")
     assert json.loads(policy_document_bytes()) == policy
+
+
+def test_cli_history_file_rejects_links_and_uses_bounded_same_file_read(
+    tmp_path: Path,
+    valid_chain: Any,
+) -> None:
+    history_path = tmp_path / "accepted-history.json"
+    history_path.write_bytes(
+        canonical_json_document_bytes(valid_chain.accepted_attempt_history.as_dict())
+    )
+    assert _read_accepted_attempt_history_file(str(history_path)).endswith(b"\n")
+
+    hardlink = tmp_path / "accepted-history-hardlink.json"
+    try:
+        os.link(history_path, hardlink)
+    except OSError:
+        pass
+    else:
+        with pytest.raises(PTDEVerificationError):
+            _read_accepted_attempt_history_file(str(hardlink))
+
+    alias = tmp_path / "history-alias"
+    try:
+        alias.symlink_to(tmp_path, target_is_directory=True)
+    except OSError:
+        pass
+    else:
+        with pytest.raises(PTDEVerificationError):
+            _read_accepted_attempt_history_file(str(alias / history_path.name))
+
+    with pytest.raises(PTDEVerificationError):
+        _read_accepted_attempt_history_file("../accepted-history.json")
+    with pytest.raises(PTDEVerificationError):
+        _read_accepted_attempt_history_file("accepted-history.json:alternate")
+
+    source = Path("sbp_ptde/cli.py").read_text(encoding="utf-8")
+    assert ".read_bytes()" not in source
+    assert 'getattr(os, "O_NOFOLLOW", 0)' in source
+    assert "os.fstat(descriptor)" in source
+
+
+def test_cli_show_policy_is_ascii_safe_and_preserves_exact_claim(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert ptde_cli_main(["show-policy"]) == 0
+    captured = capsys.readouterr().out
+    assert captured.isascii()
+    assert json.loads(captured)["success"]["claim_text"] == SUCCESS_CLAIM_TEXT
+
+
+def test_ptde_main_module_is_import_safe() -> None:
+    assert importlib.import_module("sbp_ptde.__main__") is not None
 
 
 def test_valid_chain_is_deterministic_narrow_and_non_authorising(valid_chain: Any) -> None:
@@ -557,10 +670,9 @@ def test_junction_object_database_path_is_rejected(
 
 def test_deep_json_resource_exhaustion_is_structured_fail_closed(
     tmp_path: Path,
+    deep_json_chain_factory: Callable[..., Any],
 ) -> None:
-    from conftest import build_deep_json_chain
-
-    chain = build_deep_json_chain(tmp_path / "deep-json")
+    chain = deep_json_chain_factory(tmp_path / "deep-json")
     with pytest.raises(PTDEVerificationError):
         _verify(chain)
 

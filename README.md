@@ -6,25 +6,35 @@ Aurion-15, execution gating and terminal audit. The repository currently
 enforces fail-closed application-level controls; production substrate
 non-bypass remains a separately evidenced deployment requirement.
 
-## Canonical launcher
+## Canonical library and CLI
 
-The canonical V2 application entry point is the FastAPI object `main:app`.
+The canonical public library entry point is `main.run_v2`. The canonical
+one-shot CLI is `python main.py`. SBP-LEX V2 does not currently declare an
+ASGI application, HTTP service or production web deployment.
 
 ```powershell
-python -m pip install -r requirements.lock
-python -m uvicorn main:app --host 0.0.0.0 --port 8000
+python -m pip install --require-hashes -r requirements-production.lock.txt
+python main.py --request-json '{"action":"review","payload":{},"context":{}}'
 ```
 
-The service exposes:
+The CLI accepts exactly one of `--request-json` or `--request-file`, plus
+optional `--signals-json` or `--signals-file`. It intentionally exposes no
+flags for injecting authority, custody, effect or deployment providers, so a
+standalone invocation remains fail closed.
 
-- `GET /health`
-- `POST /v2/evaluate`
+Library integrations that possess separately admitted dependencies call
+`main.run_v2(...)` and supply them explicitly. `main.run_sbp_lex(...)` remains
+only as a compatibility wrapper because repository tests, PTDE callable
+inventory and existing consumers still name it. The runner implementation is
+`sbp_lex.pipeline.runner.run_v2`; `run_v2_pipeline` is retained compatibility
+surface, not the canonical public name.
 
-The evaluation endpoint accepts an exact envelope with `request` and optional
-`pre_context_signals` fields. Unknown top-level fields are rejected. Without
-separately admitted runtime authorities and evidence providers, evaluation
-fails closed.
+For development and test collection:
 
-The direct Python entry points are `main.run_sbp_lex`,
-`sbp_lex.pipeline.runner.run_v2`, and
-`sbp_lex.pipeline.runner.run_v2_pipeline`.
+```powershell
+python -m pip install --require-hashes -r requirements-test.lock.txt
+python -m pytest --collect-only -q tests
+```
+
+Current implementation, validation and blocker truth is maintained only in
+[`docs/validation/V2_CANONICAL_STATUS.md`](docs/validation/V2_CANONICAL_STATUS.md).

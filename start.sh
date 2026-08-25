@@ -1,2 +1,4 @@
-#!/bin/bash
-python test_run.py
+#!/bin/sh
+set -eu
+
+exec python main.py "$@"

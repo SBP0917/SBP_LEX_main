@@ -10,11 +10,13 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from sbp_lex.assurance.envelope import canonical_json_bytes
 from sbp_lex.provenance.digital_provenance import (
     ACTIVE,
     ADMIT,
     CREDENTIAL_INCLUSION_SCHEMA,
     CLOCK_EVIDENCE_SCHEMA,
+    DENY,
     DIGITAL_PROVENANCE_CONTRACT_ID,
     DIGITAL_PROVENANCE_PROOF_SCOPE,
     DIGITAL_PROVENANCE_SCHEMA_STATUS,
@@ -27,6 +29,7 @@ from sbp_lex.provenance.digital_provenance import (
     NO_AUTHORIZATION_EFFECT,
     OWNER_PIN_SCHEMA,
     PROVENANCE_GRAPH_SIGNER_ROLE,
+    PROVENANCE_VERIFICATION_RECEIPT_PURPOSE,
     PROVENANCE_NODE_SIGNER_ROLES,
     PROVENANCE_NODE_TYPES,
     PROVENANCE_REGISTRY_AUTHORITY_ROLE,
@@ -34,9 +37,13 @@ from sbp_lex.provenance.digital_provenance import (
     REGISTRY_SNAPSHOT_SCHEMA,
     REQUIRED_SIGNER_ROLES,
     REVOCATION_HEAD_SCHEMA,
+    _externally_pinned_hybrid_binding,
+    _finish,
+    _independent_signature_valid,
     verify_digital_provenance,
     verify_provenance_verification_receipt,
 )
+from sbp_lex.security.hybrid_signature import HYBRID_SUITE_ID
 from sbp_lex.security.integrity import (
     GENESIS_HASH,
     canonical_integrity_hash,
@@ -45,6 +52,7 @@ from sbp_lex.security.integrity import (
 from sbp_lex.security.signature_provider import (
     build_legacy_non_effect_signed_object as build_signed_object,
 )
+from tests.test_australian_minor_access import ProductionHybridSigner
 
 
 class ProvenanceProvider:
@@ -1039,13 +1047,83 @@ class DigitalProvenanceTests(unittest.TestCase):
         )
 
     def test_production_mode_rejects_test_only_self_attested_store(self) -> None:
-        production_context = self._trust_context(test_only=False)
-        decision = self.verify(
-            self.graph(), trust_context=production_context
+        with self.assertRaisesRegex(
+            ValueError,
+            "PROVENANCE_DEPLOYMENT_TRUST_CONTEXT_INVALID",
+        ):
+            self._trust_context(test_only=False)
+
+    def test_production_receipt_is_hybrid_purpose_bound_and_externally_pinned(
+        self,
+    ) -> None:
+        provider = ProductionHybridSigner(
+            "provenance-receipt-provider",
+            "provenance-receipt-credential",
+            "HSM",
         )
-        self.assertFalse(decision.admitted)
+        provider.provenance_verification_receipt_admitted = True
+        hybrid_context = provider._context
+        binding = _externally_pinned_hybrid_binding(
+            provider,
+            trust_context=hybrid_context,
+            owner_pinned_context_digest=hybrid_context.context_digest,
+        )
+        self.assertIsNotNone(binding)
+        trust_context = ProvenanceDeploymentTrustContext(
+            context_id="production-provenance-receipt-context",
+            registry_context=self.registry_context,
+            _owner_pin_bytes=canonical_json_bytes(self.owner_pin),
+            registry_authority_provider=self.owner_provider,
+            provider_resolver=self.resolver,
+            trusted_clock=self.clock,
+            revocation_head_source=self.revocation_source,
+            durable_context=self.durable,
+            verification_receipt_provider=provider,
+            registry_authority_binding=binding,
+            durable_context_binding=binding,
+            verification_receipt_binding=binding,
+            trusted_clock_binding=binding,
+            deployment_mode="PRODUCTION",
+        )
+        decision = _finish(
+            result=DENY,
+            reason="PROVENANCE_TEST_DENIAL",
+            graph={},
+            trace=[],
+            evaluation_time=self.evaluation_time,
+            owner_pin_digest=canonical_integrity_hash(self.owner_pin),
+            registry_context=self.registry_context,
+            registry_snapshot={},
+            clock_id=self.clock.clock_id,
+            durable_context_id=self.durable.context_id,
+            durable_claim_result=None,
+            durable_claim_digest=None,
+            durable_transition_receipt_digest=None,
+            durable_live_heads_digest=None,
+            revocation_head_digest=None,
+            clock_evidence_digest=None,
+            trust_context=trust_context,
+        )
+        receipt = decision.verification_receipt
+        self.assertEqual(receipt["signature"]["suite"], HYBRID_SUITE_ID)
         self.assertEqual(
-            decision.reason, "PROVENANCE_DEPLOYMENT_TRUST_CONTEXT_INVALID"
+            receipt["signature"]["purpose"],
+            PROVENANCE_VERIFICATION_RECEIPT_PURPOSE,
+        )
+        self.assertTrue(
+            _independent_signature_valid(
+                receipt,
+                binding,
+                expected_purpose=PROVENANCE_VERIFICATION_RECEIPT_PURPOSE,
+            )
+        )
+        self.assertFalse(_independent_signature_valid(receipt, binding))
+        self.assertIsNone(
+            _externally_pinned_hybrid_binding(
+                provider,
+                trust_context=hybrid_context,
+                owner_pinned_context_digest="0" * 128,
+            )
         )
 
     def test_mid_verification_clock_or_revocation_advance_fails_closed(self) -> None:

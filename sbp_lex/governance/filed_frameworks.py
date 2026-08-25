@@ -131,13 +131,15 @@ def _trust_context_owner_pinned(
     trust_context: HybridVerificationContext | None,
     owner_pinned_context_digest: str | None,
 ) -> bool:
-    return (
-        isinstance(trust_context, HybridVerificationContext)
-        and is_sha512(owner_pinned_context_digest)
-        and hmac.compare_digest(
-            trust_context.context_digest,
-            owner_pinned_context_digest,
-        )
+    if (
+        not isinstance(trust_context, HybridVerificationContext)
+        or type(owner_pinned_context_digest) is not str
+        or not is_sha512(owner_pinned_context_digest)
+    ):
+        return False
+    return hmac.compare_digest(
+        trust_context.context_digest,
+        owner_pinned_context_digest,
     )
 
 
@@ -162,7 +164,7 @@ def _evidence_references_exact(value: Any) -> bool:
         }:
             return False
         identifier = reference.get("evidence_id")
-        if not _text(identifier) or identifier in identifiers:
+        if type(identifier) is not str or not _text(identifier) or identifier in identifiers:
             return False
         identifiers.add(identifier)
         if not _text(reference.get("source")):
@@ -286,9 +288,13 @@ def _common_error(
         return "FRAMEWORK_ATTESTATION_PROVIDER_NOT_INJECTED_OR_ADMITTED"
     if type(source) is not dict or set(source) != _COMMON_SOURCE_FIELDS:
         return f"{framework}_EVALUATOR_RESULT_SHAPE_INVALID"
-    if not _trust_context_owner_pinned(
-        trust_context,
-        owner_pinned_context_digest,
+    if (
+        not isinstance(trust_context, HybridVerificationContext)
+        or type(owner_pinned_context_digest) is not str
+        or not _trust_context_owner_pinned(
+            trust_context,
+            owner_pinned_context_digest,
+        )
     ):
         return "FILED_FRAMEWORK_OWNER_TRUST_PIN_INVALID"
     if not verify_hybrid_signed_object(
@@ -579,13 +585,13 @@ def _abegf_error(
     }:
         return "ABEGF_RESULT_INVALID"
     request = snapshot.get("autonomy_request")
-    if not _abegf_request_exact(request):
+    if type(request) is not dict or not _abegf_request_exact(request):
         return "ABEGF_AUTONOMY_REQUEST_INVALID"
     ceiling = determination.get("autonomy_ceiling")
     requested = snapshot.get("requested_autonomy_level")
-    if type(ceiling) not in {int, float} or isinstance(ceiling, bool) or ceiling < 0:
+    if not isinstance(ceiling, (int, float)) or isinstance(ceiling, bool) or ceiling < 0:
         return "ABEGF_AUTONOMY_CEILING_INVALID"
-    if type(requested) not in {int, float} or isinstance(requested, bool) or requested < 0:
+    if not isinstance(requested, (int, float)) or isinstance(requested, bool) or requested < 0:
         return "ABEGF_REQUESTED_AUTONOMY_INVALID"
     if not _text_list(determination.get("permitted_decision_domains")):
         return "ABEGF_PERMITTED_DOMAINS_INVALID"
@@ -621,9 +627,9 @@ def _abegf_error(
             "max_autonomy_level"
         )
         declared_ceiling = snapshot.get("autonomy_ceiling")
-        numeric_ceilings = [ceiling]
+        numeric_ceilings: list[int | float] = [ceiling]
         for value in (licensed_ceiling, declared_ceiling):
-            if type(value) not in {int, float} or isinstance(value, bool):
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
                 return "ABEGF_UPSTREAM_AUTONOMY_CEILING_INVALID"
             numeric_ceilings.append(value)
         if requested > min(numeric_ceilings):
@@ -781,10 +787,13 @@ def evaluate_filed_framework(
                     owner_pinned_context_digest=owner_pinned_context_digest,
                 )
             if error is None:
-                error = _DETERMINATION_VALIDATORS[framework](
-                    source.get("determination"),
-                    snapshot,
-                )
+                if type(source) is not dict:
+                    error = f"{framework}_EVALUATION_SOURCE_INVALID"
+                else:
+                    error = _DETERMINATION_VALIDATORS[framework](
+                        source.get("determination"),
+                        snapshot,
+                    )
     result = (
         source["determination"]["result"]
         if error is None and source is not None
@@ -883,6 +892,8 @@ def verify_filed_frameworks(
             return False
         snapshot = record.get("evaluation_snapshot")
         source = record.get("evaluation_source")
+        if type(snapshot) is not dict or type(source) is not dict:
+            return False
         if (
             record.get("framework") != framework
             or record.get("stage") != FILED_FRAMEWORK_STAGES[framework]
@@ -925,6 +936,8 @@ def verify_filed_frameworks(
     if state.get("licensing_result") != "ALLOW":
         return False
     final_snapshot = trace[-1]["evaluation_snapshot"]
+    if type(final_snapshot) is not dict:
+        return False
     live_bindings = {
         "request_fingerprint": state.get("request_fingerprint"),
         "action": state.get("action"),
@@ -946,6 +959,8 @@ def verify_filed_frameworks(
     ):
         return False
     aj_snapshot = records_by_framework[AJ_SAAF]["evaluation_snapshot"]
+    if type(aj_snapshot) is not dict:
+        return False
     if aj_snapshot.get("operational_context") != state.get(
         "aj_saaf_operational_context"
     ):
@@ -953,7 +968,9 @@ def verify_filed_frameworks(
     if not require_hash_binding:
         return True
     chain = state.get("hash_chain")
-    if not verify_hash_chain_entries(chain, state.get("state_hash")):
+    if type(chain) is not list or not verify_hash_chain_entries(
+        chain, state.get("state_hash")
+    ):
         return False
     previous_index = -1
     for index, (framework, record) in enumerate(

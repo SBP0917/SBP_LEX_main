@@ -8,9 +8,15 @@ def non_bypass_verification_engine(payload: dict) -> EngineResult:
     execution_request = payload.get("execution_request", {})
     action = payload.get("action")
 
-    token_present = decision_token is not None
-    token_hash = decision_token.get("token_hash") if token_present else None
-    bound_action = decision_token.get("action") if token_present else None
+    token_present = type(decision_token) is dict
+    token_hash = (
+        decision_token.get("token_hash") if type(decision_token) is dict else None
+    )
+    bound_action = (
+        decision_token.get("action") if type(decision_token) is dict else None
+    )
+    if type(execution_request) is not dict:
+        execution_request = {}
 
     verification = {
         "token_present": token_present,

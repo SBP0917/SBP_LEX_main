@@ -18,8 +18,10 @@ from sbp_lex.governance.skg_authority import (
     SKGAuthorityEvaluator,
     verify_skg_authority,
 )
-from sbp_lex.security.signature_provider import SignatureProvider
-from sbp_lex.security.hybrid_signature import HybridVerificationContext
+from sbp_lex.security.hybrid_signature import (
+    HybridSignatureProvider,
+    HybridVerificationContext,
+)
 from sbp_lex.execution.rust_authority_client import (
     RUST_AUTHORITY_ROUTE_NOT_ADMITTED,
     RUST_AUTHORITY_ROUTE_STATUS_NOT_ADMITTED,
@@ -83,11 +85,11 @@ def verify_audit_record(
     state: Dict[str, Any],
     *,
     skg_evaluator: SKGAuthorityEvaluator | None = None,
-    skg_attestation_provider: SignatureProvider | None = None,
+    skg_attestation_provider: HybridSignatureProvider | None = None,
     skg_attestation_trust_context: HybridVerificationContext | None = None,
     skg_owner_pinned_context_digest: str | None = None,
     filed_lifecycle_evaluator: FiledLifecycleEvaluator | None = None,
-    filed_lifecycle_attestation_provider: SignatureProvider | None = None,
+    filed_lifecycle_attestation_provider: HybridSignatureProvider | None = None,
     filed_lifecycle_attestation_trust_context: (
         HybridVerificationContext | None
     ) = None,
@@ -96,7 +98,7 @@ def verify_audit_record(
         FiledGovernanceIntegrityEvaluator | None
     ) = None,
     filed_governance_integrity_attestation_provider: (
-        SignatureProvider | None
+        HybridSignatureProvider | None
     ) = None,
     filed_governance_integrity_attestation_trust_context: (
         HybridVerificationContext | None
@@ -275,8 +277,13 @@ def verify_audit_record(
     if skg_trace:
         if state.get("skg_authority_result") not in {"PASS", "DENY"}:
             return False
-        if state.get("skg_authority_result") == "PASS" and not (
-            verify_skg_authority(
+        if state.get("skg_authority_result") == "PASS" and (
+            not isinstance(
+                skg_attestation_trust_context,
+                HybridVerificationContext,
+            )
+            or type(skg_owner_pinned_context_digest) is not str
+            or not verify_skg_authority(
                 state,
                 evaluator=skg_evaluator,
                 attestation_provider=skg_attestation_provider,
@@ -354,19 +361,27 @@ def verify_audit_record(
         lifecycle_result = state.get("filed_lifecycle_result")
         if lifecycle_result not in {"PASS", "DENY", "ESCALATE"}:
             return False
-        if lifecycle_result == "PASS" and not verify_filed_lifecycle(
-            state,
-            evaluator=filed_lifecycle_evaluator,
-            attestation_provider=filed_lifecycle_attestation_provider,
-            attestation_trust_context=(
-                filed_lifecycle_attestation_trust_context
-            ),
-            owner_pinned_context_digest=(
-                filed_lifecycle_owner_pinned_context_digest
-            ),
-            require_hash_binding=True,
-        ):
-            return False
+        if lifecycle_result == "PASS":
+            if (
+                not isinstance(
+                    filed_lifecycle_attestation_trust_context,
+                    HybridVerificationContext,
+                )
+                or type(filed_lifecycle_owner_pinned_context_digest) is not str
+                or not verify_filed_lifecycle(
+                    state,
+                    evaluator=filed_lifecycle_evaluator,
+                    attestation_provider=filed_lifecycle_attestation_provider,
+                    attestation_trust_context=(
+                        filed_lifecycle_attestation_trust_context
+                    ),
+                    owner_pinned_context_digest=(
+                        filed_lifecycle_owner_pinned_context_digest
+                    ),
+                    require_hash_binding=True,
+                )
+            ):
+                return False
     governance_integrity_trace = state.get(
         "filed_governance_integrity_trace", []
     )
@@ -446,24 +461,30 @@ def verify_audit_record(
         )
         if governance_integrity_result not in {"PASS", "DENY", "ESCALATE"}:
             return False
-        if (
-            governance_integrity_result == "PASS"
-            and not verify_filed_governance_integrity(
-                state,
-                evaluator=filed_governance_integrity_evaluator,
-                attestation_provider=(
-                    filed_governance_integrity_attestation_provider
-                ),
-                attestation_trust_context=(
-                    filed_governance_integrity_attestation_trust_context
-                ),
-                owner_pinned_context_digest=(
-                    filed_governance_integrity_owner_pinned_context_digest
-                ),
-                require_hash_binding=True,
-            )
-        ):
-            return False
+        if governance_integrity_result == "PASS":
+            if (
+                not isinstance(
+                    filed_governance_integrity_attestation_trust_context,
+                    HybridVerificationContext,
+                )
+                or type(filed_governance_integrity_owner_pinned_context_digest)
+                is not str
+                or not verify_filed_governance_integrity(
+                    state,
+                    evaluator=filed_governance_integrity_evaluator,
+                    attestation_provider=(
+                        filed_governance_integrity_attestation_provider
+                    ),
+                    attestation_trust_context=(
+                        filed_governance_integrity_attestation_trust_context
+                    ),
+                    owner_pinned_context_digest=(
+                        filed_governance_integrity_owner_pinned_context_digest
+                    ),
+                    require_hash_binding=True,
+                )
+            ):
+                return False
     filed_licence_trace = state.get("filed_licence_trace", [])
     expected_filed_licence_digest = (
         canonical_integrity_hash(filed_licence_trace)

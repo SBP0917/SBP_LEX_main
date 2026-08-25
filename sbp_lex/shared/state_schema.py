@@ -1,4 +1,4 @@
-STATE_TEMPLATE = {
+STATE_TEMPLATE: dict[str, object] = {
     "context": None,
     "submitted_authority_claim": None,
     "requested_jurisdiction": None,

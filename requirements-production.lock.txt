@@ -1,0 +1,8 @@
+# Canonical target: CPython 3.12.13, cpython-312, win-amd64.
+# Resolved from the exact direct pin in requirements.txt via https://pypi.org/simple.
+--only-binary=:all:
+--require-hashes
+
+cffi==2.1.1 --hash=sha256:f53e442b08449d42821fa4a4fba000095af9f62742a500f978a9f557ec44339a
+cryptography==50.0.0 --hash=sha256:bd1c592e4d5974f0d08d4888e432157adba757c66da0246918e43677fafa2d30
+pycparser==3.0 --hash=sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992

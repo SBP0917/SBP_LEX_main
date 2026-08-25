@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import os
 import shutil
 import subprocess
@@ -15,6 +16,7 @@ from sbp_ptde.errors import PTDEVerificationError
 from sbp_ptde.trust import AcceptedAttemptHistory
 
 from sbp_lex.supply_chain.boundary import build_detached_boundary
+from sbp_lex.supply_chain import build_provenance as build_provenance_module
 from sbp_lex.supply_chain.build_provenance import execute_host_lane
 from sbp_lex.supply_chain.constants import P_SOURCE_INCOMPLETE, P_SOURCE_READY_NOT_ADMITTED, UNSIGNED_NOT_ADMITTED
 from sbp_lex.supply_chain.package import assemble_p_source_package
@@ -64,6 +66,23 @@ class PObjectFixture(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8", newline="")
 
+    def _production_hash_lock(self) -> bytes:
+        return (
+            "--only-binary=:all:\n"
+            "--require-hashes\n"
+            "\n"
+            f"cryptography==50.0.0 --hash=sha256:{'1' * 64}\n"
+        ).encode("utf-8")
+
+    def _assurance_hash_lock(self) -> bytes:
+        return (
+            "--only-binary=:all:\n"
+            "--require-hashes\n"
+            "\n"
+            f"cryptography==50.0.0 --hash=sha256:{'1' * 64}\n"
+            f"pytest==9.1.1 --hash=sha256:{'2' * 64}\n"
+        ).encode("utf-8")
+
     def _python_lock(self) -> dict:
         requirements = [{
             "identity": "cryptography",
@@ -75,11 +94,18 @@ class PObjectFixture(unittest.TestCase):
             "lock_sequence": 1,
             "prior_lock_sha512": "GENESIS",
             "requirements_sha512": canonical_sha512(requirements),
+            "production_hash_lock_sha512": hashlib.sha512(
+                self._production_hash_lock()
+            ).hexdigest(),
+            "assurance_hash_lock_sha512": hashlib.sha512(
+                self._assurance_hash_lock()
+            ).hexdigest(),
             "target_environment": {
                 "implementation": "CPython",
                 "python_version": "3.13.0",
-                "abi_tag": "cp313",
+                "abi_tag": "cpython-313",
                 "platform_tag": "test_platform",
+                "installed_scope": "assurance",
             },
             "rollback_guard": {
                 "accepted_attempt_history_sequence": self.history.sequence,
@@ -89,8 +115,15 @@ class PObjectFixture(unittest.TestCase):
                 "name": "cryptography",
                 "version": "50.0.0",
                 "hashes": ["sha256:" + "1" * 64],
-                "scopes": ["production"],
-                "direct": True,
+                "scopes": ["assurance", "production"],
+                "direct_scopes": ["assurance", "production"],
+                "dependencies": [],
+            }, {
+                "name": "pytest",
+                "version": "9.1.1",
+                "hashes": ["sha256:" + "2" * 64],
+                "scopes": ["assurance"],
+                "direct_scopes": ["assurance"],
                 "dependencies": [],
             }],
         }
@@ -98,6 +131,14 @@ class PObjectFixture(unittest.TestCase):
     def _write_p_tree(self, *, main: str = "def main():\n    return None\n", requirement: str = "cryptography==50.0.0\n", lock: bool = True, checksum: str = "one", python_lock: bool = True) -> None:
         self._write("main.py", main)
         self._write("requirements.txt", requirement)
+        self._write(
+            "requirements-production.lock.txt",
+            self._production_hash_lock().decode("utf-8"),
+        )
+        self._write(
+            "requirements-test.lock.txt",
+            self._assurance_hash_lock().decode("utf-8"),
+        )
         if python_lock:
             self._write(
                 "python-dependencies.lock.json",
@@ -203,8 +244,47 @@ class PObjectFixture(unittest.TestCase):
         finally:
             self.p_oid = previous
 
+    def test_missing_committed_assurance_hash_lock_is_incomplete(self) -> None:
+        self._run("-C", str(self.work), "rm", "requirements-test.lock.txt")
+        self._run("-C", str(self.work), "commit", "-m", "P missing assurance lock")
+        self._run("-C", str(self.work), "push", str(self.bare), "HEAD:master")
+        previous = self.p_oid
+        self.p_oid = self._output("-C", str(self.work), "rev-parse", "HEAD")
+        try:
+            package = assemble_p_source_package(self.bind())
+            self.assertEqual(package.document["source_status"], P_SOURCE_INCOMPLETE)
+            self.assertEqual(package.python_inputs["lock_status"], PYTHON_LOCK_INVALID)
+            self.assertIn(
+                "SUPPLY_CHAIN_PYTHON_ASSURANCE_HASH_LOCK_MISSING",
+                package.python_inputs["lock_failures"],
+            )
+        finally:
+            self.p_oid = previous
+
+    def test_committed_hash_lock_mutation_breaks_governed_binding(self) -> None:
+        self._write(
+            "requirements-production.lock.txt",
+            self._production_hash_lock().decode("utf-8") + "# changed after lock\n",
+        )
+        self._run("-C", str(self.work), "add", "requirements-production.lock.txt")
+        self._run("-C", str(self.work), "commit", "-m", "mutated production lock")
+        self._run("-C", str(self.work), "push", str(self.bare), "HEAD:master")
+        previous = self.p_oid
+        self.p_oid = self._output("-C", str(self.work), "rev-parse", "HEAD")
+        try:
+            package = assemble_p_source_package(self.bind())
+            self.assertEqual(package.document["source_status"], P_SOURCE_INCOMPLETE)
+            self.assertIn(
+                "SUPPLY_CHAIN_PYTHON_HASH_LOCK_BINDING_MISMATCH",
+                package.python_inputs["lock_failures"],
+            )
+        finally:
+            self.p_oid = previous
+
     def test_python_lock_hostile_variants_fail_closed(self) -> None:
         requirements = b"cryptography==50.0.0\n"
+        production_hash_lock = self._production_hash_lock()
+        assurance_hash_lock = self._assurance_hash_lock()
         valid = self._python_lock()
         expected_environment = valid["target_environment"]
         common = {
@@ -212,7 +292,13 @@ class PObjectFixture(unittest.TestCase):
             "expected_history_sequence": self.history.sequence,
             "expected_history_sha512": self.history.sha512(),
         }
-        complete = evaluate_python_dependency_evidence(requirements, valid, **common)
+        complete = evaluate_python_dependency_evidence(
+            requirements,
+            production_hash_lock,
+            assurance_hash_lock,
+            valid,
+            **common,
+        )
         self.assertEqual(complete["dependency_evidence_status"], "COMPLETE")
 
         mutations = {
@@ -222,9 +308,18 @@ class PObjectFixture(unittest.TestCase):
             "duplicate": lambda value: value["packages"].append(deepcopy(value["packages"][0])),
             "extra": lambda value: value["packages"].append({
                 "name": "orphan", "version": "1.0.0", "hashes": ["sha256:" + "2" * 64],
-                "scopes": ["development"], "direct": False, "dependencies": [],
+                "scopes": ["assurance"], "direct_scopes": [], "dependencies": [],
             }),
             "scope": lambda value: value["packages"][0].update(scopes=[]),
+            "direct_scope": lambda value: value["packages"][0].update(
+                direct_scopes=["production"]
+            ),
+            "hash_binding": lambda value: value.update(
+                production_hash_lock_sha512="3" * 128
+            ),
+            "legacy_schema": lambda value: value.update(
+                schema_id="sbp.lex.v2.python-dependency-lock/1"
+            ),
             "rollback": lambda value: value.update(lock_sequence=2),
             "environment": lambda value: value["target_environment"].update(abi_tag="cp312"),
         }
@@ -232,11 +327,23 @@ class PObjectFixture(unittest.TestCase):
             with self.subTest(label=label):
                 hostile = deepcopy(valid)
                 mutation(hostile)
-                result = evaluate_python_dependency_evidence(requirements, hostile, **common)
+                result = evaluate_python_dependency_evidence(
+                    requirements,
+                    production_hash_lock,
+                    assurance_hash_lock,
+                    hostile,
+                    **common,
+                )
                 self.assertEqual(result["lock_status"], PYTHON_LOCK_INVALID)
                 self.assertEqual(result["dependency_evidence_status"], "INCOMPLETE")
 
-        unpinned = evaluate_python_dependency_evidence(b"cryptography>=50\n", valid, **common)
+        unpinned = evaluate_python_dependency_evidence(
+            b"cryptography>=50\n",
+            production_hash_lock,
+            assurance_hash_lock,
+            valid,
+            **common,
+        )
         self.assertEqual(unpinned["lock_status"], PYTHON_LOCK_INVALID)
         self.assertEqual(unpinned["requirements_status"], "INVALID_OR_UNPINNED")
 
@@ -276,6 +383,85 @@ class PObjectFixture(unittest.TestCase):
     def test_ptde_canonical_terminal_lf_is_required(self) -> None:
         document = {"value": "x"}
         self.assertTrue(canonical_json_document_bytes(document).endswith(b"\n"))
+
+    def test_git_cleanliness_capture_is_bounded_and_never_uses_subprocess_run(self) -> None:
+        source = Path(inspect.getsourcefile(execute_host_lane) or "").read_text(encoding="utf-8")
+        self.assertNotIn("subprocess.run(", source)
+        self.assertIn("tempfile.TemporaryFile", source)
+        self.assertIn("MAX_STREAM_BYTE_COUNT", source)
+        self.assertIn("_terminate_process_tree(process, windows_job)", source)
+
+    def test_evidence_transcript_leaf_link_is_rejected_without_target_write(self) -> None:
+        evidence = self.temp / "hostile-leaf-evidence"
+        transcripts = evidence / "transcripts"
+        transcripts.mkdir(parents=True)
+        sentinel = self.temp / "sentinel.json"
+        sentinel.write_bytes(b"sentinel")
+        hostile = transcripts / "lane-attempt.json"
+        try:
+            hostile.symlink_to(sentinel)
+        except OSError as exc:
+            self.skipTest(f"symbolic links unavailable: {exc}")
+        with self.assertRaises(PTDEVerificationError):
+            build_provenance_module._write_bytes(
+                evidence,
+                "transcripts/lane-attempt.json",
+                b"hostile overwrite",
+            )
+        self.assertEqual(sentinel.read_bytes(), b"sentinel")
+
+    def test_evidence_parent_link_is_rejected_without_escape(self) -> None:
+        evidence = self.temp / "hostile-parent-evidence"
+        evidence.mkdir()
+        outside = self.temp / "outside-streams"
+        outside.mkdir()
+        try:
+            (evidence / "streams").symlink_to(outside, target_is_directory=True)
+        except OSError as exc:
+            self.skipTest(f"directory symbolic links unavailable: {exc}")
+        with self.assertRaises(PTDEVerificationError):
+            build_provenance_module._write_bytes(
+                evidence,
+                "streams/stdout.log",
+                b"escaped",
+            )
+        self.assertFalse((outside / "stdout.log").exists())
+
+    def test_evidence_hardlink_leaf_is_rejected_without_target_write(self) -> None:
+        evidence = self.temp / "hardlink-leaf-evidence"
+        streams = evidence / "streams"
+        streams.mkdir(parents=True)
+        sentinel = self.temp / "hardlink-sentinel.log"
+        sentinel.write_bytes(b"sentinel")
+        os.link(sentinel, streams / "stdout.log")
+        with self.assertRaises(PTDEVerificationError):
+            build_provenance_module._write_bytes(
+                evidence,
+                "streams/stdout.log",
+                b"hostile overwrite",
+            )
+        self.assertEqual(sentinel.read_bytes(), b"sentinel")
+
+    def test_evidence_post_open_hardlink_is_detected(self) -> None:
+        evidence = self.temp / "post-open-hardlink-evidence"
+        path, stream, parent_identity, root_identity = (
+            build_provenance_module._open_secure_output(
+                evidence,
+                "streams/stdout.log",
+            )
+        )
+        try:
+            os.link(path, self.temp / "post-open-alias.log")
+            with self.assertRaises(PTDEVerificationError):
+                build_provenance_module._validate_open_output(
+                    path,
+                    stream,
+                    parent_identity=parent_identity,
+                    root=evidence,
+                    root_identity=root_identity,
+                )
+        finally:
+            stream.close()
 
     def test_host_lane_emits_full_ptde_transcript_without_admission(self) -> None:
         environment = {

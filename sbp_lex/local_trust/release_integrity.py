@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
-from .artifact import build_signed_artifact, validate_artifact_chain, validate_signed_artifact
+from .artifact import (
+    build_signed_artifact,
+    validate_artifact_chain,
+    validate_signed_artifact,
+)
 from .constants import FAIL, PASS, STAGE_ORDER
 from .evidence_chain import compare_evidence_to_current_files
 from .signing import HybridSigningContext, HybridVerificationContext
-
 
 PAYLOAD_SCHEMA = "SBP_LEX_V2_LOCAL_TRUST_RELEASE_BUNDLE_PAYLOAD_V1"
 PREFIX_STAGES = STAGE_ORDER[:7]
@@ -95,6 +99,8 @@ def validate_release_integrity_bundle(
     )
     failures.extend(chain["validation_failures"])
     prior_time = artifacts[-1].get("time_evidence_digest") if artifacts and type(artifacts[-1]) is dict else "GENESIS"
+    if type(prior_time) is not str:
+        prior_time = ""
     base = validate_signed_artifact(
         release,
         expected_stage="release_integrity",

@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent
 EXPECTED = {
     "SPEC.md": "f084a52597df0db1466ef9681273deb7513fa1818b41060f443802aafa8db76c",
     "rust/Cargo.toml": "394fec6a7dcb1909f9b6e02dcb1652e6dc07dd84bb7827eaaeaf66fef79b09c0",
-    "rust/src/lib.rs": "ef17d5bb811d93e1cd156dbec636160eae48492c50ce97cd6068878db4f36943",
+    "rust/src/lib.rs": "5c29dffb26b859e32d71d3ef3abdcc3b97f2c0b1524f0ea428256d57863ed8eb",
     "vectors/adversarial_cases.txt": "946f45cc9f7f95e19e90b76056a2a09a260b27095d1a589231fb4ba32a7c9132",
     "vectors/golden_transcript.jsonl": "2c91bffb4eab4890f36d27bc63cb926b37a1f24d4f7bfff6846723424ec420e0",
 }

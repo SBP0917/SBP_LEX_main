@@ -187,13 +187,13 @@ def _trust_context_owner_pinned(
     context: HybridVerificationContext | None,
     owner_pinned_context_digest: str | None,
 ) -> bool:
-    return (
-        isinstance(context, HybridVerificationContext)
-        and is_sha512(owner_pinned_context_digest)
-        and hmac.compare_digest(
-            context.context_digest, owner_pinned_context_digest
-        )
-    )
+    if (
+        not isinstance(context, HybridVerificationContext)
+        or type(owner_pinned_context_digest) is not str
+        or not is_sha512(owner_pinned_context_digest)
+    ):
+        return False
+    return hmac.compare_digest(context.context_digest, owner_pinned_context_digest)
 
 
 def _evaluator_exact(evaluator: Any) -> bool:
@@ -269,7 +269,8 @@ def _capability_attestations_error(value: Any) -> str | None:
         component_id = attestation.get("component_id")
         observed_classes.append(capability_class)
         if (
-            not _text(component_id)
+            type(component_id) is not str
+            or not _text(component_id)
             or component_id in component_ids
             or not _text(attestation.get("component_version"))
             or not is_sha512(attestation.get("component_digest"))
@@ -351,8 +352,12 @@ def _source_error(
         return "CIGA_COMPOSITION_EVALUATOR_CONTRACT_INVALID"
     if type(source) is not dict or set(source) != _SOURCE_FIELDS:
         return "CIGA_COMPOSITION_SOURCE_SHAPE_INVALID"
-    if not _trust_context_owner_pinned(
-        trust_context, owner_pinned_context_digest
+    if (
+        not isinstance(trust_context, HybridVerificationContext)
+        or type(owner_pinned_context_digest) is not str
+        or not _trust_context_owner_pinned(
+            trust_context, owner_pinned_context_digest
+        )
     ):
         return "CIGA_COMPOSITION_OWNER_PIN_NOT_INJECTED_OR_INVALID"
     if not verify_hybrid_signed_object(
@@ -470,7 +475,7 @@ def evaluate_ciga_composition(
         or trace[-1].get("result") != COMPOSITION_PASS
     ):
         error = "CIGA_COMPOSITION_PRIOR_RESULT_NOT_PASS"
-    elif not _evaluator_exact(evaluator):
+    elif evaluator is None or not _evaluator_exact(evaluator):
         error = "CIGA_COMPOSITION_EVALUATOR_NOT_INJECTED_OR_INVALID"
     elif not _provider_admitted(attestation_provider):
         error = "CIGA_COMPOSITION_PROVIDER_NOT_INJECTED_OR_ADMITTED"
@@ -490,7 +495,7 @@ def evaluate_ciga_composition(
 
     if error is None and source is None:
         error = "CIGA_COMPOSITION_SOURCE_INVALID"
-    if error is None:
+    if error is None and source is not None and evaluator is not None:
         source_digest = _safe_hash(source)
         if source_digest is None:
             error = "CIGA_COMPOSITION_SOURCE_INVALID"
@@ -510,19 +515,26 @@ def evaluate_ciga_composition(
                 owner_pinned_context_digest=owner_pinned_context_digest,
             )
 
-    determination = source.get("determination") if error is None else None
-    if error is None and trace:
+    determination = source.get("determination") if error is None and source is not None else None
+    if error is None and type(determination) is not dict:
+        error = "CIGA_COMPOSITION_DETERMINATION_INVALID"
+    if error is None and trace and type(determination) is dict:
         previous_sequence = trace[-1].get("revocation_sequence")
         current_sequence = determination.get("revocation_sequence")
         if (
             type(previous_sequence) is not int
+            or type(current_sequence) is not int
             or current_sequence < previous_sequence
         ):
             error = "CIGA_COMPOSITION_REVOCATION_ROLLBACK"
         elif trace[-1].get("revocation_status") == COMPOSITION_REVOKED:
             error = "CIGA_COMPOSITION_REVOCATION_IRREVERSIBLE"
 
-    result = determination["result"] if error is None else COMPOSITION_DENY
+    result = (
+        determination["result"]
+        if error is None and type(determination) is dict
+        else COMPOSITION_DENY
+    )
     reason = (
         error
         or (
@@ -546,14 +558,18 @@ def evaluate_ciga_composition(
         "evaluation_source_digest": _safe_hash(source) if source else None,
         "capability_attestations": (
             deepcopy(determination["capability_attestations"])
-            if error is None
+            if error is None and type(determination) is dict
             else []
         ),
         "revocation_status": (
-            determination["revocation_status"] if error is None else None
+            determination["revocation_status"]
+            if error is None and type(determination) is dict
+            else None
         ),
         "revocation_sequence": (
-            determination["revocation_sequence"] if error is None else None
+            determination["revocation_sequence"]
+            if error is None and type(determination) is dict
+            else None
         ),
         **_non_authorizing_fields(),
     }
@@ -573,7 +589,8 @@ def verify_ciga_composition(
 
     trace = state.get("ciga_composition_trace")
     if (
-        not _evaluator_exact(evaluator)
+        evaluator is None
+        or not _evaluator_exact(evaluator)
         or not _provider_admitted(attestation_provider)
         or not _trust_context_owner_pinned(
             attestation_trust_context, owner_pinned_context_digest
@@ -616,6 +633,8 @@ def verify_ciga_composition(
         ):
             return False
         snapshot = record.get("evaluation_snapshot")
+        if type(snapshot) is not dict:
+            return False
         if (
             not _snapshot_exact(snapshot)
             or snapshot.get("prior_composition_digest") != expected_prior
@@ -623,6 +642,8 @@ def verify_ciga_composition(
         ):
             return False
         source = record.get("evaluation_source")
+        if type(source) is not dict:
+            return False
         source_digest = _safe_hash(source)
         if (
             source_digest is None

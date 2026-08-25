@@ -4,18 +4,25 @@ from __future__ import annotations
 
 import base64
 import binascii
+import ctypes
 import os
 import platform
+import shutil
 import signal
 import subprocess
 import sys
 import threading
+from ctypes import wintypes
 from hashlib import sha512
 from pathlib import Path
 from time import monotonic, monotonic_ns
 from typing import Any
 
-from .constants import COMMAND_POLICY, DEFAULT_COMMAND_TIMEOUT_SECONDS, MAX_COMMAND_OUTPUT_BYTES
+from .constants import (
+    COMMAND_POLICY,
+    DEFAULT_COMMAND_TIMEOUT_SECONDS,
+    MAX_COMMAND_OUTPUT_BYTES,
+)
 from .digests import digest
 from .paths import validated_root
 
@@ -24,15 +31,135 @@ class CommandEvidenceError(ValueError):
     pass
 
 
+class _JobBasicLimitInformation(ctypes.Structure):
+    _fields_ = [
+        ("per_process_user_time_limit", ctypes.c_longlong),
+        ("per_job_user_time_limit", ctypes.c_longlong),
+        ("limit_flags", wintypes.DWORD),
+        ("minimum_working_set_size", ctypes.c_size_t),
+        ("maximum_working_set_size", ctypes.c_size_t),
+        ("active_process_limit", wintypes.DWORD),
+        ("affinity", ctypes.c_size_t),
+        ("priority_class", wintypes.DWORD),
+        ("scheduling_class", wintypes.DWORD),
+    ]
+
+
+class _JobIoCounters(ctypes.Structure):
+    _fields_ = [
+        ("read_operation_count", ctypes.c_ulonglong),
+        ("write_operation_count", ctypes.c_ulonglong),
+        ("other_operation_count", ctypes.c_ulonglong),
+        ("read_transfer_count", ctypes.c_ulonglong),
+        ("write_transfer_count", ctypes.c_ulonglong),
+        ("other_transfer_count", ctypes.c_ulonglong),
+    ]
+
+
+class _JobExtendedLimitInformation(ctypes.Structure):
+    _fields_ = [
+        ("basic_limit_information", _JobBasicLimitInformation),
+        ("io_info", _JobIoCounters),
+        ("process_memory_limit", ctypes.c_size_t),
+        ("job_memory_limit", ctypes.c_size_t),
+        ("peak_process_memory_used", ctypes.c_size_t),
+        ("peak_job_memory_used", ctypes.c_size_t),
+    ]
+
+
+def _kernel32() -> Any:
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.argtypes = (ctypes.c_void_p, ctypes.c_wchar_p)
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = (
+        wintypes.HANDLE,
+        wintypes.INT,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    )
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.TerminateJobObject.argtypes = (wintypes.HANDLE, wintypes.UINT)
+    kernel32.TerminateJobObject.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    return kernel32
+
+
+def _resume_suspended_process(process: subprocess.Popen[bytes]) -> bool:
+    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+    ntdll.NtResumeProcess.argtypes = (wintypes.HANDLE,)
+    ntdll.NtResumeProcess.restype = wintypes.LONG
+    process_handle = process.__dict__.get("_handle")
+    if process_handle is None:
+        return False
+    return ntdll.NtResumeProcess(wintypes.HANDLE(process_handle)) == 0
+
+
+class _WindowsCommandJob:
+    """Contain a Windows command and every descendant in one kill-on-close job."""
+
+    _KILL_ON_JOB_CLOSE = 0x00002000
+    _EXTENDED_LIMIT_INFORMATION_CLASS = 9
+
+    def __init__(self, process: subprocess.Popen[bytes]) -> None:
+        self._handle: int | None = None
+        if os.name != "nt":
+            return
+        kernel32 = _kernel32()
+        handle = kernel32.CreateJobObjectW(None, None)
+        if not handle:
+            raise CommandEvidenceError("command_process_tree_containment_unavailable")
+        self._handle = int(handle)
+        limits = _JobExtendedLimitInformation()
+        limits.basic_limit_information.limit_flags = self._KILL_ON_JOB_CLOSE
+        if not kernel32.SetInformationJobObject(
+            wintypes.HANDLE(self._handle),
+            self._EXTENDED_LIMIT_INFORMATION_CLASS,
+            ctypes.byref(limits),
+            ctypes.sizeof(limits),
+        ):
+            self.close()
+            raise CommandEvidenceError("command_process_tree_containment_unavailable")
+        process_handle = process.__dict__.get("_handle")
+        if process_handle is None or not kernel32.AssignProcessToJobObject(
+            wintypes.HANDLE(self._handle), wintypes.HANDLE(process_handle)
+        ):
+            self.close()
+            raise CommandEvidenceError("command_process_tree_containment_unavailable")
+        if not _resume_suspended_process(process):
+            self.terminate()
+            self.close()
+            raise CommandEvidenceError("command_process_tree_resume_failed")
+
+    def terminate(self) -> bool:
+        if self._handle is None:
+            return False
+        return bool(_kernel32().TerminateJobObject(wintypes.HANDLE(self._handle), 1))
+
+    def close(self) -> None:
+        if self._handle is not None:
+            _kernel32().CloseHandle(wintypes.HANDLE(self._handle))
+            self._handle = None
+
+
 def resolved_command_policy() -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for raw in COMMAND_POLICY:
+        command_id = raw[0]
+        arguments: tuple[str, ...] = raw[1]
+        required = raw[2]
         if len(raw) == 3:
-            command_id, arguments, required = raw
             cwd_relative = "."
         else:
-            command_id, arguments, required, cwd_relative = raw
+            cwd_relative = raw[3]
         resolved = [sys.executable if item == "{python}" else item for item in arguments]
+        executable = resolved[0]
+        if executable != sys.executable:
+            selected = shutil.which(executable)
+            if selected is not None:
+                resolved[0] = str(Path(selected).resolve(strict=True))
         result.append({
             "command_id": command_id,
             "arguments": resolved,
@@ -63,14 +190,31 @@ def _read_bounded(
             pass
 
 
-def _terminate(process: subprocess.Popen[bytes]) -> None:
+def _terminate(
+    process: subprocess.Popen[bytes], windows_job: _WindowsCommandJob | None
+) -> None:
     try:
         if os.name != "nt":
-            os.killpg(process.pid, signal.SIGKILL)
-        else:
-            process.kill()
+            kill_process_group = os.__dict__.get("killpg")
+            kill_signal = signal.__dict__.get("SIGKILL")
+            if not callable(kill_process_group) or type(kill_signal) is not int:
+                raise CommandEvidenceError(
+                    "command_process_tree_termination_unavailable"
+                )
+            kill_process_group(process.pid, kill_signal)
+        elif windows_job is None or not windows_job.terminate():
+            raise CommandEvidenceError("command_process_tree_termination_failed")
     except (OSError, ProcessLookupError):
         pass
+
+
+def _windows_creation_flags() -> int:
+    if os.name != "nt":
+        return 0
+    return (
+        getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        | getattr(subprocess, "CREATE_SUSPENDED", 0x00000004)
+    )
 
 
 def capture_command(
@@ -106,10 +250,8 @@ def capture_command(
     overflow = threading.Event()
     timed_out = False
     process: subprocess.Popen[bytes] | None = None
+    windows_job: _WindowsCommandJob | None = None
     try:
-        creationflags = (
-            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
-        )
         process = subprocess.Popen(
             arguments,
             cwd=command_root,
@@ -120,9 +262,18 @@ def capture_command(
             env=environment,
             close_fds=True,
             start_new_session=os.name != "nt",
-            creationflags=creationflags,
+            creationflags=_windows_creation_flags(),
         )
-        assert process.stdout is not None and process.stderr is not None
+        if process.stdout is None or process.stderr is None:
+            process.kill()
+            process.wait(timeout=5)
+            raise CommandEvidenceError("command_capture_stream_unavailable")
+        try:
+            windows_job = _WindowsCommandJob(process)
+        except BaseException:
+            process.kill()
+            process.wait(timeout=5)
+            raise
         readers = (
             threading.Thread(target=_read_bounded, args=(process.stdout, stdout, overflow), daemon=True),
             threading.Thread(target=_read_bounded, args=(process.stderr, stderr, overflow), daemon=True),
@@ -132,18 +283,18 @@ def capture_command(
         deadline = monotonic() + timeout_seconds
         while process.poll() is None:
             if overflow.is_set():
-                _terminate(process)
+                _terminate(process, windows_job)
                 break
             remaining = deadline - monotonic()
             if remaining <= 0:
                 timed_out = True
-                _terminate(process)
+                _terminate(process, windows_job)
                 break
             overflow.wait(min(0.05, remaining))
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            _terminate(process)
+            _terminate(process, windows_job)
             process.wait(timeout=5)
         for reader in readers:
             reader.join(timeout=5)
@@ -161,7 +312,9 @@ def capture_command(
         exit_code = None
     finally:
         if process is not None and process.poll() is None:
-            _terminate(process)
+            _terminate(process, windows_job)
+        if windows_job is not None:
+            windows_job.close()
     stdout_bytes = bytes(stdout)
     stderr_bytes = bytes(stderr)
     duration_ms = max(0, (monotonic_ns() - started) // 1_000_000)
@@ -200,8 +353,12 @@ def validate_full_byte_transcript(result: Any) -> bool:
     try:
         if type(result) is not dict:
             return False
-        stdout = base64.b64decode(result.get("stdout_b64"), validate=True)
-        stderr = base64.b64decode(result.get("stderr_b64"), validate=True)
+        stdout_b64 = result.get("stdout_b64")
+        stderr_b64 = result.get("stderr_b64")
+        if type(stdout_b64) is not str or type(stderr_b64) is not str:
+            return False
+        stdout = base64.b64decode(stdout_b64, validate=True)
+        stderr = base64.b64decode(stderr_b64, validate=True)
         return (
             result.get("stdout_full_bytes") is True
             and result.get("stderr_full_bytes") is True

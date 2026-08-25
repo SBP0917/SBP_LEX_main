@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import importlib
 import json
 import subprocess
 import sys
@@ -360,6 +361,10 @@ def test_exclusive_export_never_overwrites(tmp_path: Path, material: dict) -> No
 
 def _write(path: Path, value: dict) -> None:
     path.write_bytes(canonical_document_bytes(value))
+
+
+def test_pvpl_main_module_is_import_safe() -> None:
+    assert importlib.import_module("sbp_pvpl.__main__") is not None
 
 
 def test_cli_validate_show_and_export_redacted_only(

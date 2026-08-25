@@ -64,7 +64,10 @@ from sbp_lex.security.integrity import (
     is_sha512,
     verify_hash_chain_entries,
 )
-from sbp_lex.security.hybrid_signature import HybridVerificationContext
+from sbp_lex.security.hybrid_signature import (
+    HybridVerificationContext,
+    is_hybrid_provider,
+)
 from sbp_lex.security.signature_provider import (
     SignatureProvider,
     SignatureProviderUnavailable,
@@ -302,17 +305,29 @@ def _is_lower_hex(value: Any, length: int) -> bool:
 def _provider_identity(provider: SignatureProvider | None) -> dict[str, str]:
     if provider is None:
         raise LocalEffectError("ADAPTER_RECEIPT_PROVIDER_NOT_INJECTED")
-    identity = {
-        "provider_id": getattr(provider, "provider_id", None),
-        "algorithm": getattr(provider, "algorithm", None),
-        "key_id": getattr(provider, "key_id", None),
-        "custody_class": getattr(provider, "custody_class", None),
-    }
-    if not all(type(value) is str and value for value in identity.values()):
+    provider_id = getattr(provider, "provider_id", None)
+    algorithm = getattr(provider, "algorithm", None)
+    key_id = getattr(provider, "key_id", None)
+    custody_class = getattr(provider, "custody_class", None)
+    if (
+        not isinstance(provider_id, str)
+        or not provider_id
+        or not isinstance(algorithm, str)
+        or not algorithm
+        or not isinstance(key_id, str)
+        or not key_id
+        or not isinstance(custody_class, str)
+        or not custody_class
+    ):
         raise LocalEffectError("ADAPTER_RECEIPT_PROVIDER_METADATA_INVALID")
     if getattr(provider, "token_signing_admitted", None) is not True:
         raise LocalEffectError("ADAPTER_RECEIPT_PROVIDER_NOT_ADMITTED")
-    return identity
+    return {
+        "provider_id": provider_id,
+        "algorithm": algorithm,
+        "key_id": key_id,
+        "custody_class": custody_class,
+    }
 
 
 def _foundational_current_and_unchanged(
@@ -376,7 +391,7 @@ def _foundational_effect_bindings(
     record = state.get("foundational_baseline_record")
     if type(record) is not dict:
         raise LocalEffectError("EFFECT_BINDING_FOUNDATIONAL_RECORD_INVALID")
-    bindings = {
+    raw_bindings = {
         field: (
             state.get(field)
             if field.startswith("application_integrity_")
@@ -385,8 +400,13 @@ def _foundational_effect_bindings(
         )
         for field in _FOUNDATIONAL_EFFECT_FIELDS
     }
-    if not all(is_sha512(value) for value in bindings.values()):
+    if not all(is_sha512(value) for value in raw_bindings.values()):
         raise LocalEffectError("EFFECT_BINDING_FOUNDATIONAL_DIGEST_INVALID")
+    bindings: dict[str, str] = {}
+    for field, value in raw_bindings.items():
+        if not isinstance(value, str):
+            raise LocalEffectError("EFFECT_BINDING_FOUNDATIONAL_DIGEST_INVALID")
+        bindings[field] = value
     return bindings
 
 
@@ -450,6 +470,11 @@ def _effect_binding(
         raise LocalEffectError("EFFECT_BINDING_AUTHORITY_PROVENANCE_INVALID")
     if not is_sha512(filed_lifecycle_digest):
         raise LocalEffectError("EFFECT_BINDING_FILED_LIFECYCLE_INVALID")
+    governance_sequence = (
+        governance_integrity_revocation.get("sequence")
+        if type(governance_integrity_revocation) is dict
+        else None
+    )
     if (
         state.get("filed_governance_integrity_result")
         != GOVERNANCE_INTEGRITY_PASS
@@ -458,8 +483,8 @@ def _effect_binding(
         or set(governance_integrity_revocation)
         != {"status", "sequence", "digest"}
         or governance_integrity_revocation.get("status") != "ACTIVE"
-        or type(governance_integrity_revocation.get("sequence")) is not int
-        or governance_integrity_revocation.get("sequence") < 0
+        or type(governance_sequence) is not int
+        or governance_sequence < 0
         or governance_integrity_revocation.get("digest")
         != canonical_integrity_hash(
             {
@@ -892,7 +917,7 @@ class ControlledLocalAdapter:
             owner_pinned_context_digest=trust.three_p_owner_pin,
         ):
             raise LocalEffectError("EFFECT_PERMIT_THREE_P_INVALID")
-        if not verify_skg_authority(
+        if not is_hybrid_provider(skg_attestation_provider) or not verify_skg_authority(
             state,
             evaluator=skg_evaluator,
             attestation_provider=skg_attestation_provider,
@@ -901,7 +926,9 @@ class ControlledLocalAdapter:
             require_hash_binding=True,
         ):
             raise LocalEffectError("EFFECT_PERMIT_SKG_AUTHORITY_INVALID")
-        if not verify_filed_frameworks(
+        if not is_hybrid_provider(
+            filed_framework_attestation_provider
+        ) or not verify_filed_frameworks(
             state,
             evaluator=filed_framework_evaluator,
             attestation_provider=filed_framework_attestation_provider,
@@ -920,7 +947,9 @@ class ControlledLocalAdapter:
             owner_pinned_context_digest=trust.filed_licence_owner_pin,
         ):
             raise LocalEffectError("EFFECT_PERMIT_FILED_LICENCE_INVALID")
-        if not verify_filed_lifecycle(
+        if not is_hybrid_provider(
+            filed_lifecycle_attestation_provider
+        ) or not verify_filed_lifecycle(
             state,
             evaluator=filed_lifecycle_evaluator,
             attestation_provider=filed_lifecycle_attestation_provider,
@@ -929,7 +958,9 @@ class ControlledLocalAdapter:
             require_hash_binding=True,
         ):
             raise LocalEffectError("EFFECT_PERMIT_FILED_LIFECYCLE_INVALID")
-        if not verify_filed_governance_integrity(
+        if not is_hybrid_provider(
+            filed_governance_integrity_attestation_provider
+        ) or not verify_filed_governance_integrity(
             state,
             evaluator=filed_governance_integrity_evaluator,
             attestation_provider=(
@@ -1159,7 +1190,7 @@ class ControlledLocalAdapter:
             owner_pinned_context_digest=trust.three_p_owner_pin,
         ):
             raise LocalEffectError("EFFECT_POINT_OF_USE_THREE_P_INVALID")
-        if not verify_skg_authority(
+        if not is_hybrid_provider(skg_attestation_provider) or not verify_skg_authority(
             state,
             evaluator=skg_evaluator,
             attestation_provider=skg_attestation_provider,
@@ -1170,7 +1201,9 @@ class ControlledLocalAdapter:
             raise LocalEffectError(
                 "EFFECT_POINT_OF_USE_SKG_AUTHORITY_INVALID"
             )
-        if not verify_filed_frameworks(
+        if not is_hybrid_provider(
+            filed_framework_attestation_provider
+        ) or not verify_filed_frameworks(
             state,
             evaluator=filed_framework_evaluator,
             attestation_provider=filed_framework_attestation_provider,
@@ -1193,7 +1226,9 @@ class ControlledLocalAdapter:
             raise LocalEffectError(
                 "EFFECT_POINT_OF_USE_FILED_LICENCE_INVALID"
             )
-        if not verify_filed_lifecycle(
+        if not is_hybrid_provider(
+            filed_lifecycle_attestation_provider
+        ) or not verify_filed_lifecycle(
             state,
             evaluator=filed_lifecycle_evaluator,
             attestation_provider=filed_lifecycle_attestation_provider,
@@ -1204,7 +1239,9 @@ class ControlledLocalAdapter:
             raise LocalEffectError(
                 "EFFECT_POINT_OF_USE_FILED_LIFECYCLE_INVALID"
             )
-        if not verify_filed_governance_integrity(
+        if not is_hybrid_provider(
+            filed_governance_integrity_attestation_provider
+        ) or not verify_filed_governance_integrity(
             state,
             evaluator=filed_governance_integrity_evaluator,
             attestation_provider=(
@@ -1443,13 +1480,17 @@ class ControlledLocalAdapter:
         )
         self._claim_once(permit, claimed_at_ms=claimed_at_ms)
 
+        payload = state.get("payload")
+        current_candidate = state.get("current_candidate")
+        if type(payload) is not dict or type(current_candidate) is not dict:
+            raise LocalEffectError("LOCAL_EFFECT_COMMAND_CONTENT_INVALID")
         command = LocalEffectCommand(
             permit_id=permit["permit_id"],
             effect_id=permit["effect_id"],
             request_fingerprint=permit["request_fingerprint"],
             action=permit["action"],
-            payload=deepcopy(state.get("payload")),
-            current_candidate=deepcopy(state.get("current_candidate")),
+            payload=deepcopy(payload),
+            current_candidate=deepcopy(current_candidate),
             issued_at_ms=permit["issued_at_ms"],
             expires_at_ms=permit["expires_at_ms"],
         )
