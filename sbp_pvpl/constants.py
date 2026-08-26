@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import MappingProxyType
 
 CONTRACT_VERSION = "SBP_LEX_V2_PVPL_V1"
 SOURCE_RESULT_SCHEMA_ID = "sbp.lex.v2.pvpl.verified-redacted-result/1"
@@ -12,14 +13,14 @@ CLAIM_SCHEMA_ID = "sbp.lex.v2.pvpl.public-verification-claim/1"
 VALIDATION_SCHEMA_ID = "sbp.lex.v2.pvpl.validation-report/1"
 
 SOURCE_KINDS = ("PTDE", "LOCAL_TRUST")
-SOURCE_RESULT_SCHEMAS = {
+SOURCE_RESULT_SCHEMAS = MappingProxyType({
     "PTDE": "sbp.lex.v2.ptde.verification-result/1",
     "LOCAL_TRUST": "SBP_LEX_V2_LOCAL_TRUST_PACKAGE_V1",
-}
-SOURCE_OUTCOMES = {
+})
+SOURCE_OUTCOMES = MappingProxyType({
     "PTDE": "PASS_INTERNAL_SOFTWARE_EVIDENCE_NOT_ADMITTED",
     "LOCAL_TRUST": "PASS",
-}
+})
 
 CLAIM_RESULT = "PASS_INTERNAL_SOFTWARE_EVIDENCE_NOT_ADMITTED"
 CLAIM_SCOPE = "INTERNAL_SOFTWARE_EVIDENCE_ONLY"
@@ -32,7 +33,7 @@ CLAIM_TEXT = (
     "confers NO_AUTHORITY."
 )
 
-NO_AUTHORITY = {
+NO_AUTHORITY = MappingProxyType({
     "audit_authority": False,
     "decision_authority": False,
     "effect_authority": False,
@@ -43,7 +44,7 @@ NO_AUTHORITY = {
     "publication_activation_authority": False,
     "runtime_authority": False,
     "token_authority": False,
-}
+})
 
 LIMITATIONS = (
     "EXTERNAL_PUBLICATION_HOSTING_NOT_PERFORMED",
@@ -57,6 +58,7 @@ MAX_DEPTH = 24
 MAX_FIELDS = 256
 MAX_LIST_ITEMS = 100_000
 MAX_STRING_BYTES = 16_384
+MAX_TOTAL_NODES = MAX_DOCUMENT_BYTES
 MAX_HISTORY_ITEMS = 100_000
 SHA512_HEX_LENGTH = 128
 
@@ -73,12 +75,13 @@ __all__ = [
     "LIMITATIONS",
     "MAX_DOCUMENT_BYTES",
     "MAX_HISTORY_ITEMS",
+    "MAX_TOTAL_NODES",
     "NO_AUTHORITY",
     "PUBLICATION_STATE",
     "RECEIPT_SCHEMA_ID",
     "SOURCE_KINDS",
     "SOURCE_OUTCOMES",
-    "SOURCE_RESULT_SCHEMA_ID",
     "SOURCE_RESULT_SCHEMAS",
+    "SOURCE_RESULT_SCHEMA_ID",
     "VALIDATION_SCHEMA_ID",
 ]

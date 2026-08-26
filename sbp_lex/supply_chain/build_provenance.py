@@ -9,18 +9,56 @@ import shutil
 import signal
 import stat
 import subprocess
-import tempfile
 import time
+from collections.abc import Mapping
 from ctypes import wintypes
 from pathlib import Path
-from typing import Any, BinaryIO, Mapping
+from typing import Any, BinaryIO
 
-from sbp_ptde.canonical import canonical_json_document_bytes, canonical_path, canonical_sha512, identifier, require_sha512
-from sbp_ptde.constants import MAX_LANE_TIMEOUT_SECONDS, MAX_STREAM_BYTE_COUNT, NO_AUTHORITY, TIMEOUT_STATUS, TRANSCRIPT_SCHEMA_ID
+from sbp_lex.local_trust.secure_git import PinnedGit, SecureGitError
+from sbp_ptde.canonical import (
+    canonical_json_document_bytes,
+    canonical_path,
+    canonical_sha512,
+    identifier,
+    require_sha512,
+)
+from sbp_ptde.constants import (
+    MAX_LANE_TIMEOUT_SECONDS,
+    MAX_STREAM_BYTE_COUNT,
+    NO_AUTHORITY,
+    TIMEOUT_STATUS,
+    TRANSCRIPT_SCHEMA_ID,
+)
 from sbp_ptde.errors import reject
 from sbp_ptde.schemas import validate_lanes
 
 from .constants import HOST_OBSERVATION_SCHEMA_ID, UNSIGNED_NOT_ADMITTED
+
+_MAX_ENVIRONMENT_VALUE_BYTES = 65_536
+_DANGEROUS_ENVIRONMENT_NAMES = frozenset(
+    {
+        "CARGO_HOME",
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH",
+        "GIT_CONFIG",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_SYSTEM",
+        "HOME",
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "PYTHONSTARTUP",
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "RUSTUP_HOME",
+        "USERPROFILE",
+    }
+)
 
 
 class _JobBasicLimitInformation(ctypes.Structure):
@@ -140,42 +178,87 @@ class _WindowsLaneJob:
             self._handle = None
 
 
-def _executable_measurement(path: Path, *, maximum_bytes: int = 268_435_456) -> tuple[Path, tuple[int, int, int, int], str]:
+def _executable_measurement(
+    path: Path, *, maximum_bytes: int = 268_435_456
+) -> tuple[Path, tuple[int, int, int, int, int, int], str]:
     """Resolve and measure a regular executable before or after a host lane."""
 
+    if not path.is_absolute():
+        raise reject("SUPPLY_CHAIN_EXECUTABLE_PATH_INVALID")
     candidate = path.resolve(strict=True)
+    if os.path.normcase(os.path.abspath(path)) != os.path.normcase(str(candidate)):
+        raise reject("SUPPLY_CHAIN_EXECUTABLE_PATH_INVALID")
+    for component in (*reversed(path.parents), path):
+        metadata = component.lstat()
+        if _is_link_or_reparse(metadata):
+            raise reject("SUPPLY_CHAIN_EXECUTABLE_PATH_INVALID")
     before = candidate.lstat()
     reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
     if (
         not stat.S_ISREG(before.st_mode)
         or stat.S_ISLNK(before.st_mode)
         or bool(getattr(before, "st_file_attributes", 0) & reparse)
-        or before.st_size > maximum_bytes
-        or candidate.suffix.casefold() in {".bat", ".cmd", ".ps1"}
+        or not 0 < before.st_size <= maximum_bytes
+        or candidate.suffix.casefold() in {".bat", ".cmd", ".com", ".ps1", ".py", ".sh"}
     ):
         raise reject("SUPPLY_CHAIN_EXECUTABLE_INVALID")
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(candidate, flags)
     try:
         opened = os.fstat(descriptor)
-        identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-        if (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) != identity:
+        identity = (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+            before.st_nlink,
+        )
+        if (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_size,
+            opened.st_mtime_ns,
+            opened.st_nlink,
+        ) != (identity[0], identity[1], identity[2], identity[3], identity[5]):
             raise reject("SUPPLY_CHAIN_EXECUTABLE_IDENTITY_CHANGED")
         digest = hashlib.sha512()
+        observed = 0
+        first = True
         while True:
-            chunk = os.read(descriptor, 1_048_576)
+            chunk = os.read(
+                descriptor, min(1_048_576, maximum_bytes + 1 - observed)
+            )
             if not chunk:
                 break
+            if first:
+                first = False
+                if chunk.startswith(b"#!") or (
+                    os.name == "nt" and not chunk.startswith(b"MZ")
+                ):
+                    raise reject("SUPPLY_CHAIN_EXECUTABLE_INVALID")
+            observed += len(chunk)
+            if observed > maximum_bytes:
+                raise reject("SUPPLY_CHAIN_EXECUTABLE_INVALID")
             digest.update(chunk)
     finally:
         os.close(descriptor)
     after = candidate.lstat()
-    if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != identity:
+    if (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+        after.st_nlink,
+    ) != identity or observed != before.st_size:
         raise reject("SUPPLY_CHAIN_EXECUTABLE_IDENTITY_CHANGED")
     return candidate, identity, digest.hexdigest()
 
 
-def resolve_pinned_executable(value: str, expected_sha512: str) -> tuple[Path, tuple[int, int, int, int]]:
+def resolve_pinned_executable(
+    value: str, expected_sha512: str
+) -> tuple[Path, tuple[int, int, int, int, int, int]]:
     """Resolve a real executable and require its out-of-band SHA-512 pin."""
 
     if type(value) is not str or not value or "\x00" in value:
@@ -189,71 +272,49 @@ def resolve_pinned_executable(value: str, expected_sha512: str) -> tuple[Path, t
     return path, identity
 
 
-def _confirm_executable(path: Path, identity: tuple[int, int, int, int], expected_sha512: str) -> None:
+def _confirm_executable(
+    path: Path,
+    identity: tuple[int, int, int, int, int, int],
+    expected_sha512: str,
+) -> None:
     _, observed_identity, observed_digest = _executable_measurement(path)
     if observed_identity != identity or observed_digest != expected_sha512:
         raise reject("SUPPLY_CHAIN_EXECUTABLE_CHANGED")
 
 
-def _clean_checkout(git_executable: Path, git_identity: tuple[int, int, int, int], expected_git_sha512: str, checkout: Path) -> bool:
+def _clean_checkout(
+    git_executable: Path,
+    git_identity: tuple[int, int, int, int, int, int],
+    expected_git_sha512: str,
+    checkout: Path,
+    expected_commit_oid: str | None = None,
+) -> bool:
     _confirm_executable(git_executable, git_identity, expected_git_sha512)
-    clean_environment = {
-        key: os.environ[key]
-        for key in ("COMSPEC", "SYSTEMROOT", "TEMP", "TMP", "WINDIR")
-        if key in os.environ
-    }
-    clean_environment.update({
-        "GIT_CONFIG_COUNT": "0",
-        "GIT_CONFIG_GLOBAL": os.devnull,
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_TERMINAL_PROMPT": "0",
-        "LC_ALL": "C",
-    })
-    with tempfile.TemporaryFile(mode="w+b") as stdout_file, tempfile.TemporaryFile(mode="w+b") as stderr_file:
-        creationflags = _windows_creation_flags()
-        process = subprocess.Popen(
-            [str(git_executable), "status", "--porcelain=v1", "--untracked-files=all"],
-            cwd=checkout,
-            shell=False,
-            stdin=subprocess.DEVNULL,
-            stdout=stdout_file,
-            stderr=stderr_file,
-            env=clean_environment,
-            start_new_session=os.name != "nt",
-            creationflags=creationflags,
+    try:
+        runner = PinnedGit(str(git_executable), expected_git_sha512)
+        status = runner.run(
+            checkout,
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            timeout_seconds=120,
+            maximum_output_bytes=min(MAX_STREAM_BYTE_COUNT, 8 * 1024 * 1024),
         )
-        windows_job: _WindowsLaneJob | None = None
-        bounded = True
-        try:
-            try:
-                windows_job = _WindowsLaneJob(process)
-            except BaseException:
-                process.kill()
-                process.wait(timeout=5)
-                raise
-            deadline = time.monotonic() + 120
-            while process.poll() is None:
-                if (
-                    os.fstat(stdout_file.fileno()).st_size > MAX_STREAM_BYTE_COUNT
-                    or os.fstat(stderr_file.fileno()).st_size > MAX_STREAM_BYTE_COUNT
-                    or time.monotonic() >= deadline
-                ):
-                    bounded = False
-                    _terminate_process_tree(process, windows_job)
-                    break
-                time.sleep(0.01)
-            return_code = process.wait(timeout=5)
-            stdout_size = os.fstat(stdout_file.fileno()).st_size
-            stderr_size = os.fstat(stderr_file.fileno()).st_size
-        finally:
-            if windows_job is not None:
-                windows_job.close()
+        commit = runner.run(
+            checkout,
+            "rev-parse",
+            "--verify",
+            "HEAD",
+            timeout_seconds=120,
+        ).decode("ascii", errors="strict").strip()
+    except (SecureGitError, UnicodeError):
+        return False
     _confirm_executable(git_executable, git_identity, expected_git_sha512)
     return (
-        bounded
-        and return_code == 0
-        and stdout_size == 0
-        and stderr_size <= MAX_STREAM_BYTE_COUNT
+        status == b""
+        and len(commit) == 40
+        and all(character in "0123456789abcdef" for character in commit)
+        and (expected_commit_oid is None or commit == expected_commit_oid)
     )
 
 
@@ -339,6 +400,7 @@ def _ensure_secure_directory(path: Path) -> tuple[int, int]:
         if _secure_directory_identity(directory.parent) != parent_identity:
             raise reject("SUPPLY_CHAIN_EVIDENCE_PARENT_IDENTITY_CHANGED")
         _secure_directory_identity(directory)
+        _sync_parent(directory)
     return _secure_directory_identity(path)
 
 
@@ -466,6 +528,12 @@ def execute_host_lane(
     identifier(campaign_id, code="SUPPLY_CHAIN_CAMPAIGN_INVALID")
     identifier(attempt_id, code="SUPPLY_CHAIN_ATTEMPT_INVALID")
     require_sha512(d_descriptor_sha512, "SUPPLY_CHAIN_D_DESCRIPTOR_INVALID")
+    if (
+        type(d_commit_oid) is not str
+        or len(d_commit_oid) != 40
+        or any(character not in "0123456789abcdef" for character in d_commit_oid)
+    ):
+        raise reject("SUPPLY_CHAIN_D_COMMIT_INVALID")
     pinned_executable, executable_identity = resolve_pinned_executable(executable_path, expected_executable_sha512)
     pinned_git, git_identity = resolve_pinned_executable(git_executable, expected_git_executable_sha512)
     if lane["argv"][0] != lane["executable_id"]:
@@ -473,9 +541,25 @@ def execute_host_lane(
     if lane["timeout_seconds"] < 1 or lane["timeout_seconds"] > MAX_LANE_TIMEOUT_SECONDS:
         raise reject("SUPPLY_CHAIN_TIMEOUT_INVALID")
     names = lane["environment_name_allowlist"]
-    if sorted(environment) != names or any(type(value) is not str for value in environment.values()):
+    if (
+        sorted(environment) != names
+        or any(type(value) is not str for value in environment.values())
+        or any("\x00" in value for value in environment.values())
+        or sum(len(value.encode("utf-8")) for value in environment.values())
+        > _MAX_ENVIRONMENT_VALUE_BYTES
+        or any(name.upper() in _DANGEROUS_ENVIRONMENT_NAMES for name in environment)
+        or any(name.upper().startswith("DYLD_") for name in environment)
+        or any(name.upper().startswith("GIT_CONFIG_") for name in environment)
+    ):
         raise reject("SUPPLY_CHAIN_ENVIRONMENT_INVALID")
-    if not _clean_checkout(pinned_git, git_identity, expected_git_executable_sha512, source_checkout):
+    source_identity = _ensure_secure_directory(source_checkout)
+    if not _clean_checkout(
+        pinned_git,
+        git_identity,
+        expected_git_executable_sha512,
+        source_checkout,
+        expected_commit_oid=d_commit_oid,
+    ):
         raise reject("SUPPLY_CHAIN_SOURCE_DIRTY_BEFORE_LANE")
     stdout_relative = canonical_path(lane["stdout_contract"]["relative_path"], code="SUPPLY_CHAIN_STDOUT_PATH_INVALID")
     stderr_relative = canonical_path(lane["stderr_contract"]["relative_path"], code="SUPPLY_CHAIN_STDERR_PATH_INVALID")
@@ -536,6 +620,8 @@ def execute_host_lane(
                     break
                 time.sleep(0.01)
             exit_status = process.wait(timeout=5)
+            if time.monotonic() >= deadline:
+                timed_out = True
         finally:
             if windows_job is not None:
                 windows_job.close()
@@ -566,7 +652,16 @@ def execute_host_lane(
         _sync_parent(stderr_path)
     finished = int(time.time() * 1000)
     _confirm_executable(pinned_executable, executable_identity, expected_executable_sha512)
-    source_dirty_after = not _clean_checkout(pinned_git, git_identity, expected_git_executable_sha512, source_checkout)
+    source_dirty_after = (
+        _ensure_secure_directory(source_checkout) != source_identity
+        or not _clean_checkout(
+            pinned_git,
+            git_identity,
+            expected_git_executable_sha512,
+            source_checkout,
+            expected_commit_oid=d_commit_oid,
+        )
+    )
     stdout_limit = lane["stdout_contract"]["maximum_byte_count"]
     stderr_limit = lane["stderr_contract"]["maximum_byte_count"]
     if len(stdout) > stdout_limit or len(stderr) > stderr_limit:

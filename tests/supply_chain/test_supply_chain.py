@@ -11,14 +11,14 @@ import unittest
 from copy import deepcopy
 from pathlib import Path
 
-from sbp_ptde.canonical import canonical_json_document_bytes, canonical_sha512, strict_json_document
-from sbp_ptde.errors import PTDEVerificationError
-from sbp_ptde.trust import AcceptedAttemptHistory
-
-from sbp_lex.supply_chain.boundary import build_detached_boundary
 from sbp_lex.supply_chain import build_provenance as build_provenance_module
+from sbp_lex.supply_chain.boundary import build_detached_boundary
 from sbp_lex.supply_chain.build_provenance import execute_host_lane
-from sbp_lex.supply_chain.constants import P_SOURCE_INCOMPLETE, P_SOURCE_READY_NOT_ADMITTED, UNSIGNED_NOT_ADMITTED
+from sbp_lex.supply_chain.constants import (
+    P_SOURCE_INCOMPLETE,
+    P_SOURCE_READY_NOT_ADMITTED,
+    UNSIGNED_NOT_ADMITTED,
+)
 from sbp_lex.supply_chain.package import assemble_p_source_package
 from sbp_lex.supply_chain.python_inventory import (
     GOVERNED_PYTHON_ENVIRONMENT,
@@ -33,6 +33,13 @@ from sbp_lex.supply_chain.source_binding import (
     validate_p_binding_document,
 )
 from sbp_lex.supply_chain.verifier import verify_p_source_package
+from sbp_ptde.canonical import (
+    canonical_json_document_bytes,
+    canonical_sha512,
+    strict_json_document,
+)
+from sbp_ptde.errors import PTDEVerificationError
+from sbp_ptde.trust import AcceptedAttemptHistory
 
 
 class PObjectFixture(unittest.TestCase):
@@ -79,7 +86,7 @@ class PObjectFixture(unittest.TestCase):
             "--require-hashes\n"
             "\n"
             f"cryptography==50.0.0 --hash=sha256:{'1' * 64}\n"
-        ).encode("utf-8")
+        ).encode()
 
     def _assurance_hash_lock(self) -> bytes:
         return (
@@ -88,7 +95,7 @@ class PObjectFixture(unittest.TestCase):
             "\n"
             f"cryptography==50.0.0 --hash=sha256:{'1' * 64}\n"
             f"pytest==9.1.1 --hash=sha256:{'2' * 64}\n"
-        ).encode("utf-8")
+        ).encode()
 
     def _python_lock(self) -> dict:
         requirements = [{
@@ -437,7 +444,7 @@ class PObjectFixture(unittest.TestCase):
     def test_git_cleanliness_capture_is_bounded_and_never_uses_subprocess_run(self) -> None:
         source = Path(inspect.getsourcefile(execute_host_lane) or "").read_text(encoding="utf-8")
         self.assertNotIn("subprocess.run(", source)
-        self.assertIn("tempfile.TemporaryFile", source)
+        self.assertIn("PinnedGit", source)
         self.assertIn("MAX_STREAM_BYTE_COUNT", source)
         self.assertIn("_terminate_process_tree(process, windows_job)", source)
 
@@ -550,6 +557,7 @@ class PObjectFixture(unittest.TestCase):
         clean_status = subprocess.run(
             [self.git, "status", "--porcelain=v1", "--untracked-files=all"],
             cwd=self.work,
+            check=False,
             shell=False,
             stdin=subprocess.DEVNULL,
             capture_output=True,
@@ -655,6 +663,36 @@ class PObjectFixture(unittest.TestCase):
                 d_descriptor_sha512="d" * 128,
                 environment=environment,
             )
+
+    def test_cleanliness_check_disables_hostile_fsmonitor(self) -> None:
+        marker = self.temp / "supply-fsmonitor-executed.txt"
+        helper = self.temp / "supply-hostile-fsmonitor.py"
+        helper.write_text(
+            "from pathlib import Path\n"
+            f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n",
+            encoding="utf-8",
+        )
+        helper_command = (
+            f'"{Path(sys.executable).as_posix()}" "{helper.as_posix()}"'
+        )
+        self._run(
+            "-C", str(self.work), "config", "core.fsmonitor", helper_command
+        )
+        git_path, git_identity = (
+            build_provenance_module.resolve_pinned_executable(
+                self.git, self.git_digest
+            )
+        )
+
+        clean = build_provenance_module._clean_checkout(
+            git_path,
+            git_identity,
+            self.git_digest,
+            self.work,
+        )
+
+        self.assertTrue(clean)
+        self.assertFalse(marker.exists())
 
 
 if __name__ == "__main__":

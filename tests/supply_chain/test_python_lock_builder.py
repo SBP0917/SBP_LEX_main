@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+import stat
+import struct
 import tempfile
 import unittest
 import zipfile
 from copy import deepcopy
 from pathlib import Path
 from typing import cast
+from unittest import mock
 
 from sbp_lex.local_trust.toolchain_guard import _local_python_dependency_evidence
+from sbp_lex.supply_chain import python_lock_builder
 from sbp_lex.supply_chain.python_inventory import (
     GOVERNED_PYTHON_ENVIRONMENT,
     PYTHON_LOCK_SCHEMA,
@@ -95,6 +99,47 @@ class PythonLockBuilderTests(unittest.TestCase):
             encoding="utf-8",
             newline="",
         )
+
+    def _install_cryptography_wheel(self, content: bytes) -> None:
+        (self.production / "cryptography-50.0.0-py3-none-any.whl").write_bytes(
+            content
+        )
+        (self.assurance / "cryptography-50.0.0-py3-none-any.whl").write_bytes(
+            content
+        )
+        pytest_content = (
+            self.assurance / "pytest-9.1.1-py3-none-any.whl"
+        ).read_bytes()
+        self._write_inputs(cryptography=content, pytest=pytest_content)
+
+    def _custom_cryptography_wheel(
+        self,
+        *,
+        compression: int = zipfile.ZIP_DEFLATED,
+        extra: zipfile.ZipInfo | tuple[str, bytes] | None = None,
+    ) -> bytes:
+        wheel = self.root / "custom-cryptography.whl"
+        dist_info = "cryptography-50.0.0.dist-info"
+        with zipfile.ZipFile(wheel, "w", compression=compression) as archive:
+            archive.writestr(
+                f"{dist_info}/METADATA",
+                "Metadata-Version: 2.4\n"
+                "Name: cryptography\n"
+                "Version: 50.0.0\n"
+                "Requires-Python: >=3.12,<3.13\n",
+            )
+            archive.writestr(
+                f"{dist_info}/WHEEL",
+                "Wheel-Version: 1.0\nGenerator: fixture\n"
+                "Root-Is-Purelib: true\nTag: py3-none-any\n",
+            )
+            if isinstance(extra, zipfile.ZipInfo):
+                archive.writestr(extra, b"target")
+            elif extra is not None:
+                archive.writestr(extra[0], extra[1])
+        content = wheel.read_bytes()
+        wheel.unlink()
+        return content
 
     def _build(
         self,
@@ -335,6 +380,88 @@ class PythonLockBuilderTests(unittest.TestCase):
             raised.exception.code,
             "SUPPLY_CHAIN_PYTHON_WHEEL_DEPENDENCY_UNSATISFIED",
         )
+
+    def test_wheel_archive_complexity_compression_and_special_files_fail_closed(
+        self,
+    ) -> None:
+        bzip2_wheel = self._custom_cryptography_wheel(
+            compression=zipfile.ZIP_BZIP2
+        )
+        self._install_cryptography_wheel(bzip2_wheel)
+        with self.assertRaises(PTDEVerificationError) as unsupported:
+            self._build()
+        self.assertEqual(
+            unsupported.exception.code,
+            "SUPPLY_CHAIN_PYTHON_WHEEL_ARCHIVE_INVALID",
+        )
+
+        symlink = zipfile.ZipInfo("cryptography/link")
+        symlink.create_system = 3
+        symlink.external_attr = (stat.S_IFLNK | 0o777) << 16
+        linked_wheel = self._custom_cryptography_wheel(extra=symlink)
+        self._install_cryptography_wheel(linked_wheel)
+        with self.assertRaises(PTDEVerificationError) as special:
+            self._build()
+        self.assertEqual(
+            special.exception.code,
+            "SUPPLY_CHAIN_PYTHON_WHEEL_ARCHIVE_INVALID",
+        )
+
+        extra_member = self._custom_cryptography_wheel(
+            extra=("cryptography/extra.txt", b"extra")
+        )
+        self._install_cryptography_wheel(extra_member)
+        with (
+            mock.patch.object(python_lock_builder, "_MAX_WHEEL_MEMBERS", 2),
+            self.assertRaises(PTDEVerificationError) as member_limit,
+        ):
+            self._build()
+        self.assertEqual(
+            member_limit.exception.code,
+            "SUPPLY_CHAIN_PYTHON_WHEEL_ARCHIVE_INVALID",
+        )
+
+    def test_wheel_full_stream_crc_is_checked_not_only_metadata(self) -> None:
+        content = bytearray(
+            self._custom_cryptography_wheel(
+                compression=zipfile.ZIP_STORED,
+                extra=("cryptography/payload.bin", b"payload-for-crc"),
+            )
+        )
+        crc_source = self.root / "crc-source.whl"
+        crc_source.write_bytes(content)
+        with zipfile.ZipFile(crc_source) as archive:
+            info = archive.getinfo("cryptography/payload.bin")
+            offset = info.header_offset
+            fields = struct.unpack_from("<4s5H3L2H", content, offset)
+            name_size = fields[-2]
+            extra_size = fields[-1]
+            data_offset = offset + 30 + name_size + extra_size
+        crc_source.unlink()
+        content[data_offset] ^= 0x01
+        corrupted = bytes(content)
+        self._install_cryptography_wheel(corrupted)
+
+        with self.assertRaises(PTDEVerificationError) as crc_failure:
+            self._build()
+        self.assertEqual(
+            crc_failure.exception.code,
+            "SUPPLY_CHAIN_PYTHON_WHEEL_ARCHIVE_INVALID",
+        )
+
+    def test_wheel_dot_and_windows_device_members_fail_closed(self) -> None:
+        for name in (".", "cryptography/NUL.txt", "cryptography/payload. "):
+            with self.subTest(name=name):
+                hostile = self._custom_cryptography_wheel(
+                    extra=(name, b"hostile")
+                )
+                self._install_cryptography_wheel(hostile)
+                with self.assertRaises(PTDEVerificationError) as raised:
+                    self._build()
+                self.assertEqual(
+                    raised.exception.code,
+                    "SUPPLY_CHAIN_PYTHON_WHEEL_ARCHIVE_INVALID",
+                )
 
 
 if __name__ == "__main__":

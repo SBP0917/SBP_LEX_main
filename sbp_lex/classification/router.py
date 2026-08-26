@@ -1,4 +1,5 @@
 from typing import Dict, Any
+from types import MappingProxyType
 
 from sbp_lex.governance.authority_provenance import (
     verify_authority_provenance,
@@ -10,7 +11,7 @@ from sbp_lex.governance.authority_provenance import (
 # Classes 1-4.
 AP_ACF_SCHEMA_STATUS = "IMPLEMENTATION_DEFINED_V2"
 AP_ACF_AUTHORITY_STATUS = "AI_PROPOSED_AWAITING_APPROVAL"
-AP_ACF_CLASS_SUBCLASSES = {
+AP_ACF_CLASS_SUBCLASSES = MappingProxyType({
     "CLASS_1": frozenset({"CLASS_1"}),
     "CLASS_2": frozenset({"CLASS_2"}),
     "CLASS_3": frozenset({"CLASS_3"}),
@@ -20,12 +21,12 @@ AP_ACF_CLASS_SUBCLASSES = {
     "CLASS_5": frozenset({"CLASS_5", "CLASS_5A", "CLASS_5B"}),
     "CLASS_5A": frozenset({"CLASS_5A"}),
     "CLASS_5B": frozenset({"CLASS_5B"}),
-}
-AP_ACF_EXACT_CLASS_5_CEILINGS = {
+})
+AP_ACF_EXACT_CLASS_5_CEILINGS = MappingProxyType({
     "CLASS_5": 50,
     "CLASS_5B": 75,
     "CLASS_5A": 100,
-}
+})
 AP_ACF_REQUIRED_ENVIRONMENT_MODIFIERS = (
     "human_proximity",
     "geographic_isolation",

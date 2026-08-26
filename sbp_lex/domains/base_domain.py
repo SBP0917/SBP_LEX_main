@@ -1,13 +1,13 @@
 from typing import Dict, Any, List
 
 
-ALLOWED_DOMAIN_RESULTS = {
+ALLOWED_DOMAIN_RESULTS = frozenset({
     "pass",
     "refine_candidate",
     "redefine_candidate",
     "require_next_candidate",
     "escalate",
-}
+})
 
 
 class DomainEngine:

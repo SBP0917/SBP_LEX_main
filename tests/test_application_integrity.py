@@ -557,8 +557,8 @@ class ApplicationIntegrityTests(unittest.TestCase):
             "bindings": bindings,
             "runtime_measurement_digest": measurement,
             "issuer": self._issuer(provider),
-            "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
-            "assurance_limits": deepcopy(ASSURANCE_LIMITS),
+            "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
+            "assurance_limits": dict(ASSURANCE_LIMITS),
         }
 
     def _release_objects(
@@ -593,8 +593,8 @@ class ApplicationIntegrityTests(unittest.TestCase):
                 admission_provider
             ),
             "revoked_release_digests": [],
-            "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
-            "assurance_limits": deepcopy(ASSURANCE_LIMITS),
+            "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
+            "assurance_limits": dict(ASSURANCE_LIMITS),
         }
         admission = build_signed_object(
             admission_payload,

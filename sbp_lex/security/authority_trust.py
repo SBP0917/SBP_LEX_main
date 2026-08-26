@@ -80,14 +80,14 @@ _PRODUCTION_OWNER_HYBRID_CONTEXT_DIGEST: Final = os.environ.get(
 )
 
 _SIGNED_FIELDS = frozenset({"digest", "signature", "verified"})
-_SIGNATURE_FIELDS = {
+_SIGNATURE_FIELDS = frozenset({
     "provider_id",
     "algorithm",
     "key_id",
     "custody_class",
     "effect_authority",
     "signature_b64",
-}
+})
 
 
 def _text(value: Any) -> bool:

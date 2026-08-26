@@ -20,11 +20,9 @@ from .canonical import (
     strict_json_document,
 )
 from .constants import (
-    ASSURANCE_LIMITS,
     CALLABLE_ALLOWED_SET,
     D_DESCRIPTOR_PATH,
     D_SCHEMA_ID,
-    E_MANIFEST_NAME,
     E_SCHEMA_ID,
     INVENTORY_CLASSES,
     MAX_ARGUMENT_UTF8_BYTES,
@@ -40,25 +38,25 @@ from .constants import (
     MAX_TRANSCRIPT_BYTE_COUNT,
     NO_AUTHORITY,
     POLICY_PATH,
-    TIMEOUT_STATUS,
-    TRANSCRIPT_SCHEMA_ID,
     T_PROFILE_PATH,
     T_SCHEMA_ID,
+    TIMEOUT_STATUS,
+    TRANSCRIPT_SCHEMA_ID,
+    assurance_limits_document,
 )
 from .errors import PTDEVerificationError, reject
 from .git_objects import CommitObject, GitObjectDatabase, TreeBlob
 
-
-_INVENTORY_ENTRY_FIELDS = {
+_INVENTORY_ENTRY_FIELDS = frozenset({
     "path",
     "mode",
     "blob_oid",
     "blob_sha512",
     "blob_raw_sha512",
     "byte_count",
-}
-_INVENTORY_FIELDS = {"entries", "inventory_sha512"}
-_T_FIELDS = {
+})
+_INVENTORY_FIELDS = frozenset({"entries", "inventory_sha512"})
+_T_FIELDS = frozenset({
     "schema_id",
     "policy_blob_oid",
     "policy_sha512",
@@ -74,8 +72,8 @@ _T_FIELDS = {
     "lanes_sha512",
     "no_authority",
     "runtime_attachment",
-}
-_LANE_FIELDS = {
+})
+_LANE_FIELDS = frozenset({
     "lane_id",
     "order",
     "executable_id",
@@ -88,15 +86,17 @@ _LANE_FIELDS = {
     "stdout_contract",
     "stderr_contract",
     "produced_artifact_contract",
-}
-_STREAM_CONTRACT_FIELDS = {"capture", "relative_path", "maximum_byte_count"}
-_ARTIFACT_CONTRACT_FIELDS = {
+})
+_STREAM_CONTRACT_FIELDS = frozenset(
+    {"capture", "relative_path", "maximum_byte_count"}
+)
+_ARTIFACT_CONTRACT_FIELDS = frozenset({
     "required_relative_paths",
     "optional_relative_paths",
     "maximum_file_count",
     "maximum_total_byte_count",
-}
-_D_FIELDS = {
+})
+_D_FIELDS = frozenset({
     "schema_id",
     "campaign_id",
     "p_commit_oid",
@@ -126,15 +126,15 @@ _D_FIELDS = {
     "single_pipeline_callables",
     "no_authority",
     "assurance_limits",
-}
-_CALLABLE_FIELDS = {
+})
+_CALLABLE_FIELDS = frozenset({
     "qualified_name",
     "source_path",
     "source_blob_oid",
     "source_blob_sha512",
     "function_ast_sha512",
-}
-_E_FIELDS = {
+})
+_E_FIELDS = frozenset({
     "schema_id",
     "campaign_id",
     "p_commit_oid",
@@ -157,8 +157,8 @@ _E_FIELDS = {
     "evidence_inventory_sha512",
     "limitations",
     "no_authority",
-}
-_LANE_RESULT_FIELDS = {
+})
+_LANE_RESULT_FIELDS = frozenset({
     "lane_id",
     "attempt_id",
     "status",
@@ -188,8 +188,8 @@ _LANE_RESULT_FIELDS = {
     "source_mutation_observed",
     "ledger_mutation_observed",
     "authority_mutation_observed",
-}
-_TRANSCRIPT_FIELDS = {
+})
+_TRANSCRIPT_FIELDS = frozenset({
     "schema_id",
     "campaign_id",
     "lane_id",
@@ -224,7 +224,7 @@ _TRANSCRIPT_FIELDS = {
     "ledger_mutation_observed",
     "authority_mutation_observed",
     "no_authority",
-}
+})
 
 
 def _text(value: Any, *, code: str) -> str:
@@ -506,7 +506,7 @@ def validate_d_descriptor(
         "lanes": t_profile["lanes"],
         "lanes_sha512": t_profile["lanes_sha512"],
         "no_authority": NO_AUTHORITY,
-        "assurance_limits": ASSURANCE_LIMITS,
+        "assurance_limits": assurance_limits_document(),
     }
     p_tree_object = database.read_object(p_commit.tree_oid, expected_type="tree")
     t_tree_object = database.read_object(t_commit.tree_oid, expected_type="tree")
@@ -659,7 +659,7 @@ def validate_e_manifest(
         "p_inventory_sha512": d_descriptor["p_inventory_sha512"],
         "lanes_sha512": d_descriptor["lanes_sha512"],
         "approved_lane_order": [lane["lane_id"] for lane in d_descriptor["lanes"]],
-        "limitations": ASSURANCE_LIMITS,
+        "limitations": assurance_limits_document(),
         "no_authority": NO_AUTHORITY,
     }
     if any(manifest[key] != expected for key, expected in fixed.items()):

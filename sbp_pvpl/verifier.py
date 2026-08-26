@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import re
-from copy import deepcopy
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
-from .canonical import canonical_sha512, exact_fields, nonnegative_int, require_sha512
+from .canonical import (
+    canonical_document_bytes,
+    canonical_sha512,
+    exact_fields,
+    nonnegative_int,
+    parse_canonical_document,
+    require_sha512,
+)
 from .constants import (
     ADMISSION_STATE,
     CLAIM_RESULT,
@@ -29,8 +36,7 @@ from .constants import (
 )
 from .errors import PVPLValidationError, reject
 
-
-_SOURCE_FIELDS = {
+_SOURCE_FIELDS = frozenset({
     "schema_id",
     "contract_version",
     "source_kind",
@@ -46,8 +52,8 @@ _SOURCE_FIELDS = {
     "runtime_attachment",
     "no_authority",
     "source_artifact_sha512",
-}
-_RECEIPT_FIELDS = {
+})
+_RECEIPT_FIELDS = frozenset({
     "schema_id",
     "contract_version",
     "receipt_kind",
@@ -63,8 +69,8 @@ _RECEIPT_FIELDS = {
     "verifier_trust_root_sha512",
     "bindings_sha512",
     "receipt_sha512",
-}
-_RECEIPT_BINDING_FIELDS = {
+})
+_RECEIPT_BINDING_FIELDS = frozenset({
     "source_kind",
     "source_artifact_sha512",
     "source_result_sha512",
@@ -73,8 +79,8 @@ _RECEIPT_BINDING_FIELDS = {
     "source_history_sequence",
     "source_current_head_sha512",
     "verifier_trust_root_sha512",
-}
-_PIN_FIELDS = {
+})
+_PIN_FIELDS = frozenset({
     "source_kind",
     "expected_source_artifact_sha512",
     "expected_receipt_sha512",
@@ -84,20 +90,20 @@ _PIN_FIELDS = {
     "expected_source_history_sha512",
     "minimum_source_history_sequence",
     "expected_source_current_head_sha512",
-}
-_PUBLICATION_HISTORY_PIN_FIELDS = {
+})
+_PUBLICATION_HISTORY_PIN_FIELDS = frozenset({
     "expected_history_sha512",
     "expected_sequence",
     "expected_current_head_sha512",
-}
-_PINS_FIELDS = {
+})
+_PINS_FIELDS = frozenset({
     "schema_id",
     "contract_version",
     "source_pins",
     "publication_history_pin",
     "pins_sha512",
-}
-_HISTORY_FIELDS = {
+})
+_HISTORY_FIELDS = frozenset({
     "schema_id",
     "contract_version",
     "sequence",
@@ -106,8 +112,8 @@ _HISTORY_FIELDS = {
     "accepted_source_artifact_sha512",
     "accepted_receipt_sha512",
     "history_sha512",
-}
-_SOURCE_BINDING_FIELDS = {
+})
+_SOURCE_BINDING_FIELDS = frozenset({
     "source_kind",
     "source_artifact_sha512",
     "receipt_sha512",
@@ -117,8 +123,8 @@ _SOURCE_BINDING_FIELDS = {
     "source_history_sequence",
     "source_current_head_sha512",
     "verifier_trust_root_sha512",
-}
-_CLAIM_FIELDS = {
+})
+_CLAIM_FIELDS = frozenset({
     "schema_id",
     "contract_version",
     "result",
@@ -133,7 +139,7 @@ _CLAIM_FIELDS = {
     "no_authority",
     "limitations",
     "claim_sha512",
-}
+})
 
 _FORBIDDEN_FIELD_FRAGMENTS = (
     "secret",
@@ -161,6 +167,12 @@ _FORBIDDEN_FIELD_FRAGMENTS = (
 _WINDOWS_PATH = re.compile(r"(?i)^[a-z]:[\\/]")
 _UNC_PATH = re.compile(r"^(?:\\\\|//)")
 _EMAIL = re.compile(r"^[^\s/@]+@[^\s/@]+\.[^\s/@]+$")
+
+
+def _snapshot_object(value: Any) -> dict[str, Any]:
+    """Detach validation from caller-owned mutable containers."""
+
+    return parse_canonical_document(canonical_document_bytes(value))
 
 
 def _reject_leakage(value: Any) -> None:
@@ -208,7 +220,7 @@ def _sha512_list(value: Any, *, code: str, expected_count: int | None = None) ->
 
 
 def validate_redacted_source_result(value: Any) -> dict[str, Any]:
-    source = exact_fields(value, _SOURCE_FIELDS, "SOURCE_RESULT")
+    source = exact_fields(_snapshot_object(value), _SOURCE_FIELDS, "SOURCE_RESULT")
     _reject_leakage(source)
     kind = source["source_kind"]
     if (
@@ -240,7 +252,7 @@ def _receipt_bindings(receipt: dict[str, Any]) -> dict[str, Any]:
 
 
 def validate_detached_receipt(value: Any) -> dict[str, Any]:
-    receipt = exact_fields(value, _RECEIPT_FIELDS, "DETACHED_RECEIPT")
+    receipt = exact_fields(_snapshot_object(value), _RECEIPT_FIELDS, "DETACHED_RECEIPT")
     _reject_leakage(receipt)
     if (
         receipt["schema_id"] != RECEIPT_SCHEMA_ID
@@ -263,7 +275,7 @@ def validate_detached_receipt(value: Any) -> dict[str, Any]:
 
 
 def validate_external_pins(value: Any) -> dict[str, Any]:
-    pins = exact_fields(value, _PINS_FIELDS, "EXTERNAL_PINS")
+    pins = exact_fields(_snapshot_object(value), _PINS_FIELDS, "EXTERNAL_PINS")
     _reject_leakage(pins)
     if (
         pins["schema_id"] != EXTERNAL_PINS_SCHEMA_ID
@@ -309,7 +321,7 @@ def validate_external_pins(value: Any) -> dict[str, Any]:
 
 
 def validate_accepted_history(value: Any) -> dict[str, Any]:
-    history = exact_fields(value, _HISTORY_FIELDS, "ACCEPTED_HISTORY")
+    history = exact_fields(_snapshot_object(value), _HISTORY_FIELDS, "ACCEPTED_HISTORY")
     _reject_leakage(history)
     if (
         history["schema_id"] != HISTORY_SCHEMA_ID
@@ -451,7 +463,7 @@ def build_publication_claim(
             "prior_publication_history_sha512": history["history_sha512"],
             "prior_publication_sequence": history["sequence"],
             "prior_publication_current_head_sha512": history["current_head_sha512"],
-            "no_authority": deepcopy(NO_AUTHORITY),
+            "no_authority": dict(NO_AUTHORITY),
             "limitations": list(LIMITATIONS),
         }
         claim = {**unsigned, "claim_sha512": canonical_sha512(unsigned)}
@@ -465,7 +477,7 @@ def build_publication_claim(
 
 
 def validate_publication_claim(value: Any) -> dict[str, Any]:
-    claim = exact_fields(value, _CLAIM_FIELDS, "PUBLICATION_CLAIM")
+    claim = exact_fields(_snapshot_object(value), _CLAIM_FIELDS, "PUBLICATION_CLAIM")
     _reject_leakage(claim)
     if (
         claim["schema_id"] != CLAIM_SCHEMA_ID
@@ -515,7 +527,7 @@ def validation_report(claim: Any) -> dict[str, Any]:
         "claim_sha512": checked["claim_sha512"],
         "admission_state": ADMISSION_STATE,
         "publication_state": PUBLICATION_STATE,
-        "no_authority": deepcopy(NO_AUTHORITY),
+        "no_authority": dict(NO_AUTHORITY),
     }
     return {**unsigned, "report_sha512": canonical_sha512(unsigned)}
 

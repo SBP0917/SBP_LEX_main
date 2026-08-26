@@ -25,7 +25,7 @@ class AcceptedHistoryError(ValueError):
     pass
 
 
-_RECORD_FIELDS = {
+_RECORD_FIELDS = frozenset({
     "acceptance_sequence",
     "package_digest",
     "chain_head_digest",
@@ -35,8 +35,8 @@ _RECORD_FIELDS = {
     "replay_id",
     "record_digest",
     "no_authority",
-}
-_UNSIGNED_FIELDS = {
+})
+_UNSIGNED_FIELDS = frozenset({
     "schema_id",
     "repository_identity_digest",
     "history_id",
@@ -46,8 +46,10 @@ _UNSIGNED_FIELDS = {
     "records",
     "status",
     "no_authority",
-}
-_HISTORY_FIELDS = _UNSIGNED_FIELDS | {"signatures", "history_digest"}
+})
+_HISTORY_FIELDS = _UNSIGNED_FIELDS | frozenset(
+    {"signatures", "history_digest"}
+)
 
 
 def _record(

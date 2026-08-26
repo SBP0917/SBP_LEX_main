@@ -50,7 +50,7 @@ RULE_ARTIFACT_ESCALATE: Final = "ESCALATE"
 RULE_ARTIFACT_DENY: Final = "DENY"
 ARTIFACT_ACTIVE: Final = "ACTIVE"
 
-_SOURCE_FIELDS: Final = {
+_SOURCE_FIELDS: Final = frozenset({
     "contract_id",
     "schema_status",
     "evaluator_id",
@@ -68,9 +68,9 @@ _SOURCE_FIELDS: Final = {
     "digest",
     "signature",
     "verified",
-}
+})
 
-_SNAPSHOT_FIELDS: Final = {
+_SNAPSHOT_FIELDS: Final = frozenset({
     "contract_id",
     "schema_status",
     "rule_classes",
@@ -81,9 +81,9 @@ _SNAPSHOT_FIELDS: Final = {
     "evaluation_time",
     "register_version",
     "prior_register_digest",
-}
+})
 
-_DETERMINATION_FIELDS: Final = {
+_DETERMINATION_FIELDS: Final = frozenset({
     "result",
     "register_version",
     "artifacts",
@@ -95,9 +95,9 @@ _DETERMINATION_FIELDS: Final = {
     "execution_authority_granted",
     "effect_authority_granted",
     "pipeline_bypass_permitted",
-}
+})
 
-_ARTIFACT_FIELDS: Final = {
+_ARTIFACT_FIELDS: Final = frozenset({
     "rule_class",
     "artifact_id",
     "artifact_version",
@@ -109,38 +109,38 @@ _ARTIFACT_FIELDS: Final = {
     "status",
     "revocation_sequence",
     "artifact_digest",
-}
+})
 
-_ARTIFACT_CREDENTIAL_FIELDS: Final = {
+_ARTIFACT_CREDENTIAL_FIELDS: Final = frozenset({
     "credential_id",
     "authority_role",
     "credential_digest",
-}
+})
 
-_PROVENANCE_FIELDS: Final = {
+_PROVENANCE_FIELDS: Final = frozenset({
     "source_id",
     "source_locator",
     "source_version",
     "source_digest",
     "issuing_authority_id",
-}
+})
 
-_CONFLICT_FIELDS: Final = {
+_CONFLICT_FIELDS: Final = frozenset({
     "conflict_id",
     "artifact_references",
     "status",
     "escalation_required",
     "resolution_authority_credential",
     "resolution_digest",
-}
+})
 
-_ARTIFACT_REFERENCE_FIELDS: Final = {
+_ARTIFACT_REFERENCE_FIELDS: Final = frozenset({
     "rule_class",
     "artifact_id",
     "artifact_version",
-}
+})
 
-_RECORD_FIELDS: Final = {
+_RECORD_FIELDS: Final = frozenset({
     "contract_id",
     "schema_status",
     "rule_classes",
@@ -161,7 +161,7 @@ _RECORD_FIELDS: Final = {
     "execution_authority_granted",
     "effect_authority_granted",
     "pipeline_bypass_permitted",
-}
+})
 
 
 class RuleArtifactAttestationProvider(HybridSignatureProvider, Protocol):

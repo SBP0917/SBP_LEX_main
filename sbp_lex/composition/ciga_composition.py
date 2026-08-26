@@ -56,7 +56,7 @@ COMPOSITION_DENY: Final = "DENY"
 COMPOSITION_ACTIVE: Final = "ACTIVE"
 COMPOSITION_REVOKED: Final = "REVOKED"
 
-_SOURCE_FIELDS: Final = {
+_SOURCE_FIELDS: Final = frozenset({
     "contract_id",
     "schema_status",
     "proof_scope",
@@ -75,9 +75,9 @@ _SOURCE_FIELDS: Final = {
     "digest",
     "signature",
     "verified",
-}
+})
 
-_SNAPSHOT_FIELDS: Final = {
+_SNAPSHOT_FIELDS: Final = frozenset({
     "contract_id",
     "schema_status",
     "proof_scope",
@@ -89,9 +89,9 @@ _SNAPSHOT_FIELDS: Final = {
     "evaluation_time",
     "composition_version",
     "prior_composition_digest",
-}
+})
 
-_DETERMINATION_FIELDS: Final = {
+_DETERMINATION_FIELDS: Final = frozenset({
     "result",
     "composition_version",
     "capability_attestations",
@@ -104,16 +104,16 @@ _DETERMINATION_FIELDS: Final = {
     "execution_authority_granted",
     "effect_authority_granted",
     "pipeline_bypass_permitted",
-}
+})
 
-_CAPABILITY_ATTESTATION_FIELDS: Final = {
+_CAPABILITY_ATTESTATION_FIELDS: Final = frozenset({
     "capability_class",
     "component_id",
     "component_version",
     "component_digest",
-}
+})
 
-_RECORD_FIELDS: Final = {
+_RECORD_FIELDS: Final = frozenset({
     "contract_id",
     "schema_status",
     "proof_scope",
@@ -136,7 +136,7 @@ _RECORD_FIELDS: Final = {
     "execution_authority_granted",
     "effect_authority_granted",
     "pipeline_bypass_permitted",
-}
+})
 
 
 class CompositionAttestationRejected(ValueError):

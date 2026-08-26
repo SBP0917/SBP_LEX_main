@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from importlib import import_module
+from types import MappingProxyType
 from typing import Any
 
 from sbp_lex.security.integrity import canonical_integrity_hash
@@ -13,20 +14,20 @@ from .contracts import (
 )
 
 
-_ACTIVE_OUTCOMES: dict[str, dict[str, str]] = {
-    "authority_first_result": {"ALLOW": "PASS", "DENY": "DENY"},
-    "collective_signal_status": {"attached": "PASS", "unattached": "DENY"},
-    "governance_result": {
+_ACTIVE_OUTCOMES = MappingProxyType({
+    "authority_first_result": MappingProxyType({"ALLOW": "PASS", "DENY": "DENY"}),
+    "collective_signal_status": MappingProxyType({"attached": "PASS", "unattached": "DENY"}),
+    "governance_result": MappingProxyType({
         "ALLOW": "PASS",
         "DENY": "DENY",
         "ESCALATE": "ESCALATE",
-    },
-    "domain_result": {
+    }),
+    "domain_result": MappingProxyType({
         "pass": "PASS",
         "deny": "DENY",
         "escalate": "ESCALATE",
-    },
-    "aurion15_result": {
+    }),
+    "aurion15_result": MappingProxyType({
         "pass": "PASS",
         "allow": "PASS",
         "allow_reduced": "PASS",
@@ -34,15 +35,15 @@ _ACTIVE_OUTCOMES: dict[str, dict[str, str]] = {
         "deny": "DENY",
         "escalate": "ESCALATE",
         "require_next_candidate": "INCOMPLETE",
-    },
-    "execution_result": {"EXECUTE": "PASS", "HALT": "DENY"},
-    "decision": {
+    }),
+    "execution_result": MappingProxyType({"EXECUTE": "PASS", "HALT": "DENY"}),
+    "decision": MappingProxyType({
         "APPROVED": "PASS",
         "ALLOW": "PASS",
         "DENY": "DENY",
         "ESCALATE": "ESCALATE",
-    },
-}
+    }),
+})
 
 
 def _present(value: Any) -> bool:

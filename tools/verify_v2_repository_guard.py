@@ -38,6 +38,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--expected-python-dependency-prior-lock-sha512",
         required=True,
     )
+    parser.add_argument("--git-executable", required=True)
+    parser.add_argument("--expected-git-executable-sha512", required=True)
     args = parser.parse_args(argv)
     result = verify_repository_guard(
         args.repository,
@@ -56,6 +58,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         expected_python_dependency_prior_lock_sha512=(
             args.expected_python_dependency_prior_lock_sha512
+        ),
+        git_executable=args.git_executable,
+        expected_git_executable_sha512=(
+            args.expected_git_executable_sha512
         ),
     )
     print(json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":")))

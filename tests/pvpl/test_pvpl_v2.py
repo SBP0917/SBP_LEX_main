@@ -4,6 +4,8 @@ import ast
 import hashlib
 import importlib
 import json
+import operator
+import os
 import subprocess
 import sys
 from copy import deepcopy
@@ -11,7 +13,9 @@ from pathlib import Path
 
 import pytest
 
+import sbp_pvpl.file_io as pvpl_file_io
 from sbp_pvpl.canonical import (
+    canonical_bytes,
     canonical_document_bytes,
     canonical_sha512,
     parse_canonical_document,
@@ -24,16 +28,17 @@ from sbp_pvpl.constants import (
     CONTRACT_VERSION,
     EXTERNAL_PINS_SCHEMA_ID,
     HISTORY_SCHEMA_ID,
+    MAX_LIST_ITEMS,
+    MAX_STRING_BYTES,
     NO_AUTHORITY,
     PUBLICATION_STATE,
     RECEIPT_SCHEMA_ID,
-    SOURCE_KINDS,
     SOURCE_OUTCOMES,
     SOURCE_RESULT_SCHEMA_ID,
     SOURCE_RESULT_SCHEMAS,
 )
 from sbp_pvpl.errors import PVPLValidationError
-from sbp_pvpl.file_io import write_exclusive_canonical_file
+from sbp_pvpl.file_io import read_canonical_file, write_exclusive_canonical_file
 from sbp_pvpl.verifier import (
     build_publication_claim,
     validate_accepted_history,
@@ -70,7 +75,7 @@ def _source(kind: str, sequence: int = 10) -> dict:
             "claim_scope": CLAIM_SCOPE,
             "admission_state": ADMISSION_STATE,
             "runtime_attachment": "NONE",
-            "no_authority": deepcopy(NO_AUTHORITY),
+            "no_authority": dict(NO_AUTHORITY),
         },
         "source_artifact_sha512",
     )
@@ -347,6 +352,53 @@ def test_canonical_parser_rejects_noncanonical_duplicate_and_float() -> None:
         parse_canonical_document(b'{"a":1,"a":1}\n')
     with pytest.raises(PVPLValidationError):
         parse_canonical_document(b'{"a":1.0}\n')
+    with pytest.raises(PVPLValidationError, match="CANONICAL_JSON_INTEGER_INVALID"):
+        parse_canonical_document(b'{"a":999999999999999999999999999999999999}\n')
+
+
+def test_canonical_normalisation_wraps_hostile_unicode_key() -> None:
+    with pytest.raises(
+        PVPLValidationError, match="CANONICAL_JSON_NORMALISATION_FAILED"
+    ):
+        canonical_bytes({"\ud800": 1})
+
+
+def test_canonical_parser_fails_closed_on_hostile_nesting() -> None:
+    hostile = b'{"x":' + (b"[" * 10_000) + b"0" + (b"]" * 10_000) + b"}\n"
+    with pytest.raises(PVPLValidationError):
+        parse_canonical_document(hostile)
+
+
+def test_canonical_normalisation_bounds_aliased_container_amplification() -> None:
+    repeated_string = ["x" * MAX_STRING_BYTES]
+    hostile = {"items": [repeated_string] * MAX_LIST_ITEMS}
+    with pytest.raises(
+        PVPLValidationError,
+        match="CANONICAL_JSON_TOTAL_STRING_BYTES_EXCEEDED",
+    ):
+        canonical_bytes(hostile)
+
+
+def test_validators_detach_results_from_caller_owned_containers(material: dict) -> None:
+    source = deepcopy(material["sources"][0])
+    checked = validate_redacted_source_result(source)
+    source["no_authority"]["runtime_authority"] = True
+    assert checked["no_authority"]["runtime_authority"] is False
+
+
+@pytest.mark.parametrize(
+    ("mapping", "key", "value"),
+    [
+        (NO_AUTHORITY, "runtime_authority", True),
+        (SOURCE_RESULT_SCHEMAS, "PTDE", "attacker-schema"),
+        (SOURCE_OUTCOMES, "PTDE", "attacker-outcome"),
+    ],
+)
+def test_exported_contract_policy_mappings_are_immutable(
+    mapping: object, key: str, value: object
+) -> None:
+    with pytest.raises(TypeError):
+        operator.setitem(mapping, key, value)
 
 
 def test_exclusive_export_never_overwrites(tmp_path: Path, material: dict) -> None:
@@ -357,6 +409,177 @@ def test_exclusive_export_never_overwrites(tmp_path: Path, material: dict) -> No
     with pytest.raises(PVPLValidationError, match="OUTPUT_ALREADY_EXISTS"):
         write_exclusive_canonical_file(claim, target)
     assert target.read_bytes() == canonical_document_bytes(claim)
+
+
+def test_file_boundary_rejects_hardlinked_input(tmp_path: Path, material: dict) -> None:
+    original = tmp_path / "source.json"
+    alias = tmp_path / "source-alias.json"
+    original.write_bytes(canonical_document_bytes(material["sources"][0]))
+    try:
+        os.link(original, alias)
+    except OSError as exc:
+        pytest.skip(f"hard links unavailable: {exc}")
+    with pytest.raises(PVPLValidationError, match="INPUT_FILE_INVALID"):
+        read_canonical_file(original)
+
+
+def test_failed_exclusive_export_leaves_fail_closed_tombstone(
+    tmp_path: Path, material: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "partial.json"
+    monkeypatch.setattr(pvpl_file_io.os, "write", lambda _descriptor, _data: 0)
+    with pytest.raises(PVPLValidationError, match="OUTPUT_WRITE_INCOMPLETE"):
+        write_exclusive_canonical_file(_claim(material), target)
+    assert target.exists()
+    with pytest.raises(PVPLValidationError):
+        read_canonical_file(target)
+    with pytest.raises(PVPLValidationError, match="OUTPUT_ALREADY_EXISTS"):
+        write_exclusive_canonical_file(_claim(material), target)
+
+
+def test_exclusive_export_verifies_exact_persisted_bytes(
+    tmp_path: Path, material: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "persisted.json"
+    monkeypatch.setattr(
+        pvpl_file_io.os,
+        "read",
+        lambda _descriptor, size: b"x" * size,
+    )
+    with pytest.raises(PVPLValidationError, match="OUTPUT_PERSISTED_CONTENT_MISMATCH"):
+        write_exclusive_canonical_file(_claim(material), target)
+
+
+def test_relative_output_is_anchored_before_cwd_can_change(
+    tmp_path: Path, material: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = tmp_path / "original"
+    alternate = tmp_path / "alternate"
+    original.mkdir()
+    alternate.mkdir()
+    monkeypatch.chdir(original)
+    open_held_directory = pvpl_file_io._open_held_directory
+
+    def switch_cwd(
+        path: Path, code: str, *, writable: bool = False
+    ) -> tuple[os.stat_result, int | None, int | None]:
+        result = open_held_directory(path, code, writable=writable)
+        os.chdir(alternate)
+        return result
+
+    monkeypatch.setattr(pvpl_file_io, "_open_held_directory", switch_cwd)
+    try:
+        write_exclusive_canonical_file(_claim(material), "claim.json")
+    finally:
+        os.chdir(original)
+    assert (original / "claim.json").is_file()
+    assert not (alternate / "claim.json").exists()
+
+
+def test_resource_cleanup_attempts_every_descriptor_before_rejecting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[int] = []
+    windows_closed: list[int] = []
+
+    def close_descriptor(descriptor: int) -> None:
+        closed.append(descriptor)
+        if descriptor == 101:
+            raise OSError("simulated close failure")
+
+    monkeypatch.setattr(pvpl_file_io.os, "close", close_descriptor)
+    monkeypatch.setattr(
+        pvpl_file_io,
+        "_close_windows_handle",
+        windows_closed.append,
+    )
+    with pytest.raises(PVPLValidationError, match="HANDLE_CLOSE_FAILED"):
+        pvpl_file_io._close_resources((101, 202), 303, "HANDLE_CLOSE_FAILED")
+    assert closed == [101, 202]
+    assert windows_closed == [303]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows handle semantics")
+def test_windows_held_parent_denies_directory_rebinding(tmp_path: Path) -> None:
+    parent = tmp_path / "held"
+    moved = tmp_path / "moved"
+    parent.mkdir()
+    _, descriptor, windows_handle = pvpl_file_io._open_held_directory(
+        parent,
+        "TEST_PARENT_INVALID",
+        writable=True,
+    )
+    assert descriptor is None
+    assert windows_handle is not None
+    try:
+        with pytest.raises(OSError):
+            parent.rename(moved)
+    finally:
+        pvpl_file_io._close_resources(
+            (descriptor,), windows_handle, "TEST_HANDLE_CLOSE_FAILED"
+        )
+    parent.rename(moved)
+    assert moved.is_dir()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows handle semantics")
+def test_windows_native_close_failure_is_not_silenced() -> None:
+    with pytest.raises(OSError):
+        pvpl_file_io._close_windows_handle(0)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows handle semantics")
+def test_windows_output_handle_denies_concurrent_mutation(
+    tmp_path: Path, material: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "share-denied.json"
+    original_write = pvpl_file_io.os.write
+    sharing_errors: list[OSError] = []
+
+    def adversarial_write(descriptor: int, data: bytes | memoryview) -> int:
+        if not sharing_errors:
+            try:
+                with target.open("r+b") as attacker:
+                    attacker.write(b"attacker")
+            except OSError as exc:
+                sharing_errors.append(exc)
+            else:
+                raise AssertionError("exclusive output handle allowed concurrent mutation")
+        return original_write(descriptor, data)
+
+    monkeypatch.setattr(pvpl_file_io.os, "write", adversarial_write)
+    write_exclusive_canonical_file(_claim(material), target)
+    assert sharing_errors
+    assert target.read_bytes() == canonical_document_bytes(_claim(material))
+
+
+@pytest.mark.parametrize("name", ["..", "line\nbreak.json"])
+def test_output_rejects_ambiguous_path_components(
+    tmp_path: Path, material: dict, name: str
+) -> None:
+    target = tmp_path / "child" / name / "claim.json"
+    with pytest.raises(PVPLValidationError, match="OUTPUT_PATH_INVALID"):
+        write_exclusive_canonical_file(_claim(material), target)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows path semantics")
+@pytest.mark.parametrize(
+    "name",
+    [
+        "claim.json:stream",
+        "NUL.json",
+        "claim.json.",
+        "COM¹.txt",
+        "LPT³.txt",
+        "CONIN$",
+        "CONOUT$",
+    ],
+)
+def test_output_rejects_windows_alias_and_alternate_stream_paths(
+    tmp_path: Path, material: dict, name: str
+) -> None:
+    with pytest.raises(PVPLValidationError, match="OUTPUT_PATH_INVALID"):
+        write_exclusive_canonical_file(_claim(material), tmp_path / name)
 
 
 def _write(path: Path, value: dict) -> None:

@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from .canonical import (
-    canonical_sha512,
     campaign_id,
+    canonical_sha512,
     exact_fields,
     identifier,
     nonnegative_int,
@@ -17,24 +17,23 @@ from .canonical import (
 from .constants import MAX_EVIDENCE_ENTRIES, NO_AUTHORITY
 from .errors import reject
 
-
 ACCEPTED_ATTEMPT_HISTORY_SCHEMA_ID = "sbp.lex.v2.ptde.accepted-attempt-history/1"
 GENESIS_SHA512 = "0" * 128
-_HISTORY_FIELDS = {
+_HISTORY_FIELDS = frozenset({
     "history_id",
     "no_authority",
     "prior_history_sha512",
     "records",
     "schema_id",
     "sequence",
-}
-_RECORD_FIELDS = {
+})
+_RECORD_FIELDS = frozenset({
     "attempt_id",
     "campaign_id",
     "e_commit_oid",
     "lane_id",
     "transcript_sha512",
-}
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,9 +191,9 @@ def reject_attempt_reuse(
 
 __all__ = [
     "ACCEPTED_ATTEMPT_HISTORY_SCHEMA_ID",
+    "GENESIS_SHA512",
     "AcceptedAttemptHistory",
     "AcceptedAttemptRecord",
-    "GENESIS_SHA512",
     "accepted_attempt_history_from_document",
     "reject_attempt_reuse",
     "validate_accepted_attempt_history",

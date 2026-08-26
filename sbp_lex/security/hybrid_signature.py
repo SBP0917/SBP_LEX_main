@@ -64,7 +64,7 @@ ED448_SIGNATURE_BYTES: Final = 114
 
 _RESERVED_FIELDS = frozenset({"digest", "signature", "verified"})
 _LANE_ORDER = ("ML-DSA-87", "Ed448")
-_DESCRIPTOR_FIELDS = {
+_DESCRIPTOR_FIELDS = frozenset({
     "ordinal",
     "algorithm",
     "provider_id",
@@ -81,9 +81,9 @@ _DESCRIPTOR_FIELDS = {
     "non_exportable",
     "public_key_encoding",
     "signature_encoding",
-}
-_CONTEXT_LANE_FIELDS = _DESCRIPTOR_FIELDS | {"public_key_b64"}
-_CONTEXT_FIELDS = {
+})
+_CONTEXT_LANE_FIELDS = _DESCRIPTOR_FIELDS | frozenset({"public_key_b64"})
+_CONTEXT_FIELDS = frozenset({
     "schema_id",
     "suite",
     "suite_version",
@@ -102,8 +102,8 @@ _CONTEXT_FIELDS = {
     "external_custody_admission_sha512",
     "ordered_key_set_digest",
     "lanes",
-}
-_PROTECTED_FIELDS = {
+})
+_PROTECTED_FIELDS = frozenset({
     "schema_id",
     "suite",
     "suite_version",
@@ -120,9 +120,11 @@ _PROTECTED_FIELDS = {
     "effect_authority",
     "ordered_key_set_digest",
     "lanes",
-}
-_ENVELOPE_FIELDS = _PROTECTED_FIELDS | {"signatures"}
-_SIGNATURE_LANE_FIELDS = {"ordinal", "algorithm", "key_id", "signature_b64"}
+})
+_ENVELOPE_FIELDS = _PROTECTED_FIELDS | frozenset({"signatures"})
+_SIGNATURE_LANE_FIELDS = frozenset(
+    {"ordinal", "algorithm", "key_id", "signature_b64"}
+)
 
 
 class HybridSignatureError(ValueError):

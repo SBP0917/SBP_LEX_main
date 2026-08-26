@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any
 
 from sbp_ptde.canonical import (
@@ -40,7 +41,7 @@ PYTHON_LOCK_VALID = "COMMITTED_LOCK_VALID"
 PYTHON_LOCK_INVALID = "COMMITTED_LOCK_INVALID"
 PYTHON_LOCK_MISSING = "COMMITTED_LOCK_MISSING"
 
-_LOCK_FIELDS = {
+_LOCK_FIELDS = frozenset({
     "schema_id",
     "lock_sequence",
     "prior_lock_sha512",
@@ -50,37 +51,37 @@ _LOCK_FIELDS = {
     "target_environment",
     "rollback_guard",
     "packages",
-}
-_ENVIRONMENT_FIELDS = {
+})
+_ENVIRONMENT_FIELDS = frozenset({
     "implementation",
     "python_version",
     "abi_tag",
     "platform_tag",
     "installed_scope",
-}
-_ROLLBACK_FIELDS = {
+})
+_ROLLBACK_FIELDS = frozenset({
     "ptde_accepted_attempt_history_sequence",
     "ptde_accepted_attempt_history_sha512",
     "local_trust_accepted_package_history_sequence",
     "local_trust_accepted_package_history_sha512",
-}
-_PACKAGE_FIELDS = {
+})
+_PACKAGE_FIELDS = frozenset({
     "name",
     "version",
     "hashes",
     "scopes",
     "direct_scopes",
     "dependencies",
-}
+})
 _SCOPES = ("assurance", "production")
 _ASSURANCE_DIRECT_REQUIREMENTS = frozenset({"pytest"})
-GOVERNED_PYTHON_ENVIRONMENT = {
+GOVERNED_PYTHON_ENVIRONMENT = MappingProxyType({
     "implementation": "CPython",
     "python_version": "3.12.13",
     "abi_tag": "cpython-312",
     "platform_tag": "win-amd64",
     "installed_scope": "assurance",
-}
+})
 
 
 def _normalize_name(value: str) -> str:

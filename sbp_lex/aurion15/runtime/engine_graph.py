@@ -20,8 +20,8 @@ from sbp_lex.aurion15.core.registry import AurionRegistry
 
 
 MAX_CONVERGENCE_ITERATIONS = 8
-_ALLOW_ACTIONS = {None, "", "allow", "pass"}
-_REFINE_ACTIONS = {
+_ALLOW_ACTIONS = frozenset({None, "", "allow", "pass"})
+_REFINE_ACTIONS = frozenset({
     "blocked",
     "deny",
     "fail",
@@ -29,8 +29,8 @@ _REFINE_ACTIONS = {
     "redefine_candidate",
     "refine_candidate",
     "require_next_candidate",
-}
-_ESCALATE_ACTIONS = {"escalate"}
+})
+_ESCALATE_ACTIONS = frozenset({"escalate"})
 
 
 class EngineGraphError(RuntimeError):

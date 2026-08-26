@@ -2,108 +2,57 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
-import threading
 from pathlib import Path
-from time import monotonic
 from typing import Any
 
-from .command_evidence import (
-    CommandEvidenceError,
-    _terminate,
-    _windows_creation_flags,
-    _WindowsCommandJob,
-)
-from .constants import EVIDENCE_GROUPS, MAX_COMMAND_OUTPUT_BYTES
+from .constants import EVIDENCE_GROUPS
 from .digests import digest
 from .paths import collect_group_files, validated_root
+from .secure_git import PinnedGit, SecureGitError
+
+MAX_TRACKED_PATHS = 100_000
+MAX_TRACKED_PATH_INDEX_BYTES = 16_777_216
 
 
 class RepositoryEvidenceError(ValueError):
     pass
 
 
-def _git(root: Path, *arguments: str) -> str:
-    stdout = bytearray()
-    stderr = bytearray()
-    overflow = threading.Event()
-
-    def reader(stream: Any, target: bytearray) -> None:
-        try:
-            while not overflow.is_set():
-                chunk = stream.read(64 * 1024)
-                if not chunk:
-                    return
-                if len(target) + len(chunk) > MAX_COMMAND_OUTPUT_BYTES:
-                    overflow.set()
-                    return
-                target.extend(chunk)
-        finally:
-            stream.close()
-
-    process: subprocess.Popen[bytes] | None = None
-    windows_job: _WindowsCommandJob | None = None
+def _git(runner: PinnedGit, root: Path, *arguments: str) -> str:
     try:
-        process = subprocess.Popen(
-            ("git", *arguments),
-            cwd=root,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            shell=False,
-            close_fds=True,
-            start_new_session=os.name != "nt",
-            creationflags=_windows_creation_flags(),
-        )
-        if process.stdout is None or process.stderr is None:
-            process.kill()
-            process.wait(timeout=5)
-            raise RepositoryEvidenceError("git_evidence_stream_unavailable")
-        try:
-            windows_job = _WindowsCommandJob(process)
-        except BaseException:
-            process.kill()
-            process.wait(timeout=5)
-            raise
-        readers = (
-            threading.Thread(target=reader, args=(process.stdout, stdout), daemon=True),
-            threading.Thread(target=reader, args=(process.stderr, stderr), daemon=True),
-        )
-        for thread in readers:
-            thread.start()
-        deadline = monotonic() + 120
-        while process.poll() is None and not overflow.is_set() and monotonic() < deadline:
-            overflow.wait(0.05)
-        if process.poll() is None:
-            _terminate(process, windows_job)
-        process.wait(timeout=5)
-        for thread in readers:
-            thread.join(timeout=5)
-        if overflow.is_set() or any(thread.is_alive() for thread in readers):
-            raise RepositoryEvidenceError("git_evidence_output_limit")
-    except (CommandEvidenceError, OSError, subprocess.TimeoutExpired, UnicodeError) as exc:
+        stdout = runner.run(root, *arguments, timeout_seconds=120)
+    except SecureGitError as exc:
         raise RepositoryEvidenceError("git_evidence_unavailable") from exc
-    finally:
-        if windows_job is not None:
-            windows_job.close()
-    if process is None:
-        raise RepositoryEvidenceError("git_evidence_unavailable")
-    if process.returncode != 0 or stderr:
-        raise RepositoryEvidenceError("git_evidence_failed")
     try:
-        return bytes(stdout).decode("utf-8", errors="strict").rstrip("\r\n")
+        return stdout.decode("utf-8", errors="strict").rstrip("\r\n")
     except UnicodeError as exc:
         raise RepositoryEvidenceError("git_evidence_encoding_invalid") from exc
 
 
-def collect_repository_provenance(repository_root: str | Path) -> dict[str, Any]:
+def collect_repository_provenance(
+    repository_root: str | Path,
+    *,
+    expected_git_executable_sha512: str,
+    git_executable: str = "git",
+) -> dict[str, Any]:
     root = validated_root(repository_root)
-    commit = _git(root, "rev-parse", "HEAD")
-    branch = _git(root, "branch", "--show-current")
-    status = _git(root, "status", "--porcelain=v1", "--untracked-files=all")
-    tracked = _git(root, "ls-files", "-z").split("\x00")
+    try:
+        runner = PinnedGit(git_executable, expected_git_executable_sha512)
+    except SecureGitError as exc:
+        raise RepositoryEvidenceError("git_evidence_unavailable") from exc
+    commit = _git(runner, root, "rev-parse", "HEAD")
+    branch = _git(runner, root, "branch", "--show-current")
+    status = _git(
+        runner, root, "status", "--porcelain=v1", "--untracked-files=all"
+    )
+    tracked = _git(runner, root, "ls-files", "-z").split("\x00")
     tracked = sorted(path for path in tracked if path)
+    if (
+        len(tracked) > MAX_TRACKED_PATHS
+        or sum(len(path.encode("utf-8")) for path in tracked)
+        > MAX_TRACKED_PATH_INDEX_BYTES
+    ):
+        raise RepositoryEvidenceError("git_tracked_path_limit")
     if len(commit) != 40 or any(character not in "0123456789abcdef" for character in commit):
         raise RepositoryEvidenceError("git_commit_invalid")
     if not branch:
@@ -111,6 +60,7 @@ def collect_repository_provenance(repository_root: str | Path) -> dict[str, Any]
     return {
         "git_commit": commit,
         "git_branch": branch,
+        "git_executable_sha512": runner.executable_sha512,
         "working_tree_clean": status == "",
         "working_tree_status_digest": digest({"porcelain_v1": status}),
         "working_tree_status_entry_count": len(status.splitlines()) if status else 0,

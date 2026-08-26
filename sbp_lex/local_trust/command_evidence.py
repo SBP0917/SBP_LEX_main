@@ -9,6 +9,7 @@ import os
 import platform
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -29,6 +30,205 @@ from .paths import validated_root
 
 class CommandEvidenceError(ValueError):
     pass
+
+
+_INHERITED_ENVIRONMENT_ALLOWLIST = frozenset(
+    {
+        "COMSPEC",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "NUMBER_OF_PROCESSORS",
+        "OS",
+        "PROCESSOR_ARCHITECTURE",
+        "PROGRAMDATA",
+        "PROGRAMFILES",
+        "PROGRAMFILES(X86)",
+        "PROGRAMW6432",
+        "SYSTEMDRIVE",
+        "SYSTEMROOT",
+        "TEMP",
+        "TMP",
+        "WINDIR",
+    }
+)
+_ENVIRONMENT_POLICY_ID = "SBP_LEX_V2_LOCAL_TRUST_COMMAND_ENVIRONMENT_V1"
+
+
+def _command_environment() -> dict[str, str]:
+    """Build a minimal host environment and remove inherited code-injection knobs."""
+
+    environment = {
+        name.upper(): value
+        for name, value in os.environ.items()
+        if name.upper() in _INHERITED_ENVIRONMENT_ALLOWLIST
+    }
+    environment.update(
+        {
+            "CARGO_INCREMENTAL": "0",
+            "CARGO_NET_OFFLINE": "true",
+            "CARGO_TERM_COLOR": "never",
+            "GIT_CONFIG_COUNT": "0",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+            "NO_COLOR": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONHASHSEED": "0",
+            "PYTHONIOENCODING": "utf-8",
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONSAFEPATH": "1",
+            "PYTEST_ADDOPTS": "-p no:cacheprovider",
+            "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+            "RUST_BACKTRACE": "0",
+            "PATH": os.pathsep.join(
+                sorted(
+                    {
+                        str(Path(executable).resolve(strict=True).parent)
+                        for executable in (
+                            sys.executable,
+                            *(shutil.which(name) for name in ("alr", "cargo", "git", "java")),
+                        )
+                        if executable is not None
+                    },
+                    key=str.casefold,
+                )
+            ),
+        }
+    )
+    return environment
+
+
+_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
+_MAX_COMMAND_INPUT_FILE_BYTES = 268_435_456
+
+
+def _is_link_or_reparse(metadata: os.stat_result) -> bool:
+    return stat.S_ISLNK(metadata.st_mode) or bool(
+        getattr(metadata, "st_file_attributes", 0) & _REPARSE_POINT
+    )
+
+
+def _stable_file_measurement(
+    path: Path, *, executable: bool
+) -> tuple[str, int, int, int, int, int, int, str]:
+    descriptor: int | None = None
+    try:
+        resolved = path.resolve(strict=True)
+        if (
+            not path.is_absolute()
+            or os.path.normcase(os.path.abspath(path))
+            != os.path.normcase(str(resolved))
+        ):
+            raise CommandEvidenceError("command_input_path_alias_rejected")
+        for component in (*reversed(path.parents), path):
+            if _is_link_or_reparse(component.lstat()):
+                raise CommandEvidenceError("command_input_path_link_rejected")
+        before = path.lstat()
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or _is_link_or_reparse(before)
+            or before.st_nlink != 1
+            or not 0 < before.st_size <= _MAX_COMMAND_INPUT_FILE_BYTES
+            or (
+                executable
+                and path.suffix.casefold()
+                in {".bat", ".cmd", ".com", ".ps1", ".py", ".sh"}
+            )
+        ):
+            raise CommandEvidenceError("command_input_file_invalid")
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_BINARY", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        descriptor = os.open(resolved, flags)
+        opened = os.fstat(descriptor)
+        identity = (
+            int(before.st_dev),
+            int(before.st_ino),
+            int(before.st_size),
+            int(before.st_mtime_ns),
+            int(before.st_ctime_ns),
+            int(before.st_nlink),
+        )
+        if (
+            int(opened.st_dev),
+            int(opened.st_ino),
+            int(opened.st_size),
+            int(opened.st_mtime_ns),
+            int(opened.st_nlink),
+        ) != (identity[0], identity[1], identity[2], identity[3], identity[5]):
+            raise CommandEvidenceError("command_input_file_changed")
+        content_digest = sha512()
+        observed = 0
+        first = True
+        while True:
+            chunk = os.read(
+                descriptor,
+                min(1_048_576, _MAX_COMMAND_INPUT_FILE_BYTES + 1 - observed),
+            )
+            if not chunk:
+                break
+            if first:
+                first = False
+                if executable and (
+                    chunk.startswith(b"#!")
+                    or (os.name == "nt" and not chunk.startswith(b"MZ"))
+                ):
+                    raise CommandEvidenceError("command_executable_format_invalid")
+            observed += len(chunk)
+            if observed > _MAX_COMMAND_INPUT_FILE_BYTES:
+                raise CommandEvidenceError("command_input_file_too_large")
+            content_digest.update(chunk)
+        after = path.lstat()
+        if (
+            (
+                int(after.st_dev),
+                int(after.st_ino),
+                int(after.st_size),
+                int(after.st_mtime_ns),
+                int(after.st_ctime_ns),
+                int(after.st_nlink),
+            )
+            != identity
+            or observed != before.st_size
+            or _is_link_or_reparse(after)
+        ):
+            raise CommandEvidenceError("command_input_file_changed")
+        return (str(resolved), *identity, content_digest.hexdigest())
+    except CommandEvidenceError:
+        raise
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        raise CommandEvidenceError("command_input_file_unavailable") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _command_file_measurements(
+    arguments: tuple[str, ...], command_root: Path
+) -> tuple[tuple[str, int, int, int, int, int, int, str], ...]:
+    records = [_stable_file_measurement(Path(arguments[0]), executable=True)]
+    for argument in arguments[1:]:
+        raw = argument.removeprefix("@")
+        if not raw or (argument.startswith("-") and not argument.startswith("@")):
+            continue
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            candidate = command_root / candidate
+        try:
+            metadata = candidate.lstat()
+        except (OSError, ValueError):
+            if argument.startswith("@"):
+                raise CommandEvidenceError("command_response_file_unavailable") from None
+            continue
+        if stat.S_ISREG(metadata.st_mode) or _is_link_or_reparse(metadata):
+            records.append(_stable_file_measurement(candidate, executable=False))
+    return tuple(records)
 
 
 class _JobBasicLimitInformation(ctypes.Structure):
@@ -241,9 +441,9 @@ def capture_command(
             raise CommandEvidenceError("command_working_directory_invalid")
     else:
         raise CommandEvidenceError("command_working_directory_invalid")
-    environment = os.environ.copy()
-    environment["PYTHONDONTWRITEBYTECODE"] = "1"
-    environment["PYTEST_ADDOPTS"] = "-p no:cacheprovider"
+    environment = _command_environment()
+    command_root_identity = command_root.lstat()
+    command_files = _command_file_measurements(arguments, command_root)
     started = monotonic_ns()
     stdout = bytearray()
     stderr = bytearray()
@@ -294,8 +494,11 @@ def capture_command(
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
+            timed_out = True
             _terminate(process, windows_job)
             process.wait(timeout=5)
+        if monotonic() >= deadline:
+            timed_out = True
         for reader in readers:
             reader.join(timeout=5)
         if any(reader.is_alive() for reader in readers):
@@ -319,6 +522,24 @@ def capture_command(
     stderr_bytes = bytes(stderr)
     duration_ms = max(0, (monotonic_ns() - started) // 1_000_000)
     full_bytes = not overflow.is_set()
+    try:
+        inputs_stable = (
+            _command_file_measurements(arguments, command_root) == command_files
+            and (
+                command_root.lstat().st_dev,
+                command_root.lstat().st_ino,
+                stat.S_IFMT(command_root.lstat().st_mode),
+            )
+            == (
+                command_root_identity.st_dev,
+                command_root_identity.st_ino,
+                stat.S_IFMT(command_root_identity.st_mode),
+            )
+        )
+    except (CommandEvidenceError, OSError):
+        inputs_stable = False
+    if not inputs_stable:
+        status = "COMMAND_INPUT_CHANGED"
     return {
         **command,
         "status": status,
@@ -376,6 +597,14 @@ def validate_full_byte_transcript(result: Any) -> bool:
 
 def environment_record(repository_root: str | Path) -> dict[str, Any]:
     root = validated_root(repository_root)
+    environment = _command_environment()
+    value_hashes = [
+        {
+            "name": name,
+            "value_sha512": sha512(environment[name].encode("utf-8")).hexdigest(),
+        }
+        for name in sorted(environment)
+    ]
     return {
         "python_executable": str(Path(sys.executable).resolve()),
         "python_version": platform.python_version(),
@@ -383,7 +612,9 @@ def environment_record(repository_root: str | Path) -> dict[str, Any]:
         "platform": platform.platform(),
         "working_directory": str(root),
         "environment_values_retained": False,
-        "environment_name_index_digest": digest({"names": sorted(os.environ)}),
+        "environment_policy_id": _ENVIRONMENT_POLICY_ID,
+        "environment_name_index_digest": digest({"names": sorted(environment)}),
+        "environment_value_hash_index_digest": digest(value_hashes),
     }
 
 

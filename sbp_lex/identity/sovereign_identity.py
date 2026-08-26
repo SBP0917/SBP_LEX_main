@@ -41,7 +41,7 @@ IDENTITY_REVALIDATION_STAGE = "sovereign_identity:revalidation"
 IDENTITY_VERIFIED = "VERIFIED"
 IDENTITY_DENY = "DENY"
 
-_SOURCE_FIELDS = {
+_SOURCE_FIELDS = frozenset({
     "evaluator_id",
     "evaluator_version",
     "issuer_credential",
@@ -56,9 +56,9 @@ _SOURCE_FIELDS = {
     "digest",
     "signature",
     "verified",
-}
+})
 
-_DETERMINATION_FIELDS = {
+_DETERMINATION_FIELDS = frozenset({
     "result",
     "identity_credential_id",
     "bindings",
@@ -66,7 +66,7 @@ _DETERMINATION_FIELDS = {
     "revocation_status",
     "revocation_sequence",
     "evidence_references",
-}
+})
 
 _BINDING_FIELDS = (
     "subject_identity",
@@ -75,7 +75,7 @@ _BINDING_FIELDS = (
     "access_grants",
 )
 
-_RECORD_FIELDS = {
+_RECORD_FIELDS = frozenset({
     "stage",
     "evaluation_sequence",
     "request_fingerprint",
@@ -95,7 +95,7 @@ _RECORD_FIELDS = {
     "licence_granted",
     "execution_authority_granted",
     "effect_authority_granted",
-}
+})
 
 
 class SovereignIdentityAttestationProvider(SignatureProvider, Protocol):

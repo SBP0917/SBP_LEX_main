@@ -59,7 +59,7 @@ MANDATE_REVOKED: Final = "REVOKED"
 MANDATE_EXPIRED: Final = "EXPIRED"
 MANDATE_INDETERMINATE: Final = "INDETERMINATE"
 
-_SOURCE_FIELDS: Final = {
+_SOURCE_FIELDS: Final = frozenset({
     "contract_id",
     "schema_status",
     "evaluator_id",
@@ -76,8 +76,8 @@ _SOURCE_FIELDS: Final = {
     "digest",
     "signature",
     "verified",
-}
-_SNAPSHOT_FIELDS: Final = {
+})
+_SNAPSHOT_FIELDS: Final = frozenset({
     "contract_id",
     "schema_status",
     "stakeholder_classes",
@@ -91,8 +91,8 @@ _SNAPSHOT_FIELDS: Final = {
     "stakeholder_class",
     "requested_action",
     "requested_jurisdiction",
-}
-_DETERMINATION_FIELDS: Final = {
+})
+_DETERMINATION_FIELDS: Final = frozenset({
     "result",
     "participant_id",
     "stakeholder_class",
@@ -112,8 +112,8 @@ _DETERMINATION_FIELDS: Final = {
     "execution_authority_granted",
     "effect_authority_granted",
     "pipeline_bypass_permitted",
-}
-_RECORD_FIELDS: Final = {
+})
+_RECORD_FIELDS: Final = frozenset({
     "contract_id",
     "schema_status",
     "stakeholder_classes",
@@ -132,7 +132,7 @@ _RECORD_FIELDS: Final = {
     "execution_authority_granted",
     "effect_authority_granted",
     "pipeline_bypass_permitted",
-}
+})
 
 
 class AuthorityBoundaryEvaluator(Protocol):

@@ -158,7 +158,7 @@ class FixedClockFixture:
             "clock_sequence": self.clock_sequence,
             "prior_clock_record_digest": self.prior_clock_record_digest,
             "now_ms": self.now,
-            "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+            "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
         }
         if self.record_mutation is not None:
             self.record_mutation(payload)
@@ -228,7 +228,7 @@ class DurableClockHeadFixture:
                 self.latest_transition_receipt_digest
             ),
             "observed_at_ms": self.observed_at_ms,
-            "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+            "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
         }
         if self.head_mutation is not None and (
             self.head_mutation_on_read is None
@@ -450,7 +450,7 @@ class DurableReplayGuardFixture:
             "claim_sequence": self.claim_sequence,
             "latest_claim_receipt_digest": self.latest_receipt_digest,
             "observed_at_ms": observed_at_ms,
-            "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+            "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
         }
         if self.head_mutation is not None:
             self.head_mutation(payload)
@@ -519,7 +519,7 @@ class DurableReplayGuardFixture:
             "revocation_sequence": self.revocation_sequence,
             "observed_at_ms": observed_at_ms,
             "persisted": persisted,
-            "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+            "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
         }
         if self.persistence_mutation is not None:
             self.persistence_mutation(payload)
@@ -679,8 +679,8 @@ class ImpersonationProtectionTests(unittest.TestCase):
             "minimum_clock_sequence": 1,
             "valid_from_ms": 0,
             "valid_until_ms": 5_000,
-            "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
-            "deployment_dependencies": deepcopy(DEPLOYMENT_DEPENDENCIES),
+            "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
+            "deployment_dependencies": dict(DEPLOYMENT_DEPENDENCIES),
         }
 
     def make_context(self, **changes) -> ImpersonationTrustContext:
@@ -721,7 +721,7 @@ class ImpersonationProtectionTests(unittest.TestCase):
                 "result": result,
                 "request_fingerprint": request_fingerprint,
                 "evaluation_time": self.now,
-                "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+                "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
             },
             provider=provider,
         )
@@ -1280,7 +1280,7 @@ class ImpersonationProtectionTests(unittest.TestCase):
                     "claim_sequence": 0,
                     "latest_claim_receipt_digest": GENESIS_HASH,
                     "observed_at_ms": self.now,
-                    "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+                    "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
                 },
                 provider=self.replay_provider,
             )

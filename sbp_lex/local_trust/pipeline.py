@@ -50,7 +50,7 @@ class _ValidationTrustArgs(TypedDict):
     owner_pinned_clock_context_digest: str
 
 
-_PACKAGE_UNSIGNED_FIELDS = {
+_PACKAGE_UNSIGNED_FIELDS = frozenset({
     "package_schema",
     "composition_class",
     "repository_identity_digest",
@@ -65,8 +65,8 @@ _PACKAGE_UNSIGNED_FIELDS = {
     "package_status",
     "no_authority",
     "detached_boundary",
-}
-_PACKAGE_FIELDS = _PACKAGE_UNSIGNED_FIELDS | {"package_digest"}
+})
+_PACKAGE_FIELDS = _PACKAGE_UNSIGNED_FIELDS | frozenset({"package_digest"})
 
 
 def _signer_matches_deployment(
@@ -161,6 +161,9 @@ def build_local_trust_package(
         time_evidence=time_for(1),
         repository_identity_digest=repository_identity_digest,
         accepted_history=accepted_history,
+        expected_git_executable_sha512=(
+            deployment.expected_executable_sha512_pins["git"]
+        ),
     )
     artifacts.append(manifest)
     envelope = build_execution_envelope(
@@ -372,6 +375,9 @@ def validate_local_trust_package(
             expected_accepted_history_digest=history_digest,
             expected_accepted_history_sequence=history_sequence,
             expected_accepted_history_live_head_digest=history_live_head_digest,
+            expected_git_executable_sha512=(
+                deployment.expected_executable_sha512_pins["git"]
+            ),
         ),
         validate_execution_envelope(
             envelope,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from types import MappingProxyType
 from typing import Any, Final, Protocol
 
 from sbp_lex.security.integrity import (
@@ -21,28 +22,28 @@ THREE_P_DOCTRINE_ID: Final = "SBP_LEX_3P_CORE_FINAL_MASTER_SPEC_4_3_26"
 THREE_P_AUTHORITY_ROLE: Final = "CONSTITUTIONAL_3P_EVALUATOR"
 THREE_P_ATTESTATION_PURPOSE: Final = "SBP_LEX_V2_THREE_P_ATTESTATION"
 THREE_P_PRIMITIVES: Final = ("P1", "P2", "P3")
-THREE_P_DEFINITIONS: Final[dict[str, dict[str, str]]] = {
-    "P1": {
+THREE_P_DEFINITIONS: Final = MappingProxyType({
+    "P1": MappingProxyType({
         "name": "Planetary Stability Engine (PSE)",
         "definition": (
             "Non-negotiable ecological and planetary constraint enforcement."
         ),
-    },
-    "P2": {
+    }),
+    "P2": MappingProxyType({
         "name": "Population Integrity Engine (PIE)",
         "definition": (
             "Human continuity, dignity, cohesion, and socio-economic stability "
             "preservation."
         ),
-    },
-    "P3": {
+    }),
+    "P3": MappingProxyType({
         "name": "Permanent Sovereign Governance Cycle (PSGC)",
         "definition": (
             "Continuous rule validation, lawful recalibration, and authority "
             "continuity loop."
         ),
-    },
-}
+    }),
+})
 MECHANICALLY_CONSTRAINED_PROCESSES: Final = (
     "optimisation",
     "modelling",
@@ -58,7 +59,7 @@ MECHANICALLY_CONSTRAINED_PROCESSES: Final = (
 
 _SATISFIED: Final = "SATISFIED"
 _NOT_SATISFIED: Final = "NOT_SATISFIED"
-_EVALUATION_FIELDS: Final = {
+_EVALUATION_FIELDS: Final = frozenset({
     "evaluator_id",
     "evaluator_version",
     "authority_credential",
@@ -73,7 +74,7 @@ _EVALUATION_FIELDS: Final = {
     "digest",
     "signature",
     "verified",
-}
+})
 
 
 class ThreePCoreEvaluator(Protocol):

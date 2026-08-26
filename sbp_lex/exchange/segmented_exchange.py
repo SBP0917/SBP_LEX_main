@@ -19,6 +19,7 @@ from hashlib import sha512
 import hmac
 import os
 from threading import Lock
+from types import MappingProxyType
 from typing import Any, Protocol, TypeGuard
 
 from cryptography.exceptions import InvalidTag
@@ -46,21 +47,21 @@ EXCHANGE_SIGNING_PURPOSE = "SBP_LEX_V2_SEGMENTED_EXCHANGE_ENVELOPE"
 EXCHANGE_ACTIVE = "ACTIVE"
 EXCHANGE_REVOKED = "REVOKED"
 
-EXTERNAL_BOUNDARIES = {
+EXTERNAL_BOUNDARIES = MappingProxyType({
     "transport": "EXTERNAL_AND_UNPROVEN",
     "durable_key_custody": "EXTERNAL_AND_UNPROVEN",
     "distributed_enforcement": "EXTERNAL_AND_UNPROVEN",
-}
+})
 
-NO_AUTHORIZATION_EFFECT = {
+NO_AUTHORIZATION_EFFECT = MappingProxyType({
     "access_granted": False,
     "authority_granted": False,
     "licence_granted": False,
     "execution_authority_granted": False,
     "effect_authority_granted": False,
-}
+})
 
-_SIGNED_ENVELOPE_FIELDS = {
+_SIGNED_ENVELOPE_FIELDS = frozenset({
     "schema_id",
     "external_boundaries",
     "envelope_authority",
@@ -73,9 +74,9 @@ _SIGNED_ENVELOPE_FIELDS = {
     "digest",
     "signature",
     "verified",
-}
+})
 
-_BINDING_FIELDS = {
+_BINDING_FIELDS = frozenset({
     "exchange_id",
     "request_fingerprint",
     "evaluation_time",
@@ -88,9 +89,9 @@ _BINDING_FIELDS = {
     "revocation_status",
     "revocation_sequence",
     "segment_count",
-}
+})
 
-_SEGMENT_FIELDS = {
+_SEGMENT_FIELDS = frozenset({
     "segment_id",
     "segment_index",
     "key_id",
@@ -98,14 +99,14 @@ _SEGMENT_FIELDS = {
     "ciphertext_b64",
     "aad_digest",
     "ciphertext_digest",
-}
+})
 
-_RECORD_FIELDS = {
+_RECORD_FIELDS = frozenset({
     "result",
     "envelope",
     "envelope_digest",
     "audit_digests",
-}
+})
 
 
 class SegmentedExchangeRejected(ValueError):
@@ -506,7 +507,7 @@ def build_segmented_exchange(
     manifest = [segment["segment_id"] for segment in encrypted_segments]
     payload = {
         "schema_id": SCHEMA_ID,
-        "external_boundaries": deepcopy(EXTERNAL_BOUNDARIES),
+        "external_boundaries": dict(EXTERNAL_BOUNDARIES),
         "envelope_authority": authority_metadata,
         "bindings": bindings,
         "binding_digest": canonical_integrity_hash(bindings),
@@ -515,7 +516,7 @@ def build_segmented_exchange(
             encrypted_segments
         ),
         "segments": encrypted_segments,
-        "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+        "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
     }
     try:
         envelope = build_hybrid_signed_object(
@@ -754,5 +755,5 @@ def verify_and_decrypt_segmented_exchange(
         "exchange_id": bindings["exchange_id"],
         "segments": plaintext_segments,
         "audit_digests": deepcopy(record["audit_digests"]),
-        "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+        "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
     }

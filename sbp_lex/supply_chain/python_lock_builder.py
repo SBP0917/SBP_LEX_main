@@ -9,12 +9,14 @@ import json
 import os
 import platform
 import stat
+import struct
 import sys
 import sysconfig
+import unicodedata
 import zipfile
 from collections.abc import Mapping, Sequence
 from email.parser import BytesParser
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from packaging.requirements import InvalidRequirement, Requirement
@@ -47,7 +49,21 @@ from .python_inventory import (
 
 _MAX_WHEEL_BYTES = 268_435_456
 _MAX_METADATA_BYTES = 16_777_216
+_MAX_WHEEL_MEMBERS = 20_000
+_MAX_WHEEL_CENTRAL_DIRECTORY_BYTES = 16_777_216
+_MAX_WHEEL_MEMBER_NAME_BYTES = 4_096
+_MAX_WHEEL_MEMBER_NAME_TOTAL_BYTES = 16_777_216
+_MAX_WHEEL_COMMENT_BYTES = 1_024
 _WINDOWS_REPARSE_POINT = 0x400
+_ZIP_END_SIGNATURE = b"PK\x05\x06"
+_ALLOWED_ZIP_COMPRESSION = frozenset(
+    {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
+)
+_WINDOWS_DEVICE_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    | {f"COM{index}" for index in range(1, 10)}
+    | {f"LPT{index}" for index in range(1, 10)}
+)
 
 
 def _is_reparse(value: os.stat_result) -> bool:
@@ -60,6 +76,12 @@ def _require_safe_directory(path: Path, *, code: str) -> os.stat_result:
         if stat.S_ISLNK(supplied.st_mode) or _is_reparse(supplied):
             raise reject(code)
         resolved = path.resolve(strict=True)
+        if (
+            not path.is_absolute()
+            or os.path.normcase(os.path.abspath(path))
+            != os.path.normcase(str(resolved))
+        ):
+            raise reject(code)
         current = resolved
         while True:
             info = current.lstat()
@@ -208,6 +230,77 @@ def _metadata_dependencies(
     return sorted(dependencies)
 
 
+def _preflight_wheel_zip(content: bytes) -> None:
+    """Bound the central directory before ZipFile allocates member objects."""
+
+    minimum = struct.calcsize("<4s4H2LH")
+    if len(content) < minimum:
+        raise reject("SUPPLY_CHAIN_PYTHON_WHEEL_ARCHIVE_INVALID")
+    search_start = max(0, len(content) - (65_535 + minimum))
+    end_offset = content.rfind(_ZIP_END_SIGNATURE, search_start)
+    if end_offset < 0 or end_offset + minimum > len(content):
+        raise reject("SUPPLY_CHAIN_PYTHON_WHEEL_ARCHIVE_INVALID")
+    try:
+        (
+            signature,
+            disk_number,
+            central_disk,
+            disk_entries,
+            total_entries,
+            central_size,
+            central_offset,
+            comment_size,
+        ) = struct.unpack_from("<4s4H2LH", content, end_offset)
+    except struct.error as exc:
+        raise reject("SUPPLY_CHAIN_PYTHON_WHEEL_ARCHIVE_INVALID") from exc
+    if (
+        signature != _ZIP_END_SIGNATURE
+        or disk_number != 0
+        or central_disk != 0
+        or disk_entries != total_entries
+        or not 1 <= total_entries <= _MAX_WHEEL_MEMBERS
+        or central_size > _MAX_WHEEL_CENTRAL_DIRECTORY_BYTES
+        or comment_size > _MAX_WHEEL_COMMENT_BYTES
+        or end_offset + minimum + comment_size != len(content)
+        or central_offset + central_size != end_offset
+        or total_entries == 0xFFFF
+        or central_size == 0xFFFFFFFF
+        or central_offset == 0xFFFFFFFF
+    ):
+        raise reject("SUPPLY_CHAIN_PYTHON_WHEEL_ARCHIVE_INVALID")
+
+
+def _wheel_member_valid(item: zipfile.ZipInfo) -> bool:
+    name = item.filename
+    encoded_name = name.encode("utf-8", errors="strict")
+    canonical = name.removesuffix("/")
+    path = PurePosixPath(canonical)
+    unix_mode = (item.external_attr >> 16) & 0xFFFF
+    file_type = stat.S_IFMT(unix_mode) if unix_mode else 0
+    safe_parts = bool(path.parts) and all(
+        part not in {"", ".", ".."}
+        and ":" not in part
+        and not part.endswith((" ", "."))
+        and part.split(".", maxsplit=1)[0].upper() not in _WINDOWS_DEVICE_NAMES
+        for part in path.parts
+    )
+    return (
+        bool(canonical)
+        and len(encoded_name) <= _MAX_WHEEL_MEMBER_NAME_BYTES
+        and unicodedata.normalize("NFC", name) == name
+        and "\x00" not in name
+        and "\\" not in name
+        and not name.startswith("/")
+        and canonical == path.as_posix()
+        and safe_parts
+        and item.compress_type in _ALLOWED_ZIP_COMPRESSION
+        and not item.flag_bits & 0x1
+        and file_type in {0, stat.S_IFREG, stat.S_IFDIR}
+        and (not item.is_dir() or file_type in {0, stat.S_IFDIR})
+        and (item.is_dir() or file_type in {0, stat.S_IFREG})
+    )
+
+
 def _read_wheel_record(
     path: Path,
     *,
@@ -226,6 +319,7 @@ def _read_wheel_record(
     actual_hash = f"sha256:{hashlib.sha256(content).hexdigest()}"
     if actual_hash != expected_hash:
         raise reject("SUPPLY_CHAIN_PYTHON_WHEEL_HASH_MISMATCH")
+    _preflight_wheel_zip(content)
     try:
         wheel_name, wheel_version, _build, wheel_tags = parse_wheel_filename(path.name)
     except InvalidWheelFilename as exc:
@@ -241,14 +335,12 @@ def _read_wheel_record(
             members = archive.infolist()
             names = [item.filename for item in members]
             if (
-                len(names) != len(set(names))
-                or any(
-                    not name
-                    or name.startswith(("/", "\\"))
-                    or "\\" in name
-                    or ".." in Path(name).parts
-                    for name in names
-                )
+                len(members) > _MAX_WHEEL_MEMBERS
+                or len(names) != len(set(names))
+                or len({name.casefold() for name in names}) != len(names)
+                or sum(len(name.encode("utf-8")) for name in names)
+                > _MAX_WHEEL_MEMBER_NAME_TOTAL_BYTES
+                or any(not _wheel_member_valid(item) for item in members)
                 or sum(item.file_size for item in members) > _MAX_WHEEL_BYTES
                 or any(
                     item.file_size > _MAX_WHEEL_BYTES
@@ -281,13 +373,53 @@ def _read_wheel_record(
                 != wheel_names[0].filename.rsplit("/", 1)[0]
             ):
                 raise reject("SUPPLY_CHAIN_PYTHON_WHEEL_METADATA_INVALID")
-            metadata = archive.read(metadata_names[0])
-            wheel_metadata = archive.read(wheel_names[0])
+            metadata = b""
+            wheel_metadata = b""
+            observed_total = 0
+            for item in members:
+                if item.is_dir():
+                    continue
+                retained = (
+                    item is metadata_names[0] or item is wheel_names[0]
+                )
+                chunks: list[bytes] = []
+                observed_member = 0
+                with archive.open(item, "r") as member_stream:
+                    while True:
+                        chunk = member_stream.read(65_536)
+                        if not chunk:
+                            break
+                        observed_member += len(chunk)
+                        observed_total += len(chunk)
+                        if (
+                            observed_member > item.file_size
+                            or observed_total > _MAX_WHEEL_BYTES
+                        ):
+                            raise reject(
+                                "SUPPLY_CHAIN_PYTHON_WHEEL_ARCHIVE_INVALID"
+                            )
+                        if retained:
+                            chunks.append(chunk)
+                if observed_member != item.file_size:
+                    raise reject("SUPPLY_CHAIN_PYTHON_WHEEL_ARCHIVE_INVALID")
+                if item is metadata_names[0]:
+                    metadata = b"".join(chunks)
+                elif item is wheel_names[0]:
+                    wheel_metadata = b"".join(chunks)
             if b"Wheel-Version:" not in wheel_metadata:
                 raise reject("SUPPLY_CHAIN_PYTHON_WHEEL_METADATA_INVALID")
     except PTDEVerificationError:
         raise
-    except (OSError, KeyError, RuntimeError, zipfile.BadZipFile) as exc:
+    except (
+        EOFError,
+        NotImplementedError,
+        OSError,
+        KeyError,
+        RuntimeError,
+        UnicodeError,
+        ValueError,
+        zipfile.BadZipFile,
+    ) as exc:
         raise reject("SUPPLY_CHAIN_PYTHON_WHEEL_ARCHIVE_INVALID") from exc
     return {
         "name": expected_name,
@@ -575,6 +707,21 @@ def write_python_lock_document_exclusive(
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
+        try:
+            parent_descriptor = os.open(path.parent, os.O_RDONLY)
+        except OSError as exc:
+            if os.name != "nt":
+                raise reject("SUPPLY_CHAIN_PYTHON_LOCK_OUTPUT_PARENT_SYNC_FAILED") from exc
+        else:
+            try:
+                os.fsync(parent_descriptor)
+            except OSError as exc:
+                if os.name != "nt":
+                    raise reject(
+                        "SUPPLY_CHAIN_PYTHON_LOCK_OUTPUT_PARENT_SYNC_FAILED"
+                    ) from exc
+            finally:
+                os.close(parent_descriptor)
         parent_after = path.parent.resolve(strict=True).lstat()
         if (parent_before.st_dev, parent_before.st_ino) != (
             parent_after.st_dev,

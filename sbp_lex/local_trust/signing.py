@@ -5,9 +5,10 @@ from __future__ import annotations
 import base64
 import binascii
 import hmac
+from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha512
-from typing import Any, Mapping
+from typing import Any
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
@@ -26,8 +27,8 @@ from .constants import (
     HYBRID_SIGNATURE_PROFILE,
     PRODUCTION,
     SIGNER_CLASSES,
-    SIGNING_PURPOSES,
     SIGNING_DOMAIN,
+    SIGNING_PURPOSES,
     TEST_ONLY,
     TRUST_CONTEXT_SCHEMA,
 )
@@ -428,7 +429,7 @@ class HybridSigningContext:
         )
 
 
-_SIGNATURE_FIELDS = {
+_SIGNATURE_FIELDS = frozenset({
     "signature_profile",
     "verification_rule",
     "transition_policy",
@@ -447,8 +448,8 @@ _SIGNATURE_FIELDS = {
     "dual_custody_admission_sha512",
     "mldsa87",
     "ed448",
-}
-_LANE_FIELDS = {"algorithm", "fingerprint", "signature_b64"}
+})
+_LANE_FIELDS = frozenset({"algorithm", "fingerprint", "signature_b64"})
 
 
 def sign_hybrid(unsigned: Mapping[str, Any], signer: HybridSigningContext) -> dict[str, Any]:
@@ -686,11 +687,11 @@ def verification_context_from_record(
 
 
 __all__ = [
+    "PRODUCTION_DUAL_CUSTODY_CLASS",
     "DualSignatureLaneCustody",
     "HybridSigningContext",
     "HybridVerificationContext",
     "LocalTrustSignatureError",
-    "PRODUCTION_DUAL_CUSTODY_CLASS",
     "raw_public_key_key_id",
     "sign_hybrid",
     "verification_context_from_record",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import importlib.metadata
+import json
 import os
 import platform
 import sys
@@ -149,7 +150,7 @@ def test_detached_canonical_sha512_matches_exact_v2_contract() -> None:
 def test_hybrid_requires_both_exact_lanes_and_owner_pin(signers: dict) -> None:
     signer = signers["artifact"]
     context = signer.verification_context(allow_test_only=True)
-    unsigned = {"payload": "evidence", "no_authority": NO_AUTHORITY}
+    unsigned = {"payload": "evidence", "no_authority": dict(NO_AUTHORITY)}
     signatures = sign_hybrid(unsigned, signer)
     assert verify_hybrid(
         unsigned,
@@ -553,6 +554,88 @@ def test_command_capture_retains_full_bytes_and_fails_closed_on_overflow(
     assert not command_evidence.validate_full_byte_transcript(overflow)
 
 
+def test_command_script_argument_mutation_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = tmp_path / "mutable-command.py"
+    script.write_text(
+        "from pathlib import Path\n"
+        "Path(__file__).write_text('mutated\\n', encoding='utf-8')\n"
+        "print('executed')\n",
+        encoding="utf-8",
+    )
+    arguments = ("{python}", "-I", str(script))
+    monkeypatch.setattr(
+        command_evidence,
+        "COMMAND_POLICY",
+        (("mutable_command", arguments, True),),
+    )
+
+    result = command_evidence.capture_command(
+        tmp_path,
+        command_evidence.resolved_command_policy()[0],
+        timeout_seconds=10,
+    )
+
+    assert result["status"] == "COMMAND_INPUT_CHANGED"
+
+
+def test_command_environment_drops_inherited_code_injection_controls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hostile = tmp_path / "hostile-python-path"
+    hostile.mkdir()
+    marker = tmp_path / "sitecustomize-executed.txt"
+    (hostile / "sitecustomize.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    baseline = command_evidence.environment_record(tmp_path)
+    monkeypatch.setenv("PYTHONPATH", str(hostile))
+    monkeypatch.setenv("PYTEST_PLUGINS", "hostile_plugin")
+    monkeypatch.setenv("RUSTC_WRAPPER", str(hostile / "rust-wrapper"))
+    monkeypatch.setenv("JAVA_TOOL_OPTIONS", "-javaagent:hostile.jar")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.fsmonitor")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "hostile-helper")
+    arguments = (
+        "{python}",
+        "-c",
+        (
+            "import json,os;print(json.dumps({k:os.environ.get(k) for k in "
+            "['PYTHONPATH','PYTEST_PLUGINS','RUSTC_WRAPPER','JAVA_TOOL_OPTIONS',"
+            "'GIT_CONFIG_COUNT','PYTEST_DISABLE_PLUGIN_AUTOLOAD']}))"
+        ),
+    )
+    monkeypatch.setattr(
+        command_evidence,
+        "COMMAND_POLICY",
+        (("environment_probe", arguments, True),),
+    )
+
+    result = command_evidence.capture_command(
+        tmp_path,
+        command_evidence.resolved_command_policy()[0],
+        timeout_seconds=10,
+    )
+    observed = json.loads(base64.b64decode(result["stdout_b64"]))
+
+    assert result["status"] == "COMMAND_PASS"
+    assert observed == {
+        "PYTHONPATH": None,
+        "PYTEST_PLUGINS": None,
+        "RUSTC_WRAPPER": None,
+        "JAVA_TOOL_OPTIONS": None,
+        "GIT_CONFIG_COUNT": "0",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+    }
+    assert command_evidence.environment_record(tmp_path) == baseline
+    assert not marker.exists()
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows Job Object containment")
 def test_command_timeout_terminates_the_entire_windows_process_tree(
     tmp_path: Path,
@@ -578,10 +661,12 @@ def test_command_timeout_terminates_the_entire_windows_process_tree(
     assert result["status"] == "COMMAND_TIMEOUT"
     time.sleep(3)
     assert not marker.exists()
-    repository_source = Path("sbp_lex/local_trust/repository.py").read_text(encoding="utf-8")
-    assert "_WindowsCommandJob(process)" in repository_source
-    assert "creationflags=_windows_creation_flags()" in repository_source
-    assert "_terminate(process, windows_job)" in repository_source
+    secure_git_source = Path("sbp_lex/local_trust/secure_git.py").read_text(
+        encoding="utf-8"
+    )
+    assert "_WindowsCommandJob(process)" in secure_git_source
+    assert "creationflags=_windows_creation_flags()" in secure_git_source
+    assert "_terminate(process, windows_job)" in secure_git_source
 
 
 def test_present_tested_but_inactive_requires_source_log_and_status() -> None:

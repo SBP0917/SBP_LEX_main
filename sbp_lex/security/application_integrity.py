@@ -5,8 +5,10 @@ import binascii
 import os
 import stat
 import unicodedata
+from collections.abc import Set as AbstractSet
 from hashlib import sha512
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import Any, Protocol
 
 from cryptography.exceptions import InvalidSignature
@@ -50,16 +52,16 @@ ADMISSION_AUTHORITY_ROLE = "SBP_LEX_RELEASE_ADMISSION_AUTHORITY"
 ACTIVE = "ACTIVE"
 GENESIS = "GENESIS"
 
-NO_AUTHORIZATION_EFFECT = {
+NO_AUTHORIZATION_EFFECT = MappingProxyType({
     "authority_granted": False,
     "governance_authority_granted": False,
     "licence_granted": False,
     "execution_authority_granted": False,
     "effect_authority_granted": False,
     "bypass_granted": False,
-}
+})
 
-ASSURANCE_LIMITS = {
+ASSURANCE_LIMITS = MappingProxyType({
     "os_secure_boot": "NOT_PROVEN",
     "platform_code_signing": "NOT_PROVEN",
     "tpm_measurement": "NOT_PROVEN",
@@ -69,9 +71,9 @@ ASSURANCE_LIMITS = {
     "final_execute_time_remeasurement": "NOT_PROVEN",
     "same_verified_file_handle_execution": "NOT_PROVEN",
     "private_composition_root_isolation": "NOT_PROVEN",
-}
+})
 
-_MANIFEST_PAYLOAD_FIELDS = {
+_MANIFEST_PAYLOAD_FIELDS = frozenset({
     "schema_id",
     "release_id",
     "release_version",
@@ -87,20 +89,20 @@ _MANIFEST_PAYLOAD_FIELDS = {
     "issuer",
     "authorization_effect",
     "assurance_limits",
-}
-_SIGNED_OBJECT_FIELDS = _MANIFEST_PAYLOAD_FIELDS | {
+})
+_SIGNED_OBJECT_FIELDS = _MANIFEST_PAYLOAD_FIELDS | frozenset({
     "digest",
     "signature",
     "verified",
-}
-_FILE_FIELDS = {"path", "size", "sha512"}
-_BINDING_FIELDS = {
+})
+_FILE_FIELDS = frozenset({"path", "size", "sha512"})
+_BINDING_FIELDS = frozenset({
     "dependency_locks",
     "configuration",
     "rust_core",
     "formal_spec",
-}
-_ISSUER_FIELDS = {
+})
+_ISSUER_FIELDS = frozenset({
     "issuer_id",
     "issuer_version",
     "authority_role",
@@ -111,8 +113,8 @@ _ISSUER_FIELDS = {
     "custody_class",
     "effect_authority",
     "signer_class",
-}
-_TRUSTED_ADMISSION_PAYLOAD_FIELDS = {
+})
+_TRUSTED_ADMISSION_PAYLOAD_FIELDS = frozenset({
     "schema_id",
     "admission_id",
     "admission_sequence",
@@ -133,13 +135,13 @@ _TRUSTED_ADMISSION_PAYLOAD_FIELDS = {
     "revoked_release_digests",
     "authorization_effect",
     "assurance_limits",
-}
-_TRUSTED_ADMISSION_FIELDS = _TRUSTED_ADMISSION_PAYLOAD_FIELDS | {
+})
+_TRUSTED_ADMISSION_FIELDS = _TRUSTED_ADMISSION_PAYLOAD_FIELDS | frozenset({
     "digest",
     "signature",
     "verified",
-}
-_TRUST_CONTEXT_PAYLOAD_FIELDS = {
+})
+_TRUST_CONTEXT_PAYLOAD_FIELDS = frozenset({
     "schema_id",
     "context_id",
     "context_version",
@@ -159,9 +161,9 @@ _TRUST_CONTEXT_PAYLOAD_FIELDS = {
     "anti_rollback_head_evidence_digest_head",
     "allow_test_only_release_signer",
     "allow_test_only_admission_signer",
-}
-_TRUST_CONTEXT_FIELDS = _TRUST_CONTEXT_PAYLOAD_FIELDS | {"context_digest"}
-_HEAD_SNAPSHOT_PAYLOAD_FIELDS = {
+})
+_TRUST_CONTEXT_FIELDS = _TRUST_CONTEXT_PAYLOAD_FIELDS | frozenset({"context_digest"})
+_HEAD_SNAPSHOT_PAYLOAD_FIELDS = frozenset({
     "schema_id",
     "context_id",
     "head_state_sequence",
@@ -173,9 +175,9 @@ _HEAD_SNAPSHOT_PAYLOAD_FIELDS = {
     "admission_digest_head",
     "revocation_sequence_head",
     "anti_rollback_state_digest",
-}
-_HEAD_SNAPSHOT_FIELDS = _HEAD_SNAPSHOT_PAYLOAD_FIELDS | {"head_snapshot_digest"}
-_TIME_EVIDENCE_PAYLOAD_FIELDS = {
+})
+_HEAD_SNAPSHOT_FIELDS = _HEAD_SNAPSHOT_PAYLOAD_FIELDS | frozenset({"head_snapshot_digest"})
+_TIME_EVIDENCE_PAYLOAD_FIELDS = frozenset({
     "schema_id",
     "context_id",
     "provider_id",
@@ -185,13 +187,13 @@ _TIME_EVIDENCE_PAYLOAD_FIELDS = {
     "observed_at_ms",
     "status",
     "authorization_effect",
-}
-_TIME_EVIDENCE_FIELDS = _TIME_EVIDENCE_PAYLOAD_FIELDS | {
+})
+_TIME_EVIDENCE_FIELDS = _TIME_EVIDENCE_PAYLOAD_FIELDS | frozenset({
     "digest",
     "signature",
     "verified",
-}
-_HEAD_EVIDENCE_PAYLOAD_FIELDS = {
+})
+_HEAD_EVIDENCE_PAYLOAD_FIELDS = frozenset({
     "schema_id",
     "context_id",
     "provider_id",
@@ -202,13 +204,13 @@ _HEAD_EVIDENCE_PAYLOAD_FIELDS = {
     "status",
     "head_snapshot",
     "authorization_effect",
-}
-_HEAD_EVIDENCE_FIELDS = _HEAD_EVIDENCE_PAYLOAD_FIELDS | {
+})
+_HEAD_EVIDENCE_FIELDS = _HEAD_EVIDENCE_PAYLOAD_FIELDS | frozenset({
     "digest",
     "signature",
     "verified",
-}
-_RESULT_PAYLOAD_FIELDS = {
+})
+_RESULT_PAYLOAD_FIELDS = frozenset({
     "schema_id",
     "result",
     "release_id",
@@ -233,9 +235,9 @@ _RESULT_PAYLOAD_FIELDS = {
     "trace_digest",
     "authorization_effect",
     "assurance_limits",
-}
-_RESULT_FIELDS = _RESULT_PAYLOAD_FIELDS | {"result_digest", "receipt"}
-_RECEIPT_PAYLOAD_FIELDS = {
+})
+_RESULT_FIELDS = _RESULT_PAYLOAD_FIELDS | frozenset({"result_digest", "receipt"})
+_RECEIPT_PAYLOAD_FIELDS = frozenset({
     "schema_id",
     "receipt_id",
     "issued_at_ms",
@@ -255,12 +257,12 @@ _RECEIPT_PAYLOAD_FIELDS = {
     "trace_digest",
     "authorization_effect",
     "assurance_limits",
-}
-_RECEIPT_FIELDS = _RECEIPT_PAYLOAD_FIELDS | {
+})
+_RECEIPT_FIELDS = _RECEIPT_PAYLOAD_FIELDS | frozenset({
     "digest",
     "signature",
     "verified",
-}
+})
 
 class ApplicationIntegrityRejected(ValueError):
     """The release cannot cross the application-integrity boundary."""
@@ -1196,8 +1198,8 @@ def _verify_signed_provider_evidence(
     expected_identity: dict[str, Any],
     expected_public_key_hex: str,
     expected_public_key_fingerprint: str,
-    payload_fields: set[str],
-    all_fields: set[str],
+    payload_fields: AbstractSet[str],
+    all_fields: AbstractSet[str],
     code: str,
 ) -> dict[str, Any]:
     try:
@@ -1927,8 +1929,8 @@ def _verify_application_integrity_impl(
         subject=manifest["release_id"],
         evidence={
             "result": "PASS",
-            "authorization_effect": NO_AUTHORIZATION_EFFECT,
-            "assurance_limits": ASSURANCE_LIMITS,
+            "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
+            "assurance_limits": dict(ASSURANCE_LIMITS),
         },
     )
     trace_digest = canonical_integrity_hash(trace)
@@ -2204,8 +2206,8 @@ def _verify_application_integrity_result_impl(
             "runtime_measurement_digest"
         ],
         "trace_digest": result["trace_digest"],
-        "authorization_effect": NO_AUTHORIZATION_EFFECT,
-        "assurance_limits": ASSURANCE_LIMITS,
+        "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
+        "assurance_limits": dict(ASSURANCE_LIMITS),
     }
     if (
         receipt.get("verified") is not False

@@ -190,7 +190,7 @@ class TrustedClock:
                 "clock_sequence": self.clock_sequence,
                 "observed_at": self.value,
                 "status": ACTIVE,
-                "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+                "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
             },
             provider=self,
         )
@@ -232,7 +232,7 @@ class RevocationHeadSource:
             "owner_pin_digest": canonical_integrity_hash(self.owner_pin),
             "authority_role": PROVENANCE_REGISTRY_AUTHORITY_ROLE,
             "authority_credential_id": self.owner_pin["authority_credential_id"],
-            "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+            "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
         }
         return build_signed_object(payload, provider=self.provider)
 
@@ -378,7 +378,7 @@ class DurableAtomicContext:
             "current_registry_head": self._external_head(current_registry),
             "evaluation_time": claim["evaluation_time"],
             "revocation_head_digest": revocation_head_digest,
-            "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+            "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
         }
         if self.fabricate_previous_stream:
             payload["previous_stream_head"] = {
@@ -419,7 +419,7 @@ class DurableAtomicContext:
             "revocation_head_digest": self.last_revocation_head_digest,
             "queried_claim_digest": claim_digest,
             "is_claimed": claim_digest in self.seen_claims,
-            "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+            "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
         }
         return build_signed_object(payload, provider=self)
 
@@ -535,7 +535,7 @@ class DigitalProvenanceTests(unittest.TestCase):
             "public_key_fingerprint": provider.key_id,
             "custody_class": provider.custody_class,
             "effect_authority": False,
-            "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+            "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
         }
         payload["credential_digest"] = canonical_integrity_hash(
             {
@@ -596,7 +596,7 @@ class DigitalProvenanceTests(unittest.TestCase):
             "inclusion_set_digest": canonical_integrity_hash(
                 [item["digest"] for item in inclusions]
             ),
-            "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+            "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
         }
         return build_signed_object(payload, provider=self.owner_provider)
 
@@ -805,7 +805,7 @@ class DigitalProvenanceTests(unittest.TestCase):
             "release_manifest_digest": self.release_manifest_digest,
             "runtime_measurement_digest": self.runtime_measurement_digest,
             "lineage_only": True,
-            **deepcopy(NO_AUTHORIZATION_EFFECT),
+            **dict(NO_AUTHORIZATION_EFFECT),
         }
         return build_signed_object(payload, provider=provider)
 

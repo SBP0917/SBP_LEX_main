@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import unicodedata
+from collections.abc import Set as AbstractSet
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -21,7 +22,6 @@ from .constants import (
     MAX_PATH_UTF8_BYTES,
 )
 from .errors import PTDEVerificationError, reject
-
 
 _SHA512_RE = re.compile(r"^[0-9a-f]{128}$")
 _ENVIRONMENT_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -186,7 +186,7 @@ def strict_json_document(data: bytes, *, code: str) -> dict[str, Any]:
         raise reject(f"{code}_NONFINITE_NUMBER")
 
     def parse_integer(raw: str) -> int:
-        digits = raw[1:] if raw.startswith("-") else raw
+        digits = raw.removeprefix("-")
         if len(digits) > 19:
             raise reject(f"{code}_INTEGER_OUT_OF_RANGE")
         value = int(raw, 10)
@@ -267,7 +267,12 @@ def environment_name(value: Any) -> str:
     return value
 
 
-def exact_fields(value: Any, fields: set[str], *, code: str) -> dict[str, Any]:
+def exact_fields(
+    value: Any,
+    fields: AbstractSet[str],
+    *,
+    code: str,
+) -> dict[str, Any]:
     if type(value) is not dict or set(value) != fields:
         raise reject(f"{code}_FIELDS_INVALID")
     return value

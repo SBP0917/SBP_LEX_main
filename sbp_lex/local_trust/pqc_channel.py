@@ -21,7 +21,7 @@ CHANNEL_CAPABILITY = "CHANNEL_ESTABLISHMENT_ONLY"
 NOT_ADMITTED = "NOT_ADMITTED"
 NOT_DEPLOYED = "NOT_DEPLOYED"
 
-_FIELDS = {
+_FIELDS = frozenset({
     "schema_id",
     "contract_version",
     "kem_algorithm",
@@ -43,7 +43,7 @@ _FIELDS = {
     "external_transport_admission_required",
     "external_custody_admission_required",
     "evidence_sha512",
-}
+})
 
 
 class MlKem1024CapabilityError(ValueError):

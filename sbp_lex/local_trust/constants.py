@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import PurePosixPath
+from types import MappingProxyType
 
 CONTRACT_VERSION = "SBP_LEX_V2_LOCAL_TRUST_V2"
 HYBRID_SIGNATURE_PROFILE = "SBP_LEX_V2_ML_DSA_87_ED448_AND_V1"
@@ -15,13 +16,13 @@ SIGNING_DOMAIN = b"SBP-LEX/V2/LOCAL-TRUST/STRICT-DUAL-SIGNATURE/1\x00"
 GENESIS = "GENESIS"
 SHA512_HEX_LENGTH = 128
 PYTHON_DEPENDENCY_LOCK_SCHEMA = "sbp.lex.v2.python-dependency-lock/3"
-PYTHON_DEPENDENCY_TARGET_ENVIRONMENT = {
+PYTHON_DEPENDENCY_TARGET_ENVIRONMENT = MappingProxyType({
     "implementation": "CPython",
     "python_version": "3.12.13",
     "abi_tag": "cpython-312",
     "platform_tag": "win-amd64",
     "installed_scope": "assurance",
-}
+})
 PYTHON_DEPENDENCY_ROLLBACK_FIELDS = frozenset(
     {
         "ptde_accepted_attempt_history_sequence",
@@ -52,7 +53,7 @@ INCOMPLETE = "INCOMPLETE"
 STALE = "STALE"
 DIRTY = "DIRTY"
 
-NO_AUTHORITY = {
+NO_AUTHORITY = MappingProxyType({
     "authority_granted": False,
     "decision_granted": False,
     "token_granted": False,
@@ -65,9 +66,9 @@ NO_AUTHORITY = {
     "hash_chain_mutation_granted": False,
     "runtime_mutation_granted": False,
     "bypass_granted": False,
-}
+})
 
-DETACHED_BOUNDARY = {
+DETACHED_BOUNDARY = MappingProxyType({
     "local_only": True,
     "offline_verification_supported": True,
     "runtime_detached": True,
@@ -76,9 +77,9 @@ DETACHED_BOUNDARY = {
     "cloud_active": False,
     "blockchain_active": False,
     "ledger_active": False,
-}
+})
 
-DEPLOYMENT_LIMITS = {
+DEPLOYMENT_LIMITS = MappingProxyType({
     "software_key_custody": "DEPLOYMENT_LIMITATION",
     "hardware_key_custody": "NOT_PROVEN",
     "tpm_binding": "NOT_PROVEN",
@@ -90,7 +91,7 @@ DEPLOYMENT_LIMITS = {
     "effect_path_non_bypass": "NOT_PROVEN",
     "supply_chain_deployment": "NOT_PROVEN",
     "external_trust_and_time_authority": "NOT_PROVEN",
-}
+})
 
 STAGE_ORDER = (
     "manifest",
@@ -105,10 +106,12 @@ STAGE_ORDER = (
     "university_dossier",
 )
 
-STAGE_SCHEMAS = {
-    stage: f"SBP_LEX_V2_LOCAL_TRUST_{stage.upper()}_V1"
-    for stage in STAGE_ORDER
-}
+STAGE_SCHEMAS = MappingProxyType(
+    {
+        stage: f"SBP_LEX_V2_LOCAL_TRUST_{stage.upper()}_V1"
+        for stage in STAGE_ORDER
+    }
+)
 TRUST_CONTEXT_SCHEMA = "SBP_LEX_V2_LOCAL_TRUST_STRICT_DUAL_PUBLIC_CONTEXT_V1"
 TIME_EVIDENCE_SCHEMA = "SBP_LEX_V2_LOCAL_TRUST_TIME_EVIDENCE_V1"
 ARTIFACT_SCHEMA = "SBP_LEX_V2_LOCAL_TRUST_SIGNED_ARTIFACT_V1"
@@ -118,12 +121,12 @@ REPOSITORY_IDENTITY_SCHEMA = "SBP_LEX_V2_LOCAL_TRUST_REPOSITORY_IDENTITY_V1"
 # Each required group must resolve to at least one safe regular file.  Optional
 # groups are retained in the manifest with an explicit MISSING status.
 EVIDENCE_GROUPS = (
-    {
+    MappingProxyType({
         "group_id": "local_trust_source",
         "required": True,
         "roots": ("sbp_lex/local_trust",),
-    },
-    {
+    }),
+    MappingProxyType({
         "group_id": "python_security_integrity",
         "required": True,
         "paths": (
@@ -131,8 +134,8 @@ EVIDENCE_GROUPS = (
             "sbp_lex/security/signature_provider.py",
             "sbp_lex/security/application_integrity.py",
         ),
-    },
-    {
+    }),
+    MappingProxyType({
         "group_id": "foundational_controls",
         "required": True,
         "paths": (
@@ -140,23 +143,23 @@ EVIDENCE_GROUPS = (
             "sbp_lex/baseline/foundational_baseline.py",
             "sbp_lex/baseline/request_controls.py",
         ),
-    },
-    {
+    }),
+    MappingProxyType({
         "group_id": "rust_security_core",
         "required": True,
         "roots": ("security_core",),
-    },
-    {
+    }),
+    MappingProxyType({
         "group_id": "wire_v2",
         "required": True,
         "roots": ("wire_protocol/v2",),
-    },
-    {
+    }),
+    MappingProxyType({
         "group_id": "cross_language_reconciliation",
         "required": True,
         "roots": ("cross_language_reconciliation",),
-    },
-    {
+    }),
+    MappingProxyType({
         "group_id": "formal_tla",
         "required": True,
         "paths": (
@@ -164,14 +167,14 @@ EVIDENCE_GROUPS = (
             "formal/tla/SBPLEXV2.cfg",
             "formal/tla/README.md",
         ),
-    },
-    {
+    }),
+    MappingProxyType({
         "group_id": "spark_safety_monitor",
         "required": True,
         "roots": ("spark_safety_monitor/src", "spark_safety_monitor/config"),
         "paths": ("spark_safety_monitor/spark_safety_monitor.gpr",),
-    },
-    {
+    }),
+    MappingProxyType({
         "group_id": "validation_contracts",
         "required": True,
         "paths": (
@@ -183,14 +186,14 @@ EVIDENCE_GROUPS = (
             "docs/security/RUST_TCB_AND_TLA_VALIDATION.md",
             "runtime_artifacts/toolchains/tla2tools.jar",
         ),
-    },
-    {
+    }),
+    MappingProxyType({
         "group_id": "validation_logs_and_snapshot",
         "required": True,
         "roots": (
             "runtime_artifacts/sha512_handover",
         ),
-    },
+    }),
 )
 
 DEPENDENCY_LOCK_PATHS = (

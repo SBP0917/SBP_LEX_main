@@ -454,7 +454,7 @@ def test_required_token_order_and_issuance_contracts_are_exact() -> None:
         ].lower()
         for governance_function in FILED_GOVERNANCE_INTEGRITY_ORDER
     ]
-    assert REQUIRED_CORE_TOKENS == [
+    assert REQUIRED_CORE_TOKENS == (
         "foundational",
         "authority_provenance",
         "authority",
@@ -473,7 +473,7 @@ def test_required_token_order_and_issuance_contracts_are_exact() -> None:
         "aurion",
         "execution_boundary",
         "execution_attestation",
-    ]
+    )
     assert _TOKEN_ISSUANCE_CONTRACTS["foundational"] == (
         "foundational_baseline",
         "foundational_baseline",

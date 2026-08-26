@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import hmac
+from types import MappingProxyType
 from typing import Any, Final, Protocol
 
 from sbp_lex.security.integrity import (
@@ -46,7 +47,7 @@ FILED_LIFECYCLE_ORDER: Final = (
     CIVILISATIONAL_SUCCESSOR_INTELLIGENCE_TRANSITION,
     STRUCTURED_POST_AI_ERA_CONTINUITY,
 )
-FILED_LIFECYCLE_ENGINE_IDS: Final = {
+FILED_LIFECYCLE_ENGINE_IDS: Final = MappingProxyType({
     AI_OBSOLESCENCE_LIFECYCLE_SUPERSESSION: (
         "AI_OBSOLESCENCE_LIFECYCLE_SUPERSESSION"
     ),
@@ -56,8 +57,8 @@ FILED_LIFECYCLE_ENGINE_IDS: Final = {
     STRUCTURED_POST_AI_ERA_CONTINUITY: (
         "STRUCTURED_POST_AI_ERA_CONTINUITY"
     ),
-}
-FILED_LIFECYCLE_STAGES: Final = {
+})
+FILED_LIFECYCLE_STAGES: Final = MappingProxyType({
     AI_OBSOLESCENCE_LIFECYCLE_SUPERSESSION: (
         "filed_lifecycle:ai_obsolescence_lifecycle_supersession"
     ),
@@ -67,19 +68,19 @@ FILED_LIFECYCLE_STAGES: Final = {
     STRUCTURED_POST_AI_ERA_CONTINUITY: (
         "filed_lifecycle:structured_post_ai_era_continuity"
     ),
-}
+})
 FILED_LIFECYCLE_AUTHORITY_ROLE: Final = "FILED_LIFECYCLE_EVALUATOR"
 
 LIFECYCLE_PASS: Final = "PASS"
 LIFECYCLE_DENY: Final = "DENY"
 LIFECYCLE_ESCALATE: Final = "ESCALATE"
-_LIFECYCLE_RESULTS: Final = {
+_LIFECYCLE_RESULTS: Final = frozenset({
     LIFECYCLE_PASS,
     LIFECYCLE_DENY,
     LIFECYCLE_ESCALATE,
-}
+})
 
-_EVALUATOR_METHODS: Final = {
+_EVALUATOR_METHODS: Final = MappingProxyType({
     AI_OBSOLESCENCE_LIFECYCLE_SUPERSESSION: (
         "evaluate_ai_obsolescence_lifecycle_supersession"
     ),
@@ -89,9 +90,9 @@ _EVALUATOR_METHODS: Final = {
     STRUCTURED_POST_AI_ERA_CONTINUITY: (
         "evaluate_structured_post_ai_era_continuity"
     ),
-}
+})
 
-_SNAPSHOT_FIELDS: Final = {
+_SNAPSHOT_FIELDS: Final = frozenset({
     "schema_status",
     "lifecycle_engine",
     "lifecycle_engine_id",
@@ -111,8 +112,8 @@ _SNAPSHOT_FIELDS: Final = {
     "skg_digest",
     "skg_record",
     "governance_result",
-}
-_SOURCE_FIELDS: Final = {
+})
+_SOURCE_FIELDS: Final = frozenset({
     "schema_status",
     "evaluator_id",
     "evaluator_version",
@@ -134,8 +135,8 @@ _SOURCE_FIELDS: Final = {
     "digest",
     "signature",
     "verified",
-}
-_DETERMINATION_FIELDS: Final = {
+})
+_DETERMINATION_FIELDS: Final = frozenset({
     "result",
     "transition_beyond_current_ai_paradigms_modelled",
     "full_lifecycle_governance_envelope_secured",
@@ -148,8 +149,8 @@ _DETERMINATION_FIELDS: Final = {
     "licence_granted",
     "governance_superseded",
     "evidence_references",
-}
-_RECORD_FIELDS: Final = {
+})
+_RECORD_FIELDS: Final = frozenset({
     "schema_status",
     "lifecycle_engine",
     "lifecycle_engine_id",
@@ -167,7 +168,7 @@ _RECORD_FIELDS: Final = {
     "execution_authority_granted",
     "licence_granted",
     "governance_superseded",
-}
+})
 
 
 class FiledLifecycleEvaluator(Protocol):

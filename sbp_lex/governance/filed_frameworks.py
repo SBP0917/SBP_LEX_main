@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import hmac
+from types import MappingProxyType
 from typing import Any, Final, Protocol
 
 from sbp_lex.security.integrity import (
@@ -34,12 +35,12 @@ FILED_FRAMEWORK_ORDER = (
     *EVIDENTIARY_FRAMEWORK_ORDER,
     *GOVERNANCE_FRAMEWORK_ORDER,
 )
-FILED_FRAMEWORK_STAGES = {
+FILED_FRAMEWORK_STAGES = MappingProxyType({
     AJ_SAAF: "filed_framework:aj_saaf",
     PTODF: "filed_framework:ptodf",
     GALA: "filed_framework:gala",
     ABEGF: "filed_framework:abegf",
-}
+})
 FILED_FRAMEWORK_AUTHORITY_ROLE = "FILED_GOVERNANCE_FRAMEWORK_EVALUATOR"
 
 FRAMEWORK_PASS = "PASS"
@@ -74,7 +75,7 @@ ABEGF_SUSPENSION_CONTROLS = (
     "PERMANENT_DISABLEMENT",
 )
 
-_COMMON_SOURCE_FIELDS = {
+_COMMON_SOURCE_FIELDS = frozenset({
     "evaluator_id",
     "evaluator_version",
     "authority_credential",
@@ -90,7 +91,7 @@ _COMMON_SOURCE_FIELDS = {
     "digest",
     "signature",
     "verified",
-}
+})
 
 
 class FiledFrameworkEvaluator(Protocol):
@@ -665,18 +666,18 @@ def _abegf_error(
     return None
 
 
-_DETERMINATION_VALIDATORS = {
+_DETERMINATION_VALIDATORS = MappingProxyType({
     AJ_SAAF: _aj_saaf_error,
     PTODF: _ptodf_error,
     GALA: _gala_error,
     ABEGF: _abegf_error,
-}
-_EVALUATOR_METHODS = {
+})
+_EVALUATOR_METHODS = MappingProxyType({
     AJ_SAAF: "evaluate_aj_saaf",
     PTODF: "evaluate_ptodf",
     GALA: "evaluate_gala",
     ABEGF: "evaluate_abegf",
-}
+})
 
 
 def _record(

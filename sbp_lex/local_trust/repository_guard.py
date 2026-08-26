@@ -5,14 +5,14 @@ from __future__ import annotations
 import importlib.metadata
 import os
 import re
-import shutil
 import subprocess
 import sys
 import threading
 from hashlib import sha512
 from pathlib import Path
 from time import monotonic
-from typing import Any
+from types import MappingProxyType
+from typing import Any, cast
 
 from .command_evidence import (
     _terminate,
@@ -31,20 +31,23 @@ from .paths import (
     strict_load_json,
     validated_root,
 )
+from .secure_git import PinnedGit, SecureGitError
 from .toolchain_guard import _local_python_dependency_evidence
 
 GUARD_SCHEMA = "SBP_LEX_V2_REPOSITORY_GUARD_V1"
 EXPECTED_RUNTIME_RECORD = "python-3.12.13"
 EXPECTED_IMPLEMENTATION = "CPython"
 EXPECTED_PYTHON_VERSION = "3.12.13"
+MAX_TRACKED_PATHS = 100_000
+MAX_TRACKED_INVENTORY_BYTES = 1_073_741_824
 BOOTSTRAP_PACKAGES = frozenset({"pip", "setuptools", "wheel"})
-DIRECT_REQUIREMENTS = {"cryptography": "50.0.0"}
-PRODUCTION_PACKAGES = {
+DIRECT_REQUIREMENTS = MappingProxyType({"cryptography": "50.0.0"})
+PRODUCTION_PACKAGES = MappingProxyType({
     "cffi": "2.1.1",
     "cryptography": "50.0.0",
     "pycparser": "3.0",
-}
-TEST_PACKAGES = {
+})
+TEST_PACKAGES = MappingProxyType({
     **PRODUCTION_PACKAGES,
     "colorama": "0.4.6",
     "iniconfig": "2.3.0",
@@ -52,7 +55,7 @@ TEST_PACKAGES = {
     "pluggy": "1.6.0",
     "pygments": "2.21.0",
     "pytest": "9.1.1",
-}
+})
 REQUIRED_CRITICAL_FILES = frozenset(
     {
         "main.py",
@@ -63,74 +66,53 @@ REQUIRED_CRITICAL_FILES = frozenset(
         "runtime.txt",
     }
 )
-REQUIRED_CHANGE_CLASSES = frozenset(
-    {
-        "dependency_or_toolchain",
-        "documentation_or_report",
-        "emergency_fix",
-        "release_or_archive",
-        "runtime_logic",
-        "schema_or_config",
-        "trust_boundary",
-    }
-)
-ALLOWED_CHECKS = frozenset(
-    {
-        "clean_rebuild",
-        "dependency_lock",
-        "focused_regression",
-        "full_regression",
-        "provenance_inventory",
-        "rollback_plan",
-        "static_analysis",
-        "trust_boundary_review",
-    }
-)
-CHANGE_CONTROL_POLICY: dict[str, Any] = {
+_CHANGE_CLASSES = MappingProxyType({
+    "runtime_logic": MappingProxyType({
+        "required_checks": ("focused_regression", "full_regression", "static_analysis"),
+        "rollback_plan_required": True,
+    }),
+    "trust_boundary": MappingProxyType({
+        "required_checks": ("full_regression", "static_analysis", "trust_boundary_review"),
+        "rollback_plan_required": True,
+    }),
+    "schema_or_config": MappingProxyType({
+        "required_checks": ("focused_regression", "full_regression", "rollback_plan"),
+        "rollback_plan_required": True,
+    }),
+    "dependency_or_toolchain": MappingProxyType({
+        "required_checks": ("clean_rebuild", "dependency_lock", "full_regression"),
+        "rollback_plan_required": True,
+    }),
+    "documentation_or_report": MappingProxyType({
+        "required_checks": ("provenance_inventory",),
+        "rollback_plan_required": True,
+    }),
+    "release_or_archive": MappingProxyType({
+        "required_checks": ("clean_rebuild", "full_regression", "provenance_inventory"),
+        "rollback_plan_required": True,
+    }),
+    "emergency_fix": MappingProxyType({
+        "required_checks": ("focused_regression", "rollback_plan", "trust_boundary_review"),
+        "rollback_plan_required": True,
+    }),
+})
+_CANONICAL_CHANGE_CONTROL_POLICY = MappingProxyType({
     "schema_id": "SBP_LEX_V2_LIFECYCLE_CHANGE_CONTROL_V1",
     "authority_granted": False,
     "baseline_comparison_required": True,
     "reversibility_required": True,
     "release_requires_clean_tree": True,
-    "change_classes": {
-        "runtime_logic": {
-            "required_checks": ["focused_regression", "full_regression", "static_analysis"],
-            "rollback_plan_required": True,
-        },
-        "trust_boundary": {
-            "required_checks": ["full_regression", "static_analysis", "trust_boundary_review"],
-            "rollback_plan_required": True,
-        },
-        "schema_or_config": {
-            "required_checks": ["focused_regression", "full_regression", "rollback_plan"],
-            "rollback_plan_required": True,
-        },
-        "dependency_or_toolchain": {
-            "required_checks": ["clean_rebuild", "dependency_lock", "full_regression"],
-            "rollback_plan_required": True,
-        },
-        "documentation_or_report": {
-            "required_checks": ["provenance_inventory"],
-            "rollback_plan_required": True,
-        },
-        "release_or_archive": {
-            "required_checks": ["clean_rebuild", "full_regression", "provenance_inventory"],
-            "rollback_plan_required": True,
-        },
-        "emergency_fix": {
-            "required_checks": ["focused_regression", "rollback_plan", "trust_boundary_review"],
-            "rollback_plan_required": True,
-        },
-    },
-    "prohibited": [
+    "change_classes": _CHANGE_CLASSES,
+    "prohibited": (
         "authority_claim_from_repository_guard",
         "dirty_tree_release",
         "lock_hash_bypass",
         "rollback_plan_omission",
         "self_admitted_external_trust",
-    ],
-}
-NO_AUTHORITY = {
+    ),
+})
+CHANGE_CONTROL_POLICY = _CANONICAL_CHANGE_CONTROL_POLICY
+NO_AUTHORITY = MappingProxyType({
     "authority_granted": False,
     "decision_granted": False,
     "deployment_admitted": False,
@@ -138,7 +120,7 @@ NO_AUTHORITY = {
     "execution_authority_granted": False,
     "publication_authority_granted": False,
     "release_admitted": False,
-}
+})
 
 _LOCK_LINE = re.compile(
     r"^(?P<name>[a-z0-9][a-z0-9-]*)==(?P<version>[0-9]+(?:\.[0-9]+)+) "
@@ -168,16 +150,6 @@ def _stable_bytes(root: Path, relative: str) -> bytes:
     ):
         raise RepositoryGuardError("critical_file_changed_during_read")
     return content
-
-
-def _git_executable() -> Path:
-    executable = shutil.which("git")
-    if executable is None:
-        raise RepositoryGuardError("git_executable_unavailable")
-    try:
-        return Path(executable).resolve(strict=True)
-    except OSError as exc:
-        raise RepositoryGuardError("git_executable_unavailable") from exc
 
 
 def _read_bounded_stream(
@@ -220,6 +192,7 @@ def _run_bounded(
     overflow = threading.Event()
     process: subprocess.Popen[bytes] | None = None
     windows_job: _WindowsCommandJob | None = None
+    timed_out = False
     try:
         process = subprocess.Popen(
             arguments,
@@ -260,12 +233,14 @@ def _run_bounded(
         deadline = monotonic() + timeout_seconds
         while process.poll() is None:
             if overflow.is_set() or monotonic() >= deadline:
+                timed_out = not overflow.is_set()
                 _terminate(process, windows_job)
                 break
             overflow.wait(0.05)
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
+            timed_out = True
             _terminate(process, windows_job)
             process.wait(timeout=5)
         for reader in readers:
@@ -274,7 +249,9 @@ def _run_bounded(
             raise RepositoryGuardError("command_capture_thread_not_closed")
         if overflow.is_set():
             raise RepositoryGuardError("command_output_limit")
-        if monotonic() >= deadline and process.returncode != 0:
+        if monotonic() >= deadline:
+            timed_out = True
+        if timed_out:
             raise RepositoryGuardError("command_timeout")
         return process.returncode, bytes(stdout), bytes(stderr)
     except (OSError, subprocess.SubprocessError) as exc:
@@ -286,29 +263,11 @@ def _run_bounded(
             windows_job.close()
 
 
-def _git(root: Path, *arguments: str) -> bytes:
-    executable = _git_executable()
+def _git(runner: PinnedGit, root: Path, *arguments: str) -> bytes:
     try:
-        return_code, stdout, _stderr = _run_bounded(
-            (
-                str(executable),
-                "-c",
-                f"safe.directory={root}",
-                *arguments,
-            ),
-            cwd=root,
-            env={
-                "PATH": str(executable.parent),
-                "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
-                "WINDIR": os.environ.get("WINDIR", ""),
-            },
-            timeout_seconds=30,
-        )
-    except RepositoryGuardError as exc:
+        return runner.run(root, *arguments, timeout_seconds=30)
+    except SecureGitError as exc:
         raise RepositoryGuardError("git_command_failed") from exc
-    if return_code != 0:
-        raise RepositoryGuardError("git_command_failed")
-    return stdout
 
 
 def _parse_lock(root: Path, relative: str) -> dict[str, tuple[str, str]]:
@@ -434,14 +393,17 @@ def _installed_versions() -> dict[str, str]:
 
 
 def _pip_check(root: Path) -> bool:
+    del root
+    executable = Path(sys.executable).resolve(strict=True)
     try:
         return_code, _stdout, _stderr = _run_bounded(
-            (sys.executable, "-m", "pip", "check"),
-            cwd=root,
+            (str(executable), "-I", "-m", "pip", "check"),
+            cwd=executable.parent,
             env={
-                "PATH": str(Path(sys.executable).resolve().parent),
+                "PATH": "",
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "PYTHONNOUSERSITE": "1",
+                "PYTHONSAFEPATH": "1",
                 "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
                 "WINDIR": os.environ.get("WINDIR", ""),
             },
@@ -453,45 +415,55 @@ def _pip_check(root: Path) -> bool:
 
 
 def _change_control_valid() -> bool:
-    policy = CHANGE_CONTROL_POLICY
-    if (
-        type(policy) is not dict
-        or policy.get("schema_id") != "SBP_LEX_V2_LIFECYCLE_CHANGE_CONTROL_V1"
-        or policy.get("authority_granted") is not False
-        or policy.get("baseline_comparison_required") is not True
-        or policy.get("reversibility_required") is not True
-        or policy.get("release_requires_clean_tree") is not True
-        or set(policy.get("change_classes", {})) != REQUIRED_CHANGE_CLASSES
-        or type(policy.get("prohibited")) is not list
-        or not policy["prohibited"]
-    ):
-        return False
-    for value in policy["change_classes"].values():
-        if (
-            type(value) is not dict
-            or set(value) != {"required_checks", "rollback_plan_required"}
-            or value.get("rollback_plan_required") is not True
-            or type(value.get("required_checks")) is not list
-            or not value["required_checks"]
-            or value["required_checks"] != sorted(set(value["required_checks"]))
-            or any(check not in ALLOWED_CHECKS for check in value["required_checks"])
-        ):
-            return False
-    return True
+    return CHANGE_CONTROL_POLICY == _CANONICAL_CHANGE_CONTROL_POLICY
 
 
-def _tracked_inventory(root: Path) -> tuple[str, list[dict[str, Any]]]:
-    commit_oid = _git(root, "rev-parse", "--verify", "HEAD").decode("ascii").strip()
+def change_control_policy_document() -> dict[str, Any]:
+    """Return a detached JSON-safe copy of the immutable lifecycle policy."""
+
+    return {
+        "schema_id": _CANONICAL_CHANGE_CONTROL_POLICY["schema_id"],
+        "authority_granted": False,
+        "baseline_comparison_required": True,
+        "reversibility_required": True,
+        "release_requires_clean_tree": True,
+        "change_classes": {
+            name: {
+                "required_checks": list(
+                    cast(tuple[str, ...], value["required_checks"])
+                ),
+                "rollback_plan_required": True,
+            }
+            for name, value in _CHANGE_CLASSES.items()
+        },
+        "prohibited": list(
+            cast(tuple[str, ...], _CANONICAL_CHANGE_CONTROL_POLICY["prohibited"])
+        ),
+    }
+
+
+def _tracked_inventory(
+    root: Path, runner: PinnedGit
+) -> tuple[str, list[dict[str, Any]]]:
+    commit_oid = _git(
+        runner, root, "rev-parse", "--verify", "HEAD"
+    ).decode("ascii").strip()
     if len(commit_oid) != 40 or re.fullmatch(r"[0-9a-f]{40}", commit_oid) is None:
         raise RepositoryGuardError("commit_oid_invalid")
-    if _git(root, "status", "--porcelain=v1", "--untracked-files=all"):
+    if _git(runner, root, "status", "--porcelain=v1", "--untracked-files=all"):
         raise RepositoryGuardError("critical_inventory_worktree_not_clean")
-    raw_paths = _git(root, "ls-files", "-z")
+    raw_paths = _git(runner, root, "ls-files", "-z")
     paths = sorted(
         item.decode("utf-8", errors="strict")
         for item in raw_paths.split(b"\0")
         if item
     )
+    if (
+        len(paths) > MAX_TRACKED_PATHS
+        or sum(len(path.encode("utf-8")) for path in paths)
+        > MAX_COMMAND_OUTPUT_BYTES
+    ):
+        raise RepositoryGuardError("critical_inventory_path_limit")
     required_paths = REQUIRED_CRITICAL_FILES | frozenset(DEPENDENCY_LOCK_PATHS)
     if (
         not required_paths.issubset(paths)
@@ -506,7 +478,7 @@ def _tracked_inventory(root: Path) -> tuple[str, list[dict[str, Any]]]:
         or not any(path.startswith("spark_safety_monitor/") for path in paths)
     ):
         raise RepositoryGuardError("critical_inventory_incomplete")
-    tree_output = _git(root, "ls-tree", "-r", "-z", "HEAD")
+    tree_output = _git(runner, root, "ls-tree", "-r", "-z", "HEAD")
     tree_entries: dict[str, tuple[str, str]] = {}
     for item in tree_output.split(b"\0"):
         if not item:
@@ -520,8 +492,12 @@ def _tracked_inventory(root: Path) -> tuple[str, list[dict[str, Any]]]:
     if set(tree_entries) != set(paths):
         raise RepositoryGuardError("critical_inventory_tree_mismatch")
     inventory: list[dict[str, Any]] = []
+    inventory_bytes = 0
     for path in paths:
         content = _stable_bytes(root, path)
+        inventory_bytes += len(content)
+        if inventory_bytes > MAX_TRACKED_INVENTORY_BYTES:
+            raise RepositoryGuardError("critical_inventory_byte_limit")
         mode, blob_oid = tree_entries[path]
         inventory.append(
             {
@@ -532,7 +508,7 @@ def _tracked_inventory(root: Path) -> tuple[str, list[dict[str, Any]]]:
                 "sha512": sha512(content).hexdigest(),
             }
         )
-    if _git(root, "status", "--porcelain=v1", "--untracked-files=all"):
+    if _git(runner, root, "status", "--porcelain=v1", "--untracked-files=all"):
         raise RepositoryGuardError("critical_inventory_changed_during_measurement")
     return commit_oid, inventory
 
@@ -545,6 +521,8 @@ def verify_repository_guard(
     expected_local_trust_accepted_package_history_sequence: int,
     expected_local_trust_accepted_package_history_digest: str,
     expected_python_dependency_prior_lock_sha512: str,
+    git_executable: str,
+    expected_git_executable_sha512: str,
     scope: str = "test",
 ) -> dict[str, Any]:
     failures: list[str] = []
@@ -552,13 +530,25 @@ def verify_repository_guard(
     commit_oid: str | None = None
     inventory: list[dict[str, Any]] = []
     git_sha512: str | None = None
+    runner: PinnedGit | None = None
     try:
         root = validated_root(repository_root)
     except LocalTrustPathError:
         root = Path(repository_root)
         failures.append("repository_root_not_safe")
     try:
-        status = _git(root, "status", "--porcelain=v1", "--untracked-files=all").decode(
+        runner = PinnedGit(git_executable, expected_git_executable_sha512)
+        git_sha512 = runner.executable_sha512
+        checks["git_executable_measured"] = True
+    except SecureGitError:
+        checks["git_executable_measured"] = False
+        failures.append("git_executable_not_measured_or_pinned")
+    try:
+        if runner is None:
+            raise RepositoryGuardError("git_executable_not_pinned")
+        status = _git(
+            runner, root, "status", "--porcelain=v1", "--untracked-files=all"
+        ).decode(
             "utf-8", errors="strict"
         )
         checks["working_tree_clean"] = status == ""
@@ -570,18 +560,14 @@ def verify_repository_guard(
         checks["working_tree_clean"] = False
         failures.append("working_tree_status_unavailable")
     try:
-        commit_oid, inventory = _tracked_inventory(root)
+        if runner is None:
+            raise RepositoryGuardError("git_executable_not_pinned")
+        commit_oid, inventory = _tracked_inventory(root, runner)
         checks["critical_inventory_matches_commit"] = True
     except (RepositoryGuardError, UnicodeError, LocalTrustPathError) as error:
         checks["critical_inventory_matches_commit"] = False
         failures.append("critical_inventory_not_bound_to_commit")
         failures.append(str(error) or type(error).__name__)
-    try:
-        git_sha512 = sha512(_git_executable().read_bytes()).hexdigest()
-        checks["git_executable_measured"] = True
-    except (OSError, RepositoryGuardError):
-        checks["git_executable_measured"] = False
-        failures.append("git_executable_not_measured")
     try:
         runtime_record = _stable_bytes(root, "runtime.txt").decode("ascii", errors="strict").strip()
         checks["known_good_runtime"] = (
@@ -657,7 +643,7 @@ def verify_repository_guard(
         "verification_scope": scope,
         "checks": checks,
         "failures": sorted(set(failures)),
-        "change_control_policy_sha512": digest(CHANGE_CONTROL_POLICY),
+        "change_control_policy_sha512": digest(change_control_policy_document()),
         "accepted_history_created": False,
         "self_referential_hash_manifest_created": False,
         "no_authority": dict(NO_AUTHORITY),
@@ -668,5 +654,6 @@ __all__ = [
     "CHANGE_CONTROL_POLICY",
     "GUARD_SCHEMA",
     "RepositoryGuardError",
+    "change_control_policy_document",
     "verify_repository_guard",
 ]

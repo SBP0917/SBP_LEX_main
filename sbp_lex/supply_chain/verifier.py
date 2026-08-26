@@ -20,11 +20,11 @@ class VerificationReport:
     admitted: bool
 
 
-_FIELDS = {
+_FIELDS = frozenset({
     "schema_id", "p_binding", "r2_inventories", "r2_inventories_sha512", "python_inputs_sha512",
     "rust_inputs_sha512", "toolchain_contract_sha512", "detached_boundary_sha512", "source_status",
     "host_observation_status", "no_authority", "admission_state", "limitations", "package_sha512",
-}
+})
 
 
 def verify_p_source_package(value: Any, *, binding: PObjectBinding | None = None) -> VerificationReport:

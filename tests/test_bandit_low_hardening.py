@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import shutil
 import sys
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from sbp_lex.local_trust import command_evidence, repository
+from sbp_lex.local_trust import command_evidence, repository, secure_git
 from sbp_lex.provenance import digital_provenance
 from sbp_lex.security.authority_trust import role_pin_from_provider
 from sbp_lex.security.hybrid_signature import HYBRID_SUITE_ID
@@ -69,18 +72,22 @@ def test_repository_capture_rejects_missing_subprocess_streams(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
+    executable = shutil.which("git")
+    assert executable is not None
+    git_sha512 = hashlib.sha512(Path(executable).read_bytes()).hexdigest()
+    runner = secure_git.PinnedGit(executable, git_sha512)
     process = _StreamlessProcess()
     monkeypatch.setattr(
-        repository.subprocess,
+        secure_git.subprocess,
         "Popen",
         lambda *args, **kwargs: process,
     )
 
     with pytest.raises(
         repository.RepositoryEvidenceError,
-        match="git_evidence_stream_unavailable",
+        match="git_evidence_unavailable",
     ):
-        repository._git(tmp_path, "status", "--porcelain=v1")
+        repository._git(runner, tmp_path, "status", "--porcelain=v1")
     assert process.killed is True
 
 

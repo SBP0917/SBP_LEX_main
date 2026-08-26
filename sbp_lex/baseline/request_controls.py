@@ -72,7 +72,7 @@ _PROVENANCE_PROJECTION_KEYS: Final = (
     "digital_provenance_verification_receipt",
     "digital_provenance_lineage_only",
 )
-_PROVENANCE_PAYLOAD_FIELDS: Final = {
+_PROVENANCE_PAYLOAD_FIELDS: Final = frozenset({
     "contract_id",
     "stage",
     "result",
@@ -83,7 +83,7 @@ _PROVENANCE_PAYLOAD_FIELDS: Final = {
     "verification_receipt_digest",
     "lineage_only",
     *PROVENANCE_NO_AUTHORIZATION_EFFECT,
-}
+})
 _CONTROL_STAGES: Final = (
     DIGITAL_PROVENANCE_STAGE,
     IDENTITY_ADMISSION_STAGE,

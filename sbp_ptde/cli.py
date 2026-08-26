@@ -7,8 +7,8 @@ import json
 import os
 import stat
 import unicodedata
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from .constants import (
     MAX_JSON_DOCUMENT_BYTES,
@@ -19,7 +19,6 @@ from .errors import PTDEVerificationError, reject
 from .policy import expected_policy
 from .trust import accepted_attempt_history_from_document
 from .verifier import verify_ptde_chain
-
 
 _WINDOWS_RESERVED = frozenset(
     {"CON", "PRN", "AUX", "NUL"}

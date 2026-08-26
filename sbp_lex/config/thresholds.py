@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Dict, TypedDict
+from types import MappingProxyType
+from typing import Any, Dict, TypedDict, cast
 
 
 class _FinancialThresholds(TypedDict):
@@ -24,30 +25,30 @@ LOW_TIER = "LOW"
 MEDIUM_TIER = "MEDIUM"
 TOP_TIER = "TOP"
 
-TIER_ORDER: dict[str, int] = {
+TIER_ORDER = MappingProxyType({
     LOW_TIER: 1,
     MEDIUM_TIER: 2,
     TOP_TIER: 3,
-}
+})
 
-CORROBORATION_THRESHOLDS: dict[str, int] = {
+CORROBORATION_THRESHOLDS = MappingProxyType({
     LOW_TIER: 2,
     MEDIUM_TIER: 3,
     TOP_TIER: 5,
-}
+})
 
-FINANCIAL_THRESHOLDS: _FinancialThresholds = {
+FINANCIAL_THRESHOLDS = cast(_FinancialThresholds, MappingProxyType({
     "low_max": 499.99,
     "medium_max": 49999.99,
     "currency": "AUD",
-}
+}))
 
-FAIL_CLOSED_DEFAULTS: _FailClosedDefaults = {
+FAIL_CLOSED_DEFAULTS = cast(_FailClosedDefaults, MappingProxyType({
     "missing_safety_value": 0,
     "missing_financial_amount": 0.0,
     "unknown_tier": TOP_TIER,
     "unknown_corroboration_required": 5,
-}
+}))
 
 
 # ─────────────────────────────────────────────
@@ -211,6 +212,6 @@ def build_threshold_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "tier": state["safety_profile"].get("computed_tier"),
         "corroboration_required": state.get("corroboration_required"),
-        "financial_thresholds": FINANCIAL_THRESHOLDS,
-        "corroboration_thresholds": CORROBORATION_THRESHOLDS,
+        "financial_thresholds": dict(FINANCIAL_THRESHOLDS),
+        "corroboration_thresholds": dict(CORROBORATION_THRESHOLDS),
   }

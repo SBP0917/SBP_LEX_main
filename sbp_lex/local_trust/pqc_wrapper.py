@@ -29,7 +29,6 @@ from cryptography.hazmat.primitives.asymmetric.mldsa import (
 
 from .digests import canonical_bytes, digest, is_sha512
 
-
 WRAPPER_SCHEMA_ID = "sbp.lex.v2.detached-strict-dual-signed-wrapper/1"
 OWNER_PIN_SCHEMA_ID = "sbp.lex.v2.detached-strict-dual-owner-pin/1"
 WRAPPER_CONTRACT_VERSION = "SBP_LEX_V2_DETACHED_STRICT_DUAL_WRAPPER_V1"
@@ -59,7 +58,7 @@ ED448_PUBLIC_KEY_BYTES = 57
 ED448_SIGNATURE_BYTES = 114
 
 _IDENTIFIER = re.compile(r"[A-Z0-9][A-Z0-9_.:-]{0,127}\Z")
-_WRAPPER_FIELDS = {
+_WRAPPER_FIELDS = frozenset({
     "schema_id",
     "contract_version",
     "signature_profile",
@@ -76,8 +75,8 @@ _WRAPPER_FIELDS = {
     "runtime_attachment",
     "publication_state",
     "signature",
-}
-_ENVELOPE_FIELDS = {
+})
+_ENVELOPE_FIELDS = frozenset({
     "schema_id",
     "suite",
     "suite_version",
@@ -95,8 +94,8 @@ _ENVELOPE_FIELDS = {
     "ordered_key_set_digest",
     "lanes",
     "signatures",
-}
-_DESCRIPTOR_FIELDS = {
+})
+_DESCRIPTOR_FIELDS = frozenset({
     "ordinal",
     "algorithm",
     "provider_id",
@@ -113,8 +112,10 @@ _DESCRIPTOR_FIELDS = {
     "non_exportable",
     "public_key_encoding",
     "signature_encoding",
-}
-_SIGNATURE_LANE_FIELDS = {"ordinal", "algorithm", "key_id", "signature_b64"}
+})
+_SIGNATURE_LANE_FIELDS = frozenset(
+    {"ordinal", "algorithm", "key_id", "signature_b64"}
+)
 _LANE_ORDER = ("ML-DSA-87", "Ed448")
 
 
@@ -630,12 +631,12 @@ __all__ = [
     "HYBRID_SIGNATURE_PROFILE_V2",
     "ML_DSA_87_PUBLIC_KEY_BYTES",
     "ML_DSA_87_SIGNATURE_BYTES",
-    "DetachedHybridOwnerPins",
-    "DetachedHybridSigningKeys",
-    "DetachedHybridWrapperError",
     "OWNER_PIN_SCHEMA_ID",
     "WRAPPER_CONTRACT_VERSION",
     "WRAPPER_SCHEMA_ID",
+    "DetachedHybridOwnerPins",
+    "DetachedHybridSigningKeys",
+    "DetachedHybridWrapperError",
     "hybrid_signature_preimage",
     "verified_detached_payload",
     "verify_detached_hybrid_wrapper",

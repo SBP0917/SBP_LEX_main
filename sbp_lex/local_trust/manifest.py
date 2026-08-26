@@ -14,7 +14,7 @@ from .repository import collect_repository_provenance, collect_v2_evidence_inven
 from .signing import HybridSigningContext, HybridVerificationContext
 
 PAYLOAD_SCHEMA = "SBP_LEX_V2_LOCAL_TRUST_ROOT_MANIFEST_PAYLOAD_V1"
-_PAYLOAD_FIELDS = {
+_PAYLOAD_FIELDS = frozenset({
     "schema_id",
     "status",
     "repository",
@@ -25,7 +25,7 @@ _PAYLOAD_FIELDS = {
     "accepted_history_digest",
     "accepted_history_sequence",
     "accepted_history_live_head_digest",
-}
+})
 
 
 def build_manifest(
@@ -35,8 +35,12 @@ def build_manifest(
     time_evidence: Mapping[str, Any],
     repository_identity_digest: str,
     accepted_history: Mapping[str, Any],
+    expected_git_executable_sha512: str,
 ) -> dict[str, Any]:
-    repository = collect_repository_provenance(repository_root)
+    repository = collect_repository_provenance(
+        repository_root,
+        expected_git_executable_sha512=expected_git_executable_sha512,
+    )
     inventory = collect_v2_evidence_inventory(repository_root)
     status = (
         PASS
@@ -78,6 +82,7 @@ def validate_manifest(
     expected_accepted_history_digest: str,
     expected_accepted_history_sequence: int,
     expected_accepted_history_live_head_digest: str,
+    expected_git_executable_sha512: str,
     expected_time_digest: str | None = None,
 ) -> dict[str, Any]:
     base = validate_signed_artifact(
@@ -108,7 +113,12 @@ def validate_manifest(
         ):
             failures.append("manifest_not_admissible")
         else:
-            current_repository = collect_repository_provenance(repository_root)
+            current_repository = collect_repository_provenance(
+                repository_root,
+                expected_git_executable_sha512=(
+                    expected_git_executable_sha512
+                ),
+            )
             if payload["repository"] != current_repository:
                 failures.append("repository_provenance_changed")
             inventory = payload.get("evidence_inventory")

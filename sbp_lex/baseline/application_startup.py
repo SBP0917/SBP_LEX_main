@@ -13,6 +13,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from sbp_lex.security.application_integrity import (
@@ -34,22 +35,22 @@ APPLICATION_STARTUP_STATE_FIELDS = (
     "application_integrity_runtime_measurement_digest",
     "application_integrity_trust_context_digest",
 )
-APPLICATION_STARTUP_DEPLOYMENT_DEPENDENCIES = {
+APPLICATION_STARTUP_DEPLOYMENT_DEPENDENCIES = MappingProxyType({
     "same_verified_file_handle_execution": "NOT_PROVEN",
     "private_composition_root_isolation": "NOT_PROVEN",
     "os_immutable_release_root": "NOT_PROVEN",
     "tpm_measurement": "NOT_PROVEN",
     "platform_code_signing": "NOT_PROVEN",
-}
+})
 
-_EMPTY_PROJECTION = {
+_EMPTY_PROJECTION = MappingProxyType({
     "application_integrity_result": "",
     "application_integrity_result_digest": None,
     "application_integrity_receipt_digest": None,
     "application_integrity_manifest_digest": None,
     "application_integrity_runtime_measurement_digest": None,
     "application_integrity_trust_context_digest": None,
-}
+})
 
 
 class ApplicationStartupRejected(ValueError):

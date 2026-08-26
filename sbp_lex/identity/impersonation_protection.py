@@ -22,6 +22,7 @@ import os
 from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha512
+from types import MappingProxyType
 from typing import Any, Final, Protocol, TypeGuard
 
 from cryptography.exceptions import InvalidSignature
@@ -80,7 +81,7 @@ UPSTREAM_RECEIPT_SCHEMA: Final = (
 REPLAY_PERSISTENCE_SCHEMA: Final = "SBP_LEX_V2_IMPERSONATION_REPLAY_PERSISTENCE_RECEIPT"
 _DURABLE_ANCHOR_SCHEMA: Final = "SBP_LEX_V2_IMPERSONATION_DURABLE_STORE_ANCHOR"
 
-IMPERSONATION_SIGNING_PURPOSES: Final = {
+IMPERSONATION_SIGNING_PURPOSES: Final = MappingProxyType({
     TRUST_CONTEXT_SCHEMA: "SBP_LEX_V2_IMPERSONATION:TRUST_CONTEXT",
     LIVE_REGISTRY_SCHEMA: "SBP_LEX_V2_IMPERSONATION:LIVE_REGISTRY",
     POSSESSION_PROOF_SCHEMA: "SBP_LEX_V2_IMPERSONATION:POSSESSION_PROOF",
@@ -92,7 +93,7 @@ IMPERSONATION_SIGNING_PURPOSES: Final = {
     UPSTREAM_RECEIPT_SCHEMA: "SBP_LEX_V2_IMPERSONATION:UPSTREAM_RECEIPT",
     REPLAY_PERSISTENCE_SCHEMA: "SBP_LEX_V2_IMPERSONATION:REPLAY_PERSISTENCE",
     _DURABLE_ANCHOR_SCHEMA: "SBP_LEX_V2_IMPERSONATION:DURABLE_STORE_ANCHOR",
-}
+})
 
 
 def impersonation_signing_purpose(schema: Any) -> str:
@@ -112,16 +113,16 @@ TRUST_ACTIVE: Final = "ACTIVE"
 TRUST_REVOKED: Final = "REVOKED"
 REPLAY_CLAIMED: Final = "CLAIMED"
 
-NO_AUTHORIZATION_EFFECT: Final = {
+NO_AUTHORIZATION_EFFECT: Final = MappingProxyType({
     "access_granted": False,
     "authority_granted": False,
     "licence_granted": False,
     "execution_authority_granted": False,
     "effect_authority_granted": False,
     "pipeline_bypass_permitted": False,
-}
+})
 
-DEPLOYMENT_DEPENDENCIES: Final = {
+DEPLOYMENT_DEPENDENCIES: Final = MappingProxyType({
     "private_composition_root_isolation": "DEPLOYMENT_REQUIRED_NOT_PROVEN",
     "owner_pinned_live_registry": (
         "REPOSITORY_IMPLEMENTED_DEPLOYMENT_ADMISSION_REQUIRED"
@@ -136,7 +137,7 @@ DEPLOYMENT_DEPENDENCIES: Final = {
         "REPOSITORY_IMPLEMENTED_DEPLOYMENT_ADMISSION_REQUIRED"
     ),
     "signing_key_custody": "EXTERNAL_HSM_OR_EQUIVALENT_REQUIRED_NOT_PROVEN",
-}
+})
 
 _RUNTIME_MODE_PRODUCTION: Final = "PRODUCTION"
 _RUNTIME_MODE_TEST_ONLY: Final = "TEST_ONLY"
@@ -164,21 +165,21 @@ _PRODUCTION_CLOCK_HEAD_ADMISSION_DIGEST: Final = os.environ.get(
     "SBP_LEX_IMPERSONATION_CLOCK_HEAD_ADMISSION_DIGEST"
 )
 
-_PROVIDER_BINDING_FIELDS: Final = {
+_PROVIDER_BINDING_FIELDS: Final = frozenset({
     "provider_id",
     "algorithm",
     "key_id",
     "custody_class",
     "effect_authority",
     "ed25519_public_key_fingerprint",
-}
-_VERIFIER_BINDING_FIELDS: Final = {
+})
+_VERIFIER_BINDING_FIELDS: Final = frozenset({
     "verifier_id",
     "verifier_version",
     "hash_stage",
     "receipt_provider_binding",
-}
-_CONTEXT_PAYLOAD_FIELDS: Final = {
+})
+_CONTEXT_PAYLOAD_FIELDS: Final = frozenset({
     "schema",
     "contract_id",
     "schema_status",
@@ -222,10 +223,10 @@ _CONTEXT_PAYLOAD_FIELDS: Final = {
     "valid_until_ms",
     "authorization_effect",
     "deployment_dependencies",
-}
-_SIGNED_FIELDS: Final = {"digest", "signature", "verified"}
+})
+_SIGNED_FIELDS: Final = frozenset({"digest", "signature", "verified"})
 _CONTEXT_FIELDS: Final = _CONTEXT_PAYLOAD_FIELDS | _SIGNED_FIELDS
-_LIVE_REGISTRY_PAYLOAD_FIELDS: Final = {
+_LIVE_REGISTRY_PAYLOAD_FIELDS: Final = frozenset({
     "schema",
     "contract_id",
     "schema_status",
@@ -248,9 +249,9 @@ _LIVE_REGISTRY_PAYLOAD_FIELDS: Final = {
     "revocation_sequence",
     "valid_from_ms",
     "valid_until_ms",
-}
+})
 _LIVE_REGISTRY_FIELDS: Final = _LIVE_REGISTRY_PAYLOAD_FIELDS | _SIGNED_FIELDS
-_PROOF_PAYLOAD_FIELDS: Final = {
+_PROOF_PAYLOAD_FIELDS: Final = frozenset({
     "schema",
     "contract_id",
     "schema_status",
@@ -278,9 +279,9 @@ _PROOF_PAYLOAD_FIELDS: Final = {
     "sovereign_identity_digest",
     "authority_boundary_digest",
     "prior_impersonation_digest",
-}
+})
 _PROOF_FIELDS: Final = _PROOF_PAYLOAD_FIELDS | _SIGNED_FIELDS
-_UPSTREAM_BINDING_FIELDS: Final = {
+_UPSTREAM_BINDING_FIELDS: Final = frozenset({
     "component_id",
     "verifier_id",
     "verifier_version",
@@ -289,8 +290,8 @@ _UPSTREAM_BINDING_FIELDS: Final = {
     "component_digest",
     "hash_binding_entry_hash",
     "verification_receipt_digest",
-}
-_SNAPSHOT_FIELDS: Final = {
+})
+_SNAPSHOT_FIELDS: Final = frozenset({
     "contract_id",
     "schema_status",
     "semantics",
@@ -313,8 +314,8 @@ _SNAPSHOT_FIELDS: Final = {
     "sovereign_identity_binding",
     "authority_boundary_binding",
     "prior_impersonation_digest",
-}
-_REPLAY_CLAIM_PAYLOAD_FIELDS: Final = {
+})
+_REPLAY_CLAIM_PAYLOAD_FIELDS: Final = frozenset({
     "schema",
     "contract_id",
     "context_id",
@@ -340,9 +341,9 @@ _REPLAY_CLAIM_PAYLOAD_FIELDS: Final = {
     "clock_record_digest",
     "result",
     "authorization_effect",
-}
+})
 _REPLAY_CLAIM_FIELDS: Final = _REPLAY_CLAIM_PAYLOAD_FIELDS | _SIGNED_FIELDS
-_REPLAY_HEAD_PAYLOAD_FIELDS: Final = {
+_REPLAY_HEAD_PAYLOAD_FIELDS: Final = frozenset({
     "schema",
     "contract_id",
     "context_id",
@@ -356,9 +357,9 @@ _REPLAY_HEAD_PAYLOAD_FIELDS: Final = {
     "latest_claim_receipt_digest",
     "observed_at_ms",
     "authorization_effect",
-}
+})
 _REPLAY_HEAD_FIELDS: Final = _REPLAY_HEAD_PAYLOAD_FIELDS | _SIGNED_FIELDS
-_CLOCK_RECORD_PAYLOAD_FIELDS: Final = {
+_CLOCK_RECORD_PAYLOAD_FIELDS: Final = frozenset({
     "schema",
     "contract_id",
     "context_id",
@@ -369,9 +370,9 @@ _CLOCK_RECORD_PAYLOAD_FIELDS: Final = {
     "prior_clock_record_digest",
     "now_ms",
     "authorization_effect",
-}
+})
 _CLOCK_RECORD_FIELDS: Final = _CLOCK_RECORD_PAYLOAD_FIELDS | _SIGNED_FIELDS
-_CLOCK_HEAD_PAYLOAD_FIELDS: Final = {
+_CLOCK_HEAD_PAYLOAD_FIELDS: Final = frozenset({
     "schema",
     "contract_id",
     "context_id",
@@ -385,9 +386,9 @@ _CLOCK_HEAD_PAYLOAD_FIELDS: Final = {
     "latest_transition_receipt_digest",
     "observed_at_ms",
     "authorization_effect",
-}
+})
 _CLOCK_HEAD_FIELDS: Final = _CLOCK_HEAD_PAYLOAD_FIELDS | _SIGNED_FIELDS
-_CLOCK_HEAD_TRANSITION_PAYLOAD_FIELDS: Final = {
+_CLOCK_HEAD_TRANSITION_PAYLOAD_FIELDS: Final = frozenset({
     "schema",
     "contract_id",
     "context_id",
@@ -402,11 +403,11 @@ _CLOCK_HEAD_TRANSITION_PAYLOAD_FIELDS: Final = {
     "observed_at_ms",
     "result",
     "authorization_effect",
-}
+})
 _CLOCK_HEAD_TRANSITION_FIELDS: Final = (
     _CLOCK_HEAD_TRANSITION_PAYLOAD_FIELDS | _SIGNED_FIELDS
 )
-_UPSTREAM_RECEIPT_PAYLOAD_FIELDS: Final = {
+_UPSTREAM_RECEIPT_PAYLOAD_FIELDS: Final = frozenset({
     "schema",
     "contract_id",
     "context_id",
@@ -424,9 +425,9 @@ _UPSTREAM_RECEIPT_PAYLOAD_FIELDS: Final = {
     "upstream_payload_digest",
     "result",
     "authorization_effect",
-}
+})
 _UPSTREAM_RECEIPT_FIELDS: Final = _UPSTREAM_RECEIPT_PAYLOAD_FIELDS | _SIGNED_FIELDS
-_REPLAY_PERSISTENCE_PAYLOAD_FIELDS: Final = {
+_REPLAY_PERSISTENCE_PAYLOAD_FIELDS: Final = frozenset({
     "schema",
     "contract_id",
     "context_id",
@@ -443,9 +444,9 @@ _REPLAY_PERSISTENCE_PAYLOAD_FIELDS: Final = {
     "observed_at_ms",
     "persisted",
     "authorization_effect",
-}
+})
 _REPLAY_PERSISTENCE_FIELDS: Final = _REPLAY_PERSISTENCE_PAYLOAD_FIELDS | _SIGNED_FIELDS
-_FALSE_FLAG_FIELDS: Final = {
+_FALSE_FLAG_FIELDS: Final = frozenset({
     "biometric_proof_established",
     "identity_issued",
     "identity_label_grants_access",
@@ -457,8 +458,8 @@ _FALSE_FLAG_FIELDS: Final = {
     "execution_authority_granted",
     "effect_authority_granted",
     "pipeline_bypass_permitted",
-}
-_RECORD_FIELDS: Final = {
+})
+_RECORD_FIELDS: Final = frozenset({
     "contract_id",
     "schema_status",
     "semantics",
@@ -482,7 +483,7 @@ _RECORD_FIELDS: Final = {
     "revocation_status",
     "revocation_sequence",
     "deployment_dependencies",
-} | _FALSE_FLAG_FIELDS
+}) | _FALSE_FLAG_FIELDS
 
 
 class OwnerPinnedTrustRegistry(Protocol):
@@ -1493,7 +1494,7 @@ def _clock_record_error(
             context.trusted_clock,
             "clock_version",
         ),
-        "authorization_effect": NO_AUTHORIZATION_EFFECT,
+        "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
     }
     sequence = record.get("clock_sequence")
     prior = record.get("prior_clock_record_digest")
@@ -1532,7 +1533,7 @@ def _clock_head_error(
         "context_digest": context_record["digest"],
         "head_id": context_record["clock_head_id"],
         "head_version": context_record["clock_head_version"],
-        "authorization_effect": NO_AUTHORIZATION_EFFECT,
+        "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
     }
     if any(head.get(field) != value for field, value in exact.items()):
         return "IMPERSONATION_CLOCK_HEAD_BINDING_INVALID"
@@ -2423,7 +2424,7 @@ def _head_error(
         "namespace": context_record["replay_namespace"],
         "subject_binding_digest": subject_binding_digest,
         "observed_at_ms": now_ms,
-        "authorization_effect": NO_AUTHORIZATION_EFFECT,
+        "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
     }
     if any(head.get(field) != value for field, value in exact.items()):
         return "IMPERSONATION_REPLAY_HEAD_BINDING_INVALID"
@@ -2509,7 +2510,7 @@ def _persistence_error(
         "revocation_sequence": revocation_sequence,
         "observed_at_ms": observed_at_ms,
         "persisted": True,
-        "authorization_effect": NO_AUTHORIZATION_EFFECT,
+        "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
     }
     if any(receipt.get(field) != value for field, value in exact.items()):
         return "IMPERSONATION_REPLAY_PERSISTENCE_BINDING_INVALID"
@@ -3209,7 +3210,7 @@ def verify_impersonation_protection(
             "clock_record_digest": current_snapshot["clock_record_digest"],
             "claimed_at_ms": current_snapshot["evaluation_time"],
             "result": REPLAY_CLAIMED,
-            "authorization_effect": NO_AUTHORIZATION_EFFECT,
+            "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
         }
         if any(
             receipt.get(field) != value

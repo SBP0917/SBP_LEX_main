@@ -12,6 +12,7 @@ determinations must come from the injected signed evaluator.
 
 from copy import deepcopy
 import hmac
+from types import MappingProxyType
 from typing import Any, Final, Protocol
 
 from sbp_lex.security.integrity import (
@@ -61,7 +62,7 @@ FILED_GOVERNANCE_INTEGRITY_ORDER: Final = (
     STRATEGIC_INSTABILITY_EARLY_WARNING,
     AUTONOMOUS_CONTAINMENT_REVOCATION_CASCADE,
 )
-FILED_GOVERNANCE_INTEGRITY_FUNCTION_IDS: Final = {
+FILED_GOVERNANCE_INTEGRITY_FUNCTION_IDS: Final = MappingProxyType({
     BLACK_SWAN_DETECTION_ARCHITECTURE: (
         "BLACK_SWAN_DETECTION_ARCHITECTURE"
     ),
@@ -73,14 +74,14 @@ FILED_GOVERNANCE_INTEGRITY_FUNCTION_IDS: Final = {
     AUTONOMOUS_CONTAINMENT_REVOCATION_CASCADE: (
         "AUTONOMOUS_CONTAINMENT_REVOCATION_CASCADE"
     ),
-}
-FILED_GOVERNANCE_INTEGRITY_STAGES: Final = {
+})
+FILED_GOVERNANCE_INTEGRITY_STAGES: Final = MappingProxyType({
     function: (
         "filed_governance_integrity:"
         f"{FILED_GOVERNANCE_INTEGRITY_FUNCTION_IDS[function].lower()}"
     )
     for function in FILED_GOVERNANCE_INTEGRITY_ORDER
-}
+})
 FILED_GOVERNANCE_INTEGRITY_AUTHORITY_ROLE: Final = (
     "FILED_GOVERNANCE_INTEGRITY_EVALUATOR"
 )
@@ -94,7 +95,7 @@ FILED_GOVERNANCE_INTEGRITY_RESULT_VOCABULARY: Final = (
     GOVERNANCE_INTEGRITY_ESCALATE,
 )
 
-_EVALUATOR_METHODS: Final = {
+_EVALUATOR_METHODS: Final = MappingProxyType({
     BLACK_SWAN_DETECTION_ARCHITECTURE: (
         "evaluate_black_swan_detection_architecture"
     ),
@@ -106,9 +107,9 @@ _EVALUATOR_METHODS: Final = {
     AUTONOMOUS_CONTAINMENT_REVOCATION_CASCADE: (
         "evaluate_autonomous_containment_revocation_cascade"
     ),
-}
+})
 
-_SNAPSHOT_FIELDS: Final = {
+_SNAPSHOT_FIELDS: Final = frozenset({
     "schema_status",
     "implementation_order_authority",
     "result_vocabulary_authority",
@@ -130,8 +131,8 @@ _SNAPSHOT_FIELDS: Final = {
     "skg_digest",
     "skg_record",
     "revocation_binding",
-}
-_SOURCE_FIELDS: Final = {
+})
+_SOURCE_FIELDS: Final = frozenset({
     "schema_status",
     "result_vocabulary_authority",
     "evaluator_id",
@@ -157,8 +158,8 @@ _SOURCE_FIELDS: Final = {
     "digest",
     "signature",
     "verified",
-}
-_DETERMINATION_FIELDS: Final = {
+})
+_DETERMINATION_FIELDS: Final = frozenset({
     "result",
     "evidence_references",
     "authority_granted",
@@ -166,8 +167,8 @@ _DETERMINATION_FIELDS: Final = {
     "execution_authority_granted",
     "effect_granted",
     "bypass_permitted",
-}
-_RECORD_FIELDS: Final = {
+})
+_RECORD_FIELDS: Final = frozenset({
     "schema_status",
     "result_vocabulary_authority",
     "governance_integrity_function",
@@ -187,8 +188,8 @@ _RECORD_FIELDS: Final = {
     "execution_authority_granted",
     "effect_granted",
     "bypass_permitted",
-}
-_REVOCATION_FIELDS: Final = {"status", "sequence", "digest"}
+})
+_REVOCATION_FIELDS: Final = frozenset({"status", "sequence", "digest"})
 _PROHIBITED_GRANT_FIELDS: Final = (
     "authority_granted",
     "licence_granted",

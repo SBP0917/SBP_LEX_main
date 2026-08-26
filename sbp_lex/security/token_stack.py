@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 from copy import deepcopy
+from types import MappingProxyType
 from typing import Dict, Any, List
 
 from sbp_lex.baseline.foundational_baseline import (
@@ -68,7 +69,7 @@ from sbp_lex.governance.authority_provenance import (
 # LOCKED TOKEN NAMES
 # ─────────────────────────────────────────────
 
-REQUIRED_CORE_TOKENS: List[str] = [
+REQUIRED_CORE_TOKENS = (
     "foundational",
     "authority_provenance",
     "authority",
@@ -95,17 +96,17 @@ REQUIRED_CORE_TOKENS: List[str] = [
     "aurion",
     "execution_boundary",
     "execution_attestation",
-]
+)
 
-CONDITIONAL_THRESHOLD_TOKENS: List[str] = [
+CONDITIONAL_THRESHOLD_TOKENS = (
     "consequentiality_threshold",
     "corroboration_threshold",
     "financial_threshold",
     "autonomy_boundary_threshold",
     "escalation_threshold",
-]
+)
 
-_TOKEN_ISSUANCE_CONTRACTS: dict[str, tuple[str, str]] = {
+_TOKEN_ISSUANCE_CONTRACTS = MappingProxyType({
     "foundational": (
         FOUNDATIONAL_BASELINE_AGGREGATE_STAGE,
         FOUNDATIONAL_BASELINE_AGGREGATE_STAGE,
@@ -151,7 +152,7 @@ _TOKEN_ISSUANCE_CONTRACTS: dict[str, tuple[str, str]] = {
         )
         for governance_function in FILED_GOVERNANCE_INTEGRITY_ORDER
     },
-}
+})
 
 _APPLICATION_INTEGRITY_TOKEN_FIELDS = (
     "application_integrity_result_digest",
@@ -176,7 +177,7 @@ _FOUNDATIONAL_AUTHORITY_FIELDS = (
     "effect_authority_granted",
     "pipeline_bypass_permitted",
 )
-_FOUNDATIONAL_TOKEN_BODY_FIELDS = {
+_FOUNDATIONAL_TOKEN_BODY_FIELDS = frozenset({
     "name",
     "request_fingerprint",
     "issued_state_hash",
@@ -194,12 +195,12 @@ _FOUNDATIONAL_TOKEN_BODY_FIELDS = {
     "issued_at_stage",
     "payload",
     *_FOUNDATIONAL_AUTHORITY_FIELDS,
-}
-_FOUNDATIONAL_TOKEN_FIELDS = _FOUNDATIONAL_TOKEN_BODY_FIELDS | {
+})
+_FOUNDATIONAL_TOKEN_FIELDS = _FOUNDATIONAL_TOKEN_BODY_FIELDS | frozenset({
     "digest",
     "signature",
     "verified",
-}
+})
 
 _AUTHORITY_PROVENANCE_BINDING_FIELDS = (
     "authority_provenance_digest",
@@ -210,30 +211,30 @@ _AUTHORITY_PROVENANCE_BINDING_FIELDS = (
 )
 _AUTHORITY_PROVENANCE_TOKEN_BODY_FIELDS = (
     _FOUNDATIONAL_TOKEN_BODY_FIELDS
-    | set(_AUTHORITY_PROVENANCE_BINDING_FIELDS)
+    | frozenset(_AUTHORITY_PROVENANCE_BINDING_FIELDS)
 )
 _AUTHORITY_PROVENANCE_TOKEN_FIELDS = (
     _AUTHORITY_PROVENANCE_TOKEN_BODY_FIELDS
-    | {"digest", "signature", "verified"}
+    | frozenset({"digest", "signature", "verified"})
 )
 
-_FRAMEWORK_TOKEN_BINDINGS = {
+_FRAMEWORK_TOKEN_BINDINGS = MappingProxyType({
     "ptodf": ("PTODF", "filed_framework:ptodf"),
     "aj_saaf": ("AJ-SAAF", "filed_framework:aj_saaf"),
     "gala": ("GALA", "filed_framework:gala"),
     "abegf": ("ABEGF", "filed_framework:abegf"),
-}
+})
 
-_LIFECYCLE_TOKEN_BINDINGS = {
+_LIFECYCLE_TOKEN_BINDINGS = MappingProxyType({
     FILED_LIFECYCLE_ENGINE_IDS[engine].lower(): (
         engine,
         FILED_LIFECYCLE_ENGINE_IDS[engine],
         FILED_LIFECYCLE_STAGES[engine],
     )
     for engine in FILED_LIFECYCLE_ORDER
-}
+})
 
-_GOVERNANCE_INTEGRITY_TOKEN_BINDINGS = {
+_GOVERNANCE_INTEGRITY_TOKEN_BINDINGS = MappingProxyType({
     FILED_GOVERNANCE_INTEGRITY_FUNCTION_IDS[
         governance_function
     ].lower(): (
@@ -242,9 +243,9 @@ _GOVERNANCE_INTEGRITY_TOKEN_BINDINGS = {
         FILED_GOVERNANCE_INTEGRITY_STAGES[governance_function],
     )
     for governance_function in FILED_GOVERNANCE_INTEGRITY_ORDER
-}
+})
 
-_SKG_RECORD_FIELDS = {
+_SKG_RECORD_FIELDS = frozenset({
     "contract_id",
     "schema_status",
     "content_classes",
@@ -260,8 +261,8 @@ _SKG_RECORD_FIELDS = {
     "authority_granted",
     "execution_authority_granted",
     "downstream_override_permitted",
-}
-_SKG_SNAPSHOT_FIELDS = {
+})
+_SKG_SNAPSHOT_FIELDS = frozenset({
     "contract_id",
     "schema_status",
     "content_classes",
@@ -271,8 +272,8 @@ _SKG_SNAPSHOT_FIELDS = {
     "pre_evaluation_state_hash",
     "evaluation_time",
     "prior_skg_digest",
-}
-_SKG_SOURCE_FIELDS = {
+})
+_SKG_SOURCE_FIELDS = frozenset({
     "contract_id",
     "schema_status",
     "evaluator_id",
@@ -289,16 +290,16 @@ _SKG_SOURCE_FIELDS = {
     "digest",
     "signature",
     "verified",
-}
-_SKG_DETERMINATION_FIELDS = {
+})
+_SKG_DETERMINATION_FIELDS = frozenset({
     "result",
     "content_class_results",
     "evidence_references",
     "authority_granted",
     "execution_authority_granted",
     "downstream_override_permitted",
-}
-_LIFECYCLE_RECORD_FIELDS = {
+})
+_LIFECYCLE_RECORD_FIELDS = frozenset({
     "schema_status",
     "lifecycle_engine",
     "lifecycle_engine_id",
@@ -316,8 +317,8 @@ _LIFECYCLE_RECORD_FIELDS = {
     "execution_authority_granted",
     "licence_granted",
     "governance_superseded",
-}
-_LIFECYCLE_SNAPSHOT_FIELDS = {
+})
+_LIFECYCLE_SNAPSHOT_FIELDS = frozenset({
     "schema_status",
     "lifecycle_engine",
     "lifecycle_engine_id",
@@ -337,8 +338,8 @@ _LIFECYCLE_SNAPSHOT_FIELDS = {
     "skg_digest",
     "skg_record",
     "governance_result",
-}
-_LIFECYCLE_SOURCE_FIELDS = {
+})
+_LIFECYCLE_SOURCE_FIELDS = frozenset({
     "schema_status",
     "evaluator_id",
     "evaluator_version",
@@ -360,8 +361,8 @@ _LIFECYCLE_SOURCE_FIELDS = {
     "digest",
     "signature",
     "verified",
-}
-_LIFECYCLE_DETERMINATION_FIELDS = {
+})
+_LIFECYCLE_DETERMINATION_FIELDS = frozenset({
     "result",
     "transition_beyond_current_ai_paradigms_modelled",
     "full_lifecycle_governance_envelope_secured",
@@ -374,8 +375,8 @@ _LIFECYCLE_DETERMINATION_FIELDS = {
     "licence_granted",
     "governance_superseded",
     "evidence_references",
-}
-_GOVERNANCE_INTEGRITY_RECORD_FIELDS = {
+})
+_GOVERNANCE_INTEGRITY_RECORD_FIELDS = frozenset({
     "schema_status",
     "result_vocabulary_authority",
     "governance_integrity_function",
@@ -395,8 +396,8 @@ _GOVERNANCE_INTEGRITY_RECORD_FIELDS = {
     "execution_authority_granted",
     "effect_granted",
     "bypass_permitted",
-}
-_GOVERNANCE_INTEGRITY_DETERMINATION_FIELDS = {
+})
+_GOVERNANCE_INTEGRITY_DETERMINATION_FIELDS = frozenset({
     "result",
     "evidence_references",
     "authority_granted",
@@ -404,7 +405,7 @@ _GOVERNANCE_INTEGRITY_DETERMINATION_FIELDS = {
     "execution_authority_granted",
     "effect_granted",
     "bypass_permitted",
-}
+})
 _GOVERNANCE_INTEGRITY_NO_GRANT_FIELDS = (
     "authority_granted",
     "licence_granted",

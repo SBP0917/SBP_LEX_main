@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import operator
+import shutil
 import subprocess
 import sys
-from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,10 @@ PTDE_HISTORY_DIGEST = "a" * 128
 LOCAL_TRUST_HISTORY_SEQUENCE = 0
 LOCAL_TRUST_HISTORY_DIGEST = "b" * 128
 PRIOR_LOCK_SHA512 = "GENESIS"
+GIT_EXECUTABLE = shutil.which("git")
+if GIT_EXECUTABLE is None:
+    raise RuntimeError("git required for repository guard tests")
+GIT_SHA512 = hashlib.sha512(Path(GIT_EXECUTABLE).read_bytes()).hexdigest()
 
 
 def _verify(root: Path, *, scope: str = "test") -> dict:
@@ -32,6 +38,8 @@ def _verify(root: Path, *, scope: str = "test") -> dict:
             LOCAL_TRUST_HISTORY_DIGEST
         ),
         expected_python_dependency_prior_lock_sha512=PRIOR_LOCK_SHA512,
+        git_executable=GIT_EXECUTABLE,
+        expected_git_executable_sha512=GIT_SHA512,
     )
 
 
@@ -176,6 +184,8 @@ def _repository(tmp_path: Path) -> Path:
         ).encode("utf-8"),
     )
     _git(root, "init", "-q")
+    _git(root, "config", "core.autocrlf", "false")
+    _git(root, "config", "core.eol", "lf")
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "fixture")
     return root
@@ -191,7 +201,12 @@ def test_clean_committed_known_good_repository_passes(
     tmp_path: Path,
     exact_environment: None,
 ) -> None:
-    result = _verify(_repository(tmp_path), scope="test")
+    root = _repository(tmp_path)
+    observed_status = repository_guard.PinnedGit(
+        GIT_EXECUTABLE, GIT_SHA512
+    ).run(root, "status", "--porcelain=v1", "--untracked-files=all")
+    assert observed_status == b"", observed_status
+    result = _verify(root, scope="test")
     assert result["status"] == "PASS", (result["failures"], result["checks"])
     assert result["failures"] == []
     assert result["checks"] == {
@@ -209,6 +224,16 @@ def test_clean_committed_known_good_repository_passes(
     assert result["self_referential_hash_manifest_created"] is False
 
 
+def test_dependency_validator_truth_is_immutable() -> None:
+    for policy in (
+        repository_guard.DIRECT_REQUIREMENTS,
+        repository_guard.PRODUCTION_PACKAGES,
+        repository_guard.TEST_PACKAGES,
+    ):
+        with pytest.raises(TypeError):
+            operator.setitem(policy, "hostile", "0.0.0")
+
+
 def test_dirty_and_untracked_trees_fail_closed(
     tmp_path: Path,
     exact_environment: None,
@@ -221,6 +246,44 @@ def test_dirty_and_untracked_trees_fail_closed(
     assert "working_tree_not_clean" in result["failures"]
     assert "untracked_files_present" in result["failures"]
     assert result["checks"]["critical_inventory_matches_commit"] is False
+
+
+def test_guard_disables_hostile_repository_fsmonitor(
+    tmp_path: Path,
+    exact_environment: None,
+) -> None:
+    root = _repository(tmp_path)
+    marker = tmp_path / "guard-fsmonitor-executed.txt"
+    helper = tmp_path / "guard-hostile-fsmonitor.py"
+    helper.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    helper_command = (
+        f'"{Path(sys.executable).as_posix()}" "{helper.as_posix()}"'
+    )
+    _git(root, "config", "core.fsmonitor", helper_command)
+
+    result = _verify(root)
+
+    assert result["status"] == "PASS", result["failures"]
+    assert not marker.exists()
+
+
+def test_repository_inventory_path_count_is_bounded(
+    tmp_path: Path,
+    exact_environment: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _repository(tmp_path)
+    _git(root, "status", "--porcelain=v1", "--untracked-files=all")
+    monkeypatch.setattr(repository_guard, "MAX_TRACKED_PATHS", 1)
+
+    result = _verify(root)
+
+    assert result["status"] == "FAIL"
+    assert "critical_inventory_path_limit" in result["failures"]
 
 
 def test_malformed_lock_and_environment_drift_fail_closed(
@@ -246,7 +309,7 @@ def test_change_control_requires_classified_checks_and_rollback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = _repository(tmp_path)
-    invalid = deepcopy(repository_guard.CHANGE_CONTROL_POLICY)
+    invalid = repository_guard.change_control_policy_document()
     invalid["change_classes"]["trust_boundary"]["rollback_plan_required"] = False
     monkeypatch.setattr(repository_guard, "CHANGE_CONTROL_POLICY", invalid)
     result = _verify(root)
@@ -282,6 +345,8 @@ def test_repository_guard_requires_external_v3_rollback_pins(
             LOCAL_TRUST_HISTORY_DIGEST
         ),
         expected_python_dependency_prior_lock_sha512=PRIOR_LOCK_SHA512,
+        git_executable=GIT_EXECUTABLE,
+        expected_git_executable_sha512=GIT_SHA512,
     )
     assert substituted["checks"]["governed_python_lock_binding"] is False
     assert "governed_python_lock_binding_invalid" in substituted["failures"]
@@ -322,6 +387,8 @@ def test_repository_guard_rejects_v2_and_non_genesis_transition(
             LOCAL_TRUST_HISTORY_DIGEST
         ),
         expected_python_dependency_prior_lock_sha512="c" * 128,
+        git_executable=GIT_EXECUTABLE,
+        expected_git_executable_sha512=GIT_SHA512,
     )
     assert invalid_transition["checks"]["governed_python_lock_binding"] is False
 
@@ -372,6 +439,8 @@ def test_repository_guard_recomputes_entire_governed_lock(
             LOCAL_TRUST_HISTORY_DIGEST
         ),
         expected_python_dependency_prior_lock_sha512=expected_prior,
+        git_executable=GIT_EXECUTABLE,
+        expected_git_executable_sha512=GIT_SHA512,
     )
     assert result["checks"]["governed_python_lock_binding"] is False
     assert "governed_python_lock_binding_invalid" in result["failures"]

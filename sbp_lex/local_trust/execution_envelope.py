@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .artifact import build_signed_artifact, validate_signed_artifact
 from .command_evidence import (
@@ -15,13 +16,12 @@ from .command_evidence import (
 from .constants import FAIL, PASS
 from .signing import HybridSigningContext, HybridVerificationContext
 
-
 PAYLOAD_SCHEMA = "SBP_LEX_V2_LOCAL_TRUST_EXECUTION_ENVELOPE_PAYLOAD_V1"
-_PAYLOAD_FIELDS = {
+_PAYLOAD_FIELDS = frozenset({
     "schema_id", "status", "bound_manifest_digest", "environment",
     "command_policy", "command_results", "required_command_failures",
     "secrets_retained", "runtime_attachment",
-}
+})
 
 
 def build_execution_envelope(

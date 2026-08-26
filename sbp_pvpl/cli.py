@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from .canonical import canonical_document_bytes
-from .errors import PVPLValidationError, reject
+from .errors import PVPLValidationError
 from .file_io import read_canonical_file, write_exclusive_canonical_file
 from .verifier import build_publication_claim, validation_report
 
@@ -84,7 +85,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except PVPLValidationError as exc:
         _emit({"error_code": exc.code})
         return 2
-    except (Exception, MemoryError) as exc:
+    except BaseException as exc:
+        if isinstance(exc, (KeyboardInterrupt, SystemExit, GeneratorExit)):
+            raise
         _emit({"error_code": f"PVPL_INTERNAL_FAIL_CLOSED:{type(exc).__name__}"})
         return 2
 

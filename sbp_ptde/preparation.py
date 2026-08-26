@@ -70,6 +70,7 @@ from .constants import (
     T_PROFILE_PATH,
     T_SCHEMA_ID,
     TRANSCRIPT_SCHEMA_ID,
+    assurance_limits_document,
 )
 from .errors import PTDEVerificationError, reject
 from .git_objects import (
@@ -98,7 +99,7 @@ E_INPUT_PREPARATION_STATE = "EXTERNAL_LANE_EXECUTION_INPUTS_REQUIRED"
 NOT_SELECTED = "NOT_SELECTED"
 NOT_ADMITTED = "NOT_ADMITTED"
 
-_P_PACKET_FIELDS = {
+_P_PACKET_FIELDS = frozenset({
     "schema_id",
     "stage_sequence",
     "candidate_binding",
@@ -109,8 +110,8 @@ _P_PACKET_FIELDS = {
     "admission_state",
     "no_authority",
     "packet_sha512",
-}
-_LOCAL_HISTORY_BINDING_FIELDS = {
+})
+_LOCAL_HISTORY_BINDING_FIELDS = frozenset({
     "schema_id",
     "history_id",
     "sequence",
@@ -119,23 +120,23 @@ _LOCAL_HISTORY_BINDING_FIELDS = {
     "history_context_digest",
     "signing_purpose",
     "validation_status",
-}
-_PYTHON_BINDING_FIELDS = {
+})
+_PYTHON_BINDING_FIELDS = frozenset({
     "schema_id",
     "python_lock_schema_id",
     "python_lock_blob",
     "python_inputs_sha512",
     "dependency_evidence_status",
-}
-_TREE_BLOB_FIELDS = {
+})
+_TREE_BLOB_FIELDS = frozenset({
     "path",
     "mode",
     "blob_oid",
     "blob_sha512",
     "blob_raw_sha512",
     "byte_count",
-}
-_E_INPUT_FIELDS = {
+})
+_E_INPUT_FIELDS = frozenset({
     "schema_id",
     "stage_sequence",
     "p_packet_sha512",
@@ -155,14 +156,14 @@ _E_INPUT_FIELDS = {
     "no_authority",
     "assurance_limits",
     "skeleton_sha512",
-}
-_OBJECT_BINDING_FIELDS = {
+})
+_OBJECT_BINDING_FIELDS = frozenset({
     "commit_oid",
     "commit_raw_sha512",
     "tree_oid",
     "tree_raw_sha512",
-}
-_FIXED_E_MANIFEST_BINDING_FIELDS = {
+})
+_FIXED_E_MANIFEST_BINDING_FIELDS = frozenset({
     "p_commit_oid",
     "p_tree_oid",
     "t_commit_oid",
@@ -177,8 +178,8 @@ _FIXED_E_MANIFEST_BINDING_FIELDS = {
     "t_profile_sha512",
     "p_inventory_sha512",
     "lanes_sha512",
-}
-_LANE_INPUT_FIELDS = {
+})
+_LANE_INPUT_FIELDS = frozenset({
     "lane_id",
     "order",
     "committed_lane_contract",
@@ -187,15 +188,15 @@ _LANE_INPUT_FIELDS = {
     "transcript_relative_path",
     "transcript_maximum_byte_count",
     "required_external_result_fields",
-}
-_D_FINGERPRINT_FIELDS = {
+})
+_D_FINGERPRINT_FIELDS = frozenset({
     "os_fingerprint_sha512",
     "build_fingerprint_sha512",
     "architecture_fingerprint_sha512",
     "runtime_fingerprint_sha512",
     "toolchain_fingerprint_sha512",
-}
-_REQUIRED_EXTERNAL_RESULT_FIELDS = [
+})
+_REQUIRED_EXTERNAL_RESULT_FIELDS = (
     "attempt_id",
     "argv",
     "authority_mutation_observed",
@@ -230,8 +231,8 @@ _REQUIRED_EXTERNAL_RESULT_FIELDS = [
     "transcript_path",
     "transcript_sha512",
     "wall_clock_milliseconds",
-]
-_SCRIPT_GIT_SUFFIXES = {".bat", ".cmd", ".ps1", ".py", ".sh"}
+)
+_SCRIPT_GIT_SUFFIXES = frozenset({".bat", ".cmd", ".ps1", ".py", ".sh"})
 
 
 def _file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, int]:
@@ -1814,7 +1815,7 @@ def prepare_d_descriptor(
         "lanes_sha512": t_profile["lanes_sha512"],
         "single_pipeline_callables": _callable_records(database, t_tree),
         "no_authority": dict(NO_AUTHORITY),
-        "assurance_limits": dict(ASSURANCE_LIMITS),
+        "assurance_limits": assurance_limits_document(),
     }
     return validate_d_descriptor(
         descriptor,
@@ -1998,7 +1999,7 @@ def prepare_e_campaign_input_skeleton(
         "preparation_state": E_INPUT_PREPARATION_STATE,
         "admission_state": NOT_ADMITTED,
         "no_authority": dict(NO_AUTHORITY),
-        "assurance_limits": dict(ASSURANCE_LIMITS),
+        "assurance_limits": assurance_limits_document(),
     }
     skeleton = {**unsigned, "skeleton_sha512": canonical_sha512(unsigned)}
     return validate_e_campaign_input_skeleton(
@@ -2159,7 +2160,9 @@ def validate_e_campaign_input_skeleton(
         ):
             raise reject("PTDE_E_INPUT_EVIDENCE_PATH_COLLISION")
         observed_paths.update(lane_paths)
-        if checked["required_external_result_fields"] != _REQUIRED_EXTERNAL_RESULT_FIELDS:
+        if checked["required_external_result_fields"] != list(
+            _REQUIRED_EXTERNAL_RESULT_FIELDS
+        ):
             raise reject("PTDE_E_INPUT_EXTERNAL_FIELDS_INVALID")
         observed.append(lane_id)
         committed_lanes.append(lane_contract)

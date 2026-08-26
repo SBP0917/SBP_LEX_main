@@ -650,12 +650,12 @@ def test_later_token_binds_application_and_foundational_digests() -> None:
 
 
 def test_required_order_is_foundational_then_existing_order() -> None:
-    assert REQUIRED_CORE_TOKENS[:4] == [
+    assert REQUIRED_CORE_TOKENS[:4] == (
         "foundational",
         "authority_provenance",
         "authority",
         "skg",
-    ]
+    )
     assert _TOKEN_ISSUANCE_CONTRACTS["foundational"] == (
         FOUNDATIONAL_BASELINE_AGGREGATE_STAGE,
         FOUNDATIONAL_BASELINE_AGGREGATE_STAGE,

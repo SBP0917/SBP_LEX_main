@@ -62,7 +62,10 @@ _MAX_TEXT_UTF8_BYTES: Final = 512
 _MAX_COLLECTION_ITEMS: Final = 64
 _MAX_STRUCTURED_INPUT_BYTES: Final = 16_384
 _MAX_SQLITE_INTEGER: Final = 9_223_372_036_854_775_807
-_REPLAY_CLAIM_FIELDS: Final = {
+_MAX_DATABASE_BYTES: Final = 256 * 1_024 * 1_024
+_MAX_SQLITE_VALUE_BYTES: Final = 1_048_576
+_MAX_SQL_BYTES: Final = 65_536
+_REPLAY_CLAIM_FIELDS: Final = frozenset({
     "schema",
     "contract_id",
     "context_id",
@@ -88,7 +91,23 @@ _REPLAY_CLAIM_FIELDS: Final = {
     "clock_record_digest",
     "result",
     "authorization_effect",
-}
+})
+_CLOCK_TRANSITION_FIELDS: Final = frozenset({
+    "schema",
+    "contract_id",
+    "context_id",
+    "context_digest",
+    "head_id",
+    "head_version",
+    "head_sequence",
+    "prior_head_digest",
+    "clock_sequence",
+    "clock_record_digest",
+    "prior_clock_record_digest",
+    "observed_at_ms",
+    "result",
+    "authorization_effect",
+})
 _T = TypeVar("_T")
 
 
@@ -100,7 +119,13 @@ def _text(value: Any) -> bool:
     if type(value) is not str or not value:
         return False
     try:
-        return len(value.encode("utf-8")) <= _MAX_TEXT_UTF8_BYTES
+        return (
+            len(value.encode("utf-8")) <= _MAX_TEXT_UTF8_BYTES
+            and not any(
+                ord(character) < 0x20 or ord(character) == 0x7F
+                for character in value
+            )
+        )
     except UnicodeEncodeError:
         return False
 
@@ -119,10 +144,12 @@ def _bounded_text_list(value: Any) -> bool:
 
 
 def _bounded_object(value: Any) -> bool:
-    return (
-        type(value) is dict
-        and len(canonical_json_bytes(value)) <= _MAX_STRUCTURED_INPUT_BYTES
-    )
+    if type(value) is not dict:
+        return False
+    try:
+        return len(canonical_json_bytes(value)) <= _MAX_STRUCTURED_INPUT_BYTES
+    except (TypeError, UnicodeError, ValueError):
+        return False
 
 
 def _json(value: Any) -> str:
@@ -172,6 +199,11 @@ def _validate_secure_path(path: Path, *, may_be_missing: bool) -> None:
         raise ImpersonationDurabilityError(
             "IMPERSONATION_DURABLE_ABSOLUTE_EXISTING_PARENT_REQUIRED"
         )
+    parent_metadata = path.parent.stat()
+    if os.name != "nt" and stat.S_IMODE(parent_metadata.st_mode) & 0o022:
+        raise ImpersonationDurabilityError(
+            "IMPERSONATION_DURABLE_PARENT_PERMISSIONS_REJECTED"
+        )
     current = path.parent
     while True:
         if _is_reparse_or_link(current):
@@ -181,7 +213,7 @@ def _validate_secure_path(path: Path, *, may_be_missing: bool) -> None:
         if current.parent == current:
             break
         current = current.parent
-    if not path.exists():
+    if not os.path.lexists(path):
         if may_be_missing:
             return
         raise ImpersonationDurabilityError("IMPERSONATION_DURABLE_PATH_UNAVAILABLE")
@@ -222,6 +254,24 @@ def _fsync_parent(path: Path) -> None:
             ) from exc
     finally:
         os.close(descriptor)
+
+
+def _ensure_database_file(path: Path) -> None:
+    if os.path.lexists(path):
+        return
+    try:
+        with open(path, "xb") as stream:
+            stream.flush()
+            os.fsync(stream.fileno())
+        _owner_only(path)
+        _fsync_parent(path)
+    except FileExistsError:
+        pass
+    except OSError as exc:
+        raise ImpersonationDurabilityError(
+            "IMPERSONATION_DURABLE_DATABASE_CREATION_FAILED"
+        ) from exc
+    _validate_secure_path(path, may_be_missing=False)
 
 
 class _ReceiptSigner:
@@ -318,6 +368,11 @@ class _ReceiptSigner:
 
 class _AnchoredSQLiteStore:
     store_kind: str
+    durable_storage_class = "SINGLE_HOST_LOCAL_SQLITE_WAL_SIGNED_ANCHOR"
+    distributed_durability_admitted = False
+    externally_operated_rollback_anchor_admitted = False
+    hardware_custody_provided_by_store = False
+    filesystem_owner_only_mode_enforced = os.name != "nt"
 
     def __init__(
         self,
@@ -358,6 +413,14 @@ class _AnchoredSQLiteStore:
             raise ImpersonationDurabilityError(
                 "IMPERSONATION_DURABLE_PATH_ALIAS_REJECTED"
             )
+        if any(
+            os.path.normcase(str(self.anchor_path))
+            == os.path.normcase(f"{self.database_path}{suffix}")
+            for suffix in ("-journal", "-wal", "-shm")
+        ):
+            raise ImpersonationDurabilityError(
+                "IMPERSONATION_DURABLE_ANCHOR_PATH_INVALID"
+            )
         self.store_id = store_id
         self.context_id = context_id
         self.context_digest = context_digest
@@ -372,6 +435,7 @@ class _AnchoredSQLiteStore:
         )
         self._extra_identity = deepcopy(extra_identity or {})
         self._lock = threading.RLock()
+        self._database_identity: tuple[int, int] | None = None
         self._identity = {
             "schema_version": STORE_SCHEMA_VERSION,
             "store_kind": self.store_kind,
@@ -450,7 +514,20 @@ class _AnchoredSQLiteStore:
                 self._signer.owner_pinned_context_digest
             ),
             "fixture_class": self.fixture_class,
-            "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+            "durable_storage_class": self.durable_storage_class,
+            "distributed_durability_admitted": (
+                self.distributed_durability_admitted
+            ),
+            "externally_operated_rollback_anchor_admitted": (
+                self.externally_operated_rollback_anchor_admitted
+            ),
+            "hardware_custody_provided_by_store": (
+                self.hardware_custody_provided_by_store
+            ),
+            "filesystem_owner_only_mode_enforced": (
+                self.filesystem_owner_only_mode_enforced
+            ),
+            "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
         }
 
     def sign_hybrid_preimage(
@@ -473,26 +550,136 @@ class _AnchoredSQLiteStore:
 
     def _connect(self) -> sqlite3.Connection:
         _validate_secure_path(self.database_path, may_be_missing=True)
+        _ensure_database_file(self.database_path)
+        _validate_secure_path(self.database_path, may_be_missing=False)
         for suffix in ("-wal", "-shm"):
             sidecar = Path(f"{self.database_path}{suffix}")
-            if sidecar.exists():
+            if os.path.lexists(sidecar):
                 _validate_secure_path(sidecar, may_be_missing=False)
-        connection = sqlite3.connect(
-            self.database_path,
-            isolation_level=None,
-            timeout=30.0,
-        )
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA synchronous=FULL")
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA trusted_schema=OFF")
-        _owner_only(self.database_path)
-        for suffix in ("-wal", "-shm"):
-            sidecar = Path(f"{self.database_path}{suffix}")
-            if sidecar.exists():
-                _validate_secure_path(sidecar, may_be_missing=False)
-                _owner_only(sidecar)
-        return connection
+        connection: sqlite3.Connection | None = None
+        try:
+            before_open = self.database_path.lstat()
+            connection = sqlite3.connect(
+                self.database_path,
+                isolation_level=None,
+                timeout=30.0,
+            )
+            connection.setlimit(
+                sqlite3.SQLITE_LIMIT_LENGTH,
+                _MAX_SQLITE_VALUE_BYTES,
+            )
+            connection.setlimit(sqlite3.SQLITE_LIMIT_SQL_LENGTH, _MAX_SQL_BYTES)
+            connection.setlimit(sqlite3.SQLITE_LIMIT_COLUMN, 64)
+            connection.setlimit(sqlite3.SQLITE_LIMIT_ATTACHED, 0)
+            journal_mode = self._pragma_scalar(connection, "PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA synchronous=FULL")
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("PRAGMA trusted_schema=OFF")
+            connection.execute("PRAGMA recursive_triggers=OFF")
+            connection.execute("PRAGMA temp_store=MEMORY")
+            connection.execute("PRAGMA secure_delete=ON")
+            connection.execute("PRAGMA cell_size_check=ON")
+            connection.execute("PRAGMA ignore_check_constraints=OFF")
+            connection.execute("PRAGMA writable_schema=OFF")
+            connection.execute("PRAGMA mmap_size=0")
+            connection.execute("PRAGMA cache_size=-2048")
+            connection.execute("PRAGMA wal_autocheckpoint=256")
+            connection.execute("PRAGMA journal_size_limit=16777216")
+            connection.execute("PRAGMA busy_timeout=30000")
+            after_open = self.database_path.lstat()
+            if not os.path.samestat(before_open, after_open):
+                raise ImpersonationDurabilityError(
+                    "IMPERSONATION_DURABLE_DATABASE_SUBSTITUTED_DURING_OPEN"
+                )
+            if (
+                str(journal_mode).casefold() != "wal"
+                or self._pragma_scalar(connection, "PRAGMA synchronous") != 2
+                or self._pragma_scalar(connection, "PRAGMA foreign_keys") != 1
+                or self._pragma_scalar(connection, "PRAGMA trusted_schema") != 0
+                or self._pragma_scalar(connection, "PRAGMA recursive_triggers") != 0
+                or self._pragma_scalar(connection, "PRAGMA temp_store") != 2
+                or self._pragma_scalar(connection, "PRAGMA secure_delete") != 1
+                or self._pragma_scalar(connection, "PRAGMA cell_size_check") != 1
+                or self._pragma_scalar(
+                    connection,
+                    "PRAGMA ignore_check_constraints",
+                )
+                != 0
+                or self._pragma_scalar(connection, "PRAGMA writable_schema") != 0
+                or self._pragma_scalar(connection, "PRAGMA mmap_size") != 0
+                or self._pragma_scalar(connection, "PRAGMA cache_size") != -2_048
+                or self._pragma_scalar(connection, "PRAGMA wal_autocheckpoint")
+                != 256
+                or self._pragma_scalar(connection, "PRAGMA journal_size_limit")
+                != 16_777_216
+                or self._pragma_scalar(connection, "PRAGMA busy_timeout") != 30_000
+            ):
+                raise ImpersonationDurabilityError(
+                    "IMPERSONATION_DURABLE_SQLITE_PRAGMA_MISMATCH"
+                )
+            page_size = self._pragma_scalar(connection, "PRAGMA page_size")
+            page_count = self._pragma_scalar(connection, "PRAGMA page_count")
+            if (
+                type(page_size) is not int
+                or page_size <= 0
+                or type(page_count) is not int
+            ):
+                raise ImpersonationDurabilityError(
+                    "IMPERSONATION_DURABLE_SQLITE_PAGE_BOUNDS_INVALID"
+                )
+            maximum_pages = max(1, _MAX_DATABASE_BYTES // page_size)
+            enforced_pages = self._pragma_scalar(
+                connection,
+                f"PRAGMA max_page_count={maximum_pages}",
+            )
+            if page_count > maximum_pages or enforced_pages != maximum_pages:
+                raise ImpersonationDurabilityError(
+                    "IMPERSONATION_DURABLE_DATABASE_TOO_LARGE"
+                )
+            _owner_only(self.database_path)
+            self._pin_or_verify_database_identity()
+            for suffix in ("-wal", "-shm"):
+                sidecar = Path(f"{self.database_path}{suffix}")
+                if os.path.lexists(sidecar):
+                    _validate_secure_path(sidecar, may_be_missing=False)
+                    _owner_only(sidecar)
+            return connection
+        except ImpersonationDurabilityError:
+            if connection is not None:
+                connection.close()
+            raise
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            if connection is not None:
+                connection.close()
+            raise ImpersonationDurabilityError(
+                "IMPERSONATION_DURABLE_DATABASE_UNAVAILABLE"
+            ) from exc
+
+    @staticmethod
+    def _pragma_scalar(connection: sqlite3.Connection, statement: str) -> object:
+        row = connection.execute(statement).fetchone()
+        if row is None or len(row) != 1:
+            raise ImpersonationDurabilityError(
+                "IMPERSONATION_DURABLE_SQLITE_PRAGMA_UNAVAILABLE"
+            )
+        return row[0]
+
+    def _pin_or_verify_database_identity(self) -> None:
+        _validate_secure_path(self.database_path, may_be_missing=False)
+        try:
+            metadata = self.database_path.lstat()
+        except OSError as exc:
+            raise ImpersonationDurabilityError(
+                "IMPERSONATION_DURABLE_DATABASE_UNAVAILABLE"
+            ) from exc
+        identity = (metadata.st_dev, metadata.st_ino)
+        with self._lock:
+            if self._database_identity is None:
+                self._database_identity = identity
+            elif self._database_identity != identity:
+                raise ImpersonationDurabilityError(
+                    "IMPERSONATION_DURABLE_DATABASE_IDENTITY_CHANGED"
+                )
 
     def _create_schema(self, connection: sqlite3.Connection) -> None:
         raise NotImplementedError
@@ -504,6 +691,11 @@ class _AnchoredSQLiteStore:
         return canonical_integrity_hash(
             {
                 "identity": self._identity,
+                "schema": connection.execute(
+                    "SELECT type, name, tbl_name, sql FROM sqlite_schema "
+                    "WHERE name NOT LIKE 'sqlite_%' "
+                    "ORDER BY type, name, tbl_name, sql"
+                ).fetchall(),
                 "rows": self._state_rows(connection),
             }
         )
@@ -524,7 +716,7 @@ class _AnchoredSQLiteStore:
             "context_digest": self.context_digest,
             "generation": generation,
             "state_digest": state_digest,
-            "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+            "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
         }
 
     def _write_anchor(self, anchor: dict[str, Any]) -> None:
@@ -533,12 +725,18 @@ class _AnchoredSQLiteStore:
         )
         data = canonical_json_bytes(anchor)
         try:
+            _validate_secure_path(self.anchor_path, may_be_missing=True)
+            if len(data) > _MAX_STRUCTURED_INPUT_BYTES:
+                raise ImpersonationDurabilityError(
+                    "IMPERSONATION_DURABLE_ANCHOR_SIZE_INVALID"
+                )
             with open(temporary, "xb") as stream:
                 stream.write(data)
                 stream.flush()
                 os.fsync(stream.fileno())
             _owner_only(temporary)
             os.replace(temporary, self.anchor_path)
+            _validate_secure_path(self.anchor_path, may_be_missing=False)
             _owner_only(self.anchor_path)
             _fsync_parent(self.anchor_path)
         except Exception as exc:
@@ -633,8 +831,10 @@ class _AnchoredSQLiteStore:
                         (state_digest, canonical_integrity_hash(anchor)),
                     )
                     connection.execute("COMMIT")
+                    _fsync_parent(self.database_path)
                 except Exception:
-                    connection.execute("ROLLBACK")
+                    if connection.in_transaction:
+                        connection.execute("ROLLBACK")
                     raise
             else:
                 connection.execute("BEGIN IMMEDIATE")
@@ -642,7 +842,8 @@ class _AnchoredSQLiteStore:
                     self._validate_connection(connection)
                     connection.execute("COMMIT")
                 except Exception:
-                    connection.execute("ROLLBACK")
+                    if connection.in_transaction:
+                        connection.execute("ROLLBACK")
                     raise
 
     def _validate_connection(self, connection: sqlite3.Connection) -> tuple[int, str]:
@@ -704,7 +905,8 @@ class _AnchoredSQLiteStore:
                 connection.execute("COMMIT")
                 return result
             except Exception:
-                connection.execute("ROLLBACK")
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
                 raise
 
     def _mutate(self, operation: Callable[[sqlite3.Connection], _T]) -> _T:
@@ -717,6 +919,10 @@ class _AnchoredSQLiteStore:
                 if state_digest == prior_state_digest:
                     connection.execute("COMMIT")
                     return result
+                if generation >= _MAX_SQLITE_INTEGER:
+                    raise ImpersonationDurabilityError(
+                        "IMPERSONATION_DURABLE_GENERATION_EXHAUSTED"
+                    )
                 anchor = self._signer.sign(
                     self._anchor_payload(
                         generation=generation + 1,
@@ -734,9 +940,11 @@ class _AnchoredSQLiteStore:
                     ),
                 )
                 connection.execute("COMMIT")
+                _fsync_parent(self.database_path)
                 return result
             except Exception:
-                connection.execute("ROLLBACK")
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
                 raise
 
 
@@ -933,6 +1141,11 @@ class SQLiteOwnerPinnedTrustRegistry(_AnchoredSQLiteStore):
         subject_id: str,
         participant_id: str,
     ) -> dict[str, Any]:
+        if not _text(subject_id) or not _text(participant_id):
+            raise ImpersonationDurabilityError(
+                "IMPERSONATION_REGISTRY_LOOKUP_INPUT_INVALID"
+            )
+
         def operation(connection: sqlite3.Connection) -> dict[str, Any]:
             row = connection.execute(
                 "SELECT record_digest, record_json FROM live_identities "
@@ -1031,7 +1244,7 @@ class SQLiteImpersonationReplayGuard(_AnchoredSQLiteStore):
             "claim_sequence": values[3],
             "latest_claim_receipt_digest": values[4],
             "observed_at_ms": observed_at_ms,
-            "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+            "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
         }
 
     def current_head(
@@ -1058,7 +1271,7 @@ class SQLiteImpersonationReplayGuard(_AnchoredSQLiteStore):
                 observed_at_ms=observed_at_ms,
             )
             existing = connection.execute(
-                "SELECT head_json FROM replay_head_observations WHERE "
+                "SELECT head_digest, head_json FROM replay_head_observations WHERE "
                 "namespace = ? AND subject_digest = ? AND observed_at_ms = ? "
                 "AND claim_sequence = ?",
                 (
@@ -1069,8 +1282,11 @@ class SQLiteImpersonationReplayGuard(_AnchoredSQLiteStore):
                 ),
             ).fetchone()
             if existing is not None:
-                record = _object(existing[0], "IMPERSONATION_REPLAY_HEAD_CORRUPT")
-                if not self._signer.verify(record):
+                record = _object(existing[1], "IMPERSONATION_REPLAY_HEAD_CORRUPT")
+                if (
+                    canonical_integrity_hash(record) != existing[0]
+                    or not self._signer.verify(record)
+                ):
                     raise ImpersonationDurabilityError(
                         "IMPERSONATION_REPLAY_HEAD_SIGNATURE_INVALID"
                     )
@@ -1165,6 +1381,10 @@ class SQLiteImpersonationReplayGuard(_AnchoredSQLiteStore):
                 "WHERE namespace = ? AND subject_digest = ?",
                 (namespace, subject_digest),
             ).fetchone() or (0, 0, 0, 0, GENESIS_HASH)
+            if row[3] >= _MAX_SQLITE_INTEGER:
+                raise ImpersonationDurabilityError(
+                    "IMPERSONATION_REPLAY_SEQUENCE_EXHAUSTED"
+                )
             expected_sequence = row[3] + 1
             observation = connection.execute(
                 "SELECT claim_sequence, observed_at_ms, head_json "
@@ -1249,6 +1469,18 @@ class SQLiteImpersonationReplayGuard(_AnchoredSQLiteStore):
         observed_at_ms: int,
         current_head_digest: str,
     ) -> dict[str, Any]:
+        if (
+            not _text(namespace)
+            or not is_sha512(replay_key)
+            or not is_sha512(receipt_digest)
+            or not is_sha512(subject_binding_digest)
+            or not _nonnegative_integer(observed_at_ms)
+            or not is_sha512(current_head_digest)
+        ):
+            raise ImpersonationDurabilityError(
+                "IMPERSONATION_REPLAY_PERSISTENCE_INPUT_INVALID"
+            )
+
         def operation(connection: sqlite3.Connection) -> dict[str, Any]:
             row = connection.execute(
                 "SELECT claim_sequence, receipt_digest, receipt_json "
@@ -1267,14 +1499,18 @@ class SQLiteImpersonationReplayGuard(_AnchoredSQLiteStore):
                 "WHERE head_digest = ? AND namespace = ? AND subject_digest = ?",
                 (current_head_digest, namespace, subject_binding_digest),
             ).fetchone()
+            claim_receipt = (
+                _object(row[2], "IMPERSONATION_REPLAY_RECEIPT_CORRUPT")
+                if row is not None
+                else None
+            )
             persisted = (
                 row is not None
                 and head is not None
+                and claim_receipt is not None
                 and row[1] == receipt_digest
-                and canonical_integrity_hash(
-                    _object(row[2], "IMPERSONATION_REPLAY_RECEIPT_CORRUPT")
-                )
-                == receipt_digest
+                and canonical_integrity_hash(claim_receipt) == receipt_digest
+                and self._signer.verify(claim_receipt)
                 and observation == (head[3],)
                 and head[4] == receipt_digest
             )
@@ -1294,7 +1530,7 @@ class SQLiteImpersonationReplayGuard(_AnchoredSQLiteStore):
                 "revocation_sequence": head[2] if head is not None else -1,
                 "observed_at_ms": observed_at_ms,
                 "persisted": persisted,
-                "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+                "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
             }
             receipt = self._signer.sign(payload)
             connection.execute(
@@ -1379,7 +1615,12 @@ class AuthenticatedMonotonicClock(_AnchoredSQLiteStore):
         context_id: str,
         context_digest: str,
     ) -> dict[str, Any]:
-        observed = self._time_source()
+        try:
+            observed = self._time_source()
+        except Exception as exc:
+            raise ImpersonationDurabilityError(
+                "IMPERSONATION_TRUSTED_TIME_SOURCE_UNAVAILABLE"
+            ) from exc
         if (
             context_id != self.context_id
             or context_digest != self.context_digest
@@ -1398,6 +1639,10 @@ class AuthenticatedMonotonicClock(_AnchoredSQLiteStore):
             sequence, previous_time, prior_digest, prior_json = (
                 (0, -1, GENESIS_HASH, "") if row is None else row
             )
+            if sequence >= _MAX_SQLITE_INTEGER:
+                raise ImpersonationDurabilityError(
+                    "IMPERSONATION_TRUSTED_CLOCK_SEQUENCE_EXHAUSTED"
+                )
             if observed < previous_time:
                 raise ImpersonationDurabilityError(
                     "IMPERSONATION_TRUSTED_CLOCK_ROLLBACK"
@@ -1431,7 +1676,7 @@ class AuthenticatedMonotonicClock(_AnchoredSQLiteStore):
                 "clock_sequence": sequence + 1,
                 "prior_clock_record_digest": prior_digest,
                 "now_ms": observed,
-                "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+                "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
             }
             record = self._signer.sign(payload)
             connection.execute(
@@ -1551,7 +1796,7 @@ class SQLiteImpersonationClockHead(_AnchoredSQLiteStore):
                 "prior_clock_record_digest": row[3],
                 "latest_transition_receipt_digest": row[4],
                 "observed_at_ms": row[5],
-                "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+                "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
             }
             record = self._signer.sign(payload)
             digest = canonical_integrity_hash(record)
@@ -1564,7 +1809,11 @@ class SQLiteImpersonationClockHead(_AnchoredSQLiteStore):
         return self._mutate(operation)
 
     def advance_once(self, *, transition: dict[str, Any]) -> dict[str, Any]:
-        if type(transition) is not dict:
+        if (
+            type(transition) is not dict
+            or set(transition) != _CLOCK_TRANSITION_FIELDS
+            or not _bounded_object(transition)
+        ):
             raise ImpersonationDurabilityError("IMPERSONATION_CLOCK_TRANSITION_INVALID")
 
         def operation(connection: sqlite3.Connection) -> dict[str, Any]:
@@ -1575,6 +1824,10 @@ class SQLiteImpersonationClockHead(_AnchoredSQLiteStore):
             if row is None:
                 raise ImpersonationDurabilityError(
                     "IMPERSONATION_CLOCK_HEAD_STATE_MISSING"
+                )
+            if row[0] >= _MAX_SQLITE_INTEGER or row[1] >= _MAX_SQLITE_INTEGER:
+                raise ImpersonationDurabilityError(
+                    "IMPERSONATION_CLOCK_TRANSITION_SEQUENCE_EXHAUSTED"
                 )
             observed = connection.execute(
                 "SELECT head_sequence FROM clock_head_observations "
@@ -1592,13 +1845,14 @@ class SQLiteImpersonationClockHead(_AnchoredSQLiteStore):
                 "clock_sequence": row[1] + 1,
                 "prior_clock_record_digest": row[2],
                 "result": "ADVANCED",
-                "authorization_effect": NO_AUTHORIZATION_EFFECT,
+                "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
             }
             if (
                 observed != (row[0],)
                 or any(transition.get(key) != value for key, value in exact.items())
+                or not is_sha512(transition.get("prior_head_digest"))
                 or not is_sha512(transition.get("clock_record_digest"))
-                or type(transition.get("observed_at_ms")) is not int
+                or not _nonnegative_integer(transition.get("observed_at_ms"))
                 or transition["observed_at_ms"] < row[3]
             ):
                 raise ImpersonationDurabilityError(

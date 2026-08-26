@@ -53,7 +53,7 @@ _NO_AUTHORITY_FIELDS: Final = (
     "pipeline_bypass_permitted",
     "downstream_override_permitted",
 )
-_SOURCE_FIELDS: Final = {
+_SOURCE_FIELDS: Final = frozenset({
     "contract_id",
     "schema_status",
     "evaluator_id",
@@ -73,8 +73,8 @@ _SOURCE_FIELDS: Final = {
     "digest",
     "signature",
     "verified",
-}
-_DETERMINATION_FIELDS: Final = {
+})
+_DETERMINATION_FIELDS: Final = frozenset({
     "result",
     "participant_id",
     "mandate_id",
@@ -85,18 +85,18 @@ _DETERMINATION_FIELDS: Final = {
     "policy",
     "evidence_references",
     *_NO_AUTHORITY_FIELDS,
-}
-_AUTHORITY_FIELDS: Final = {"authority_id", "evidence_digest"}
-_JURISDICTION_FIELDS: Final = {"jurisdiction_id", "evidence_digest"}
-_CLASSIFICATION_FIELDS: Final = {
+})
+_AUTHORITY_FIELDS: Final = frozenset({"authority_id", "evidence_digest"})
+_JURISDICTION_FIELDS: Final = frozenset({"jurisdiction_id", "evidence_digest"})
+_CLASSIFICATION_FIELDS: Final = frozenset({
     "taxonomy_id",
     "rule_set_id",
     "rule_set_version",
     "rule_set_digest",
     "class_id",
     "subclass_id",
-}
-_POLICY_FIELDS: Final = {
+})
+_POLICY_FIELDS: Final = frozenset({
     "policy_id",
     "policy_version",
     "policy_digest",
@@ -105,8 +105,8 @@ _POLICY_FIELDS: Final = {
     "effective_until",
     "permitted_actions",
     "restricted_actions",
-}
-_RECORD_FIELDS: Final = {
+})
+_RECORD_FIELDS: Final = frozenset({
     "contract_id",
     "schema_status",
     "stage",
@@ -126,7 +126,7 @@ _RECORD_FIELDS: Final = {
     "policy",
     "evidence_references",
     *_NO_AUTHORITY_FIELDS,
-}
+})
 
 
 def _text(value: Any) -> bool:

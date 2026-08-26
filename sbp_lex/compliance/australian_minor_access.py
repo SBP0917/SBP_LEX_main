@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hmac
+from collections.abc import Set as AbstractSet
 from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha512
@@ -113,7 +114,7 @@ class AustralianMinorAccessError(RuntimeError):
     """The compliance evidence contract could not be established."""
 
 
-_BINDING_KEYS = {
+_BINDING_KEYS = frozenset({
     "provider_id",
     "credential_id",
     "algorithm",
@@ -121,8 +122,8 @@ _BINDING_KEYS = {
     "key_fingerprint",
     "custody_class",
     "effect_authority",
-}
-_SIGNATURE_KEYS = {
+})
+_SIGNATURE_KEYS = frozenset({
     "provider_id",
     "credential_id",
     "algorithm",
@@ -130,10 +131,10 @@ _SIGNATURE_KEYS = {
     "custody_class",
     "effect_authority",
     "signature_b64",
-}
-_ENVELOPE_KEYS = {"payload", "payload_digest", "signature"}
-_HYBRID_RESERVED_FIELDS = {"digest", "signature", "verified"}
-_OWNER_KEYS = {
+})
+_ENVELOPE_KEYS = frozenset({"payload", "payload_digest", "signature"})
+_HYBRID_RESERVED_FIELDS = frozenset({"digest", "signature", "verified"})
+_OWNER_KEYS = frozenset({
     "schema",
     "context_id",
     "status",
@@ -161,8 +162,8 @@ _OWNER_KEYS = {
     "pseudonymizer_binding",
     "deployment_mode",
     "effect_authority",
-}
-_REGISTRY_KEYS = {
+})
+_REGISTRY_KEYS = frozenset({
     "schema",
     "context_id",
     "registry_id",
@@ -176,8 +177,8 @@ _REGISTRY_KEYS = {
     "valid_until",
     "lane_binding_digests",
     "effect_authority",
-}
-_REVOCATION_KEYS = {
+})
+_REVOCATION_KEYS = frozenset({
     "schema",
     "context_id",
     "registry_digest",
@@ -190,8 +191,8 @@ _REVOCATION_KEYS = {
     "expires_at",
     "status",
     "effect_authority",
-}
-_CLOCK_KEYS = {
+})
+_CLOCK_KEYS = frozenset({
     "schema",
     "context_id",
     "source_id",
@@ -201,8 +202,8 @@ _CLOCK_KEYS = {
     "observed_at",
     "status",
     "effect_authority",
-}
-_EVIDENCE_KEYS = {
+})
+_EVIDENCE_KEYS = frozenset({
     "schema",
     "context_id",
     "lane",
@@ -222,8 +223,8 @@ _EVIDENCE_KEYS = {
     "result",
     "details",
     "effect_authority",
-}
-_REPLAY_HEAD_KEYS = {
+})
+_REPLAY_HEAD_KEYS = frozenset({
     "schema",
     "context_id",
     "store_id",
@@ -235,8 +236,8 @@ _REPLAY_HEAD_KEYS = {
     "observed_at",
     "status",
     "effect_authority",
-}
-_REPLAY_RECEIPT_KEYS = {
+})
+_REPLAY_RECEIPT_KEYS = frozenset({
     "schema",
     "context_id",
     "store_id",
@@ -256,12 +257,12 @@ _REPLAY_RECEIPT_KEYS = {
     "claimed_at",
     "status",
     "effect_authority",
-}
+})
 _DURABLE_PROVIDER_ADMISSION_SCHEMA: Final = (
     "SBP-LEX-AU-MINOR-DURABLE-PROVIDER-ADMISSION-V1"
 )
 _DURABLE_PROVIDER_KINDS: Final = ("clock", "revocation", "replay")
-_DURABLE_PROVIDER_ADMISSION_KEYS = {
+_DURABLE_PROVIDER_ADMISSION_KEYS = frozenset({
     "schema",
     "context_id",
     "provider_kind",
@@ -277,8 +278,8 @@ _DURABLE_PROVIDER_ADMISSION_KEYS = {
     "rollback_protected",
     "production_durable_storage_admitted",
     "effect_authority",
-}
-_SUCCESS_RECORD_KEYS = {
+})
+_SUCCESS_RECORD_KEYS = frozenset({
     "schema",
     "stage",
     "context_id",
@@ -309,8 +310,8 @@ _SUCCESS_RECORD_KEYS = {
     "execution_authority_granted",
     "effect_authority",
     "record_digest",
-}
-_FAIL_RECORD_KEYS = {
+})
+_FAIL_RECORD_KEYS = frozenset({
     "schema",
     "stage",
     "result",
@@ -323,8 +324,8 @@ _FAIL_RECORD_KEYS = {
     "execution_authority_granted",
     "effect_authority",
     "record_digest",
-}
-_SNAPSHOT_KEYS = {
+})
+_SNAPSHOT_KEYS = frozenset({
     "request_fingerprint",
     "minor_access_request_binding_digest",
     "subject_session_binding_digest",
@@ -334,10 +335,14 @@ _SNAPSHOT_KEYS = {
     "pseudonymizer_version",
     "pseudonymization_key_id",
     "pseudonymization_key_fingerprint",
-}
+})
 
 
-def _exact_dict(value: Any, keys: set[str], label: str) -> dict[str, Any]:
+def _exact_dict(
+    value: Any,
+    keys: AbstractSet[str],
+    label: str,
+) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != keys:
         raise AustralianMinorAccessError(f"MALFORMED_{label}")
     return value
@@ -450,7 +455,7 @@ def _verify_signed(
     envelope: Any,
     binding: dict[str, Any],
     *,
-    payload_keys: set[str],
+    payload_keys: AbstractSet[str],
     label: str,
     allow_legacy_test_only: bool = False,
     deployment_mode: str = TEST_ONLY_MODE,
@@ -1059,7 +1064,7 @@ def _verify_composition_signed(
     comp: _DeploymentComposition,
     envelope: Any,
     *,
-    payload_keys: set[str],
+    payload_keys: AbstractSet[str],
     label: str,
 ) -> dict[str, Any]:
     binding_name, purpose = _signature_contract(label)

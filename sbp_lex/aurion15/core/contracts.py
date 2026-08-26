@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 
 
@@ -20,7 +21,7 @@ def _contract(*writes: str) -> EngineContract:
 # These fields are deliberately explicit.  A new or changed engine cannot enter
 # the runtime merely because it imported successfully; its mutation surface must
 # be reviewed here and is enforced around every invocation.
-ENGINE_CONTRACTS: Final[dict[str, EngineContract]] = {
+ENGINE_CONTRACTS: Final = MappingProxyType({
     "authority_first_execution_engine": _contract(
         "aurion15_result",
         "authority_first_execution_context",
@@ -137,10 +138,10 @@ ENGINE_CONTRACTS: Final[dict[str, EngineContract]] = {
     "technology_impact_engine": _contract(
         "candidate_action", "technology_impact_flags", "technology_impact_score", "technology_impact_status"
     ),
-}
+})
 
 
-KNOWN_CONVERGENCE_FIELDS: Final[dict[str, tuple[str, ...]]] = {
+KNOWN_CONVERGENCE_FIELDS: Final = MappingProxyType({
     "demographic_monitoring_engine": (
         "demographic_monitoring_status",
         "demographic_shift_flags",
@@ -166,7 +167,7 @@ KNOWN_CONVERGENCE_FIELDS: Final[dict[str, tuple[str, ...]]] = {
         "societal_stability_score",
         "societal_stability_status",
     ),
-}
+})
 
 
 def validate_engine_contracts(engine_names: set[str]) -> None:

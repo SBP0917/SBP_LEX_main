@@ -7,7 +7,6 @@ from sbp_lex.security.hybrid_signature import (
     STRICT_DUAL_SIGNATURE_VERIFICATION_RULE,
 )
 
-
 # ─────────────────────────────────────────────
 # V2 SECURITY CONFIG (FAIL-CLOSED PRE-ADMISSION)
 # ─────────────────────────────────────────────
@@ -51,7 +50,7 @@ AUDIT_LEDGER_REQUIRED = True
 
 DEFAULT_COLLECTIVE_SIGNAL_MAX_AGE_SECONDS = 300
 
-REQUIRED_CORE_TOKENS = [
+REQUIRED_CORE_TOKENS = (
     "authority",
     "procedural_truth",
     "ptodf",
@@ -65,15 +64,15 @@ REQUIRED_CORE_TOKENS = [
     "aurion",
     "execution_boundary",
     "execution_attestation",
-]
+)
 
-CONDITIONAL_THRESHOLD_TOKENS = [
+CONDITIONAL_THRESHOLD_TOKENS = (
     "consequentiality_threshold",
     "corroboration_threshold",
     "financial_threshold",
     "autonomy_boundary_threshold",
     "escalation_threshold",
-]
+)
 
 
 # ─────────────────────────────────────────────

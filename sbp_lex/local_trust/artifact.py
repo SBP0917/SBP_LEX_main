@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from .constants import (
     ARTIFACT_SCHEMA,
@@ -13,8 +14,8 @@ from .constants import (
     DETACHED_BOUNDARY,
     GENESIS,
     NO_AUTHORITY,
-    TEST_ONLY,
     STAGE_SCHEMAS,
+    TEST_ONLY,
     TIME_EVIDENCE_SCHEMA,
     stage_sequence,
 )
@@ -31,7 +32,7 @@ class LocalTrustArtifactError(ValueError):
     pass
 
 
-_TIME_UNSIGNED_FIELDS = {
+_TIME_UNSIGNED_FIELDS = frozenset({
     "schema_id",
     "contract_version",
     "context_id",
@@ -41,10 +42,12 @@ _TIME_UNSIGNED_FIELDS = {
     "source_class",
     "status",
     "no_authority",
-}
-_TIME_FIELDS = _TIME_UNSIGNED_FIELDS | {"signatures", "time_evidence_digest"}
+})
+_TIME_FIELDS = _TIME_UNSIGNED_FIELDS | frozenset(
+    {"signatures", "time_evidence_digest"}
+)
 
-_UNSIGNED_FIELDS = {
+_UNSIGNED_FIELDS = frozenset({
     "schema_id",
     "contract_version",
     "stage_schema",
@@ -60,8 +63,10 @@ _UNSIGNED_FIELDS = {
     "no_authority",
     "detached_boundary",
     "deployment_limits",
-}
-_ARTIFACT_FIELDS = _UNSIGNED_FIELDS | {"signatures", "artifact_digest"}
+})
+_ARTIFACT_FIELDS = _UNSIGNED_FIELDS | frozenset(
+    {"signatures", "artifact_digest"}
+)
 
 
 def build_trusted_time_evidence(
@@ -385,14 +390,16 @@ def validate_artifact_chain(
     }
 
 
-from .constants import FAIL, PASS  # placed after functions to keep contract constants grouped
-
+from .constants import (  # placed after functions to keep contract constants grouped
+    FAIL,
+    PASS,
+)
 
 __all__ = [
     "LocalTrustArtifactError",
     "build_signed_artifact",
     "build_trusted_time_evidence",
-    "validate_signed_artifact",
     "validate_artifact_chain",
+    "validate_signed_artifact",
     "verify_trusted_time_evidence",
 ]

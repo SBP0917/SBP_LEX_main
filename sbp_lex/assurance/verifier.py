@@ -4,6 +4,7 @@ import ctypes
 import json
 import os
 import signal
+import stat
 import subprocess
 import tempfile
 import threading
@@ -11,6 +12,7 @@ from collections.abc import Mapping, Sequence
 from ctypes import wintypes
 from dataclasses import dataclass
 from enum import Enum
+from hashlib import sha512
 from pathlib import Path
 from time import monotonic
 from typing import Any
@@ -21,6 +23,11 @@ ASSURANCE_VERDICT_VERSION = "sbp.v2.assurance-verdict/1"
 MAX_VERIFIER_INPUT_BYTES = 1_048_576
 MAX_VERIFIER_OUTPUT_BYTES = 65_536
 DEFAULT_VERIFIER_TIMEOUT_SECONDS = 2.0
+MAX_VERIFIER_EXECUTABLE_BYTES = 256 * 1024 * 1024
+MAX_VERIFIER_ARGUMENT_COUNT = 64
+MAX_VERIFIER_ARGUMENT_BYTES = 32_768
+MAX_VERIFIER_ARGUMENT_FILE_BYTES = 16_777_216
+_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
 
 _VERIFIER_REASON_CODES = frozenset(
     {
@@ -80,6 +87,316 @@ class _BoundedVerifierResult:
     stdout: bytes
     stderr: bytes
     failure_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class _VerifierExecutableMeasurement:
+    device: int
+    inode: int
+    byte_count: int
+    modified_at_ns: int
+    changed_at_ns: int
+    link_count: int
+    sha512: str
+
+
+@dataclass(frozen=True)
+class _VerifierArgumentFileMeasurement:
+    argument_index: int
+    argument_prefix: str
+    resolved_path: str
+    device: int
+    inode: int
+    byte_count: int
+    modified_at_ns: int
+    changed_at_ns: int
+    link_count: int
+    sha512: str
+
+
+def _is_link_or_reparse(value: os.stat_result) -> bool:
+    return stat.S_ISLNK(value.st_mode) or bool(
+        getattr(value, "st_file_attributes", 0) & _REPARSE_POINT
+    )
+
+
+def _measure_verifier_executable(
+    path: Path,
+) -> _VerifierExecutableMeasurement | None:
+    descriptor: int | None = None
+    try:
+        for component in (*reversed(path.parents), path):
+            if _is_link_or_reparse(component.lstat()):
+                return None
+        before = path.lstat()
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or _is_link_or_reparse(before)
+            or before.st_nlink != 1
+            or not 0 < before.st_size <= MAX_VERIFIER_EXECUTABLE_BYTES
+            or path.suffix.casefold() in {".bat", ".cmd", ".com", ".ps1", ".py", ".sh"}
+        ):
+            return None
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_BINARY", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        descriptor = os.open(path, flags)
+        opened = os.fstat(descriptor)
+        identity = (
+            int(before.st_dev),
+            int(before.st_ino),
+            int(before.st_size),
+            int(before.st_mtime_ns),
+            int(before.st_ctime_ns),
+            int(before.st_nlink),
+        )
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or _is_link_or_reparse(opened)
+            or (
+                int(opened.st_dev),
+                int(opened.st_ino),
+                int(opened.st_size),
+                int(opened.st_mtime_ns),
+                int(opened.st_nlink),
+            )
+            != (identity[0], identity[1], identity[2], identity[3], identity[5])
+        ):
+            return None
+        digest = sha512()
+        observed = 0
+        first = True
+        while True:
+            chunk = os.read(
+                descriptor,
+                min(1_048_576, MAX_VERIFIER_EXECUTABLE_BYTES + 1 - observed),
+            )
+            if not chunk:
+                break
+            if first:
+                first = False
+                if chunk.startswith(b"#!") or (
+                    os.name == "nt" and not chunk.startswith(b"MZ")
+                ):
+                    return None
+            observed += len(chunk)
+            if observed > MAX_VERIFIER_EXECUTABLE_BYTES:
+                return None
+            digest.update(chunk)
+        after = path.lstat()
+        if (
+            (
+                int(after.st_dev),
+                int(after.st_ino),
+                int(after.st_size),
+                int(after.st_mtime_ns),
+                int(after.st_ctime_ns),
+                int(after.st_nlink),
+            )
+            != identity
+            or _is_link_or_reparse(after)
+            or observed != before.st_size
+        ):
+            return None
+        return _VerifierExecutableMeasurement(*identity, digest.hexdigest())
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _measure_argument_file(
+    index: int, argument: str
+) -> _VerifierArgumentFileMeasurement | None:
+    prefix = "@" if argument.startswith("@") else ""
+    raw_path = argument[1:] if prefix else argument
+    if not raw_path or (not prefix and argument.startswith("-")):
+        return None
+    candidate = Path(raw_path)
+    try:
+        initial = candidate.lstat()
+    except (OSError, ValueError):
+        if prefix:
+            raise ValueError("verifier response file unavailable") from None
+        return None
+    if not candidate.is_absolute():
+        raise ValueError("verifier file arguments must be absolute")
+    try:
+        resolved = candidate.resolve(strict=True)
+        if os.path.normcase(os.path.abspath(candidate)) != os.path.normcase(
+            str(resolved)
+        ):
+            raise ValueError("verifier file argument aliases are forbidden")
+        for component in (*reversed(candidate.parents), candidate):
+            if _is_link_or_reparse(component.lstat()):
+                raise ValueError("verifier file argument links are forbidden")
+        if (
+            not stat.S_ISREG(initial.st_mode)
+            or _is_link_or_reparse(initial)
+            or initial.st_nlink != 1
+            or not 0 <= initial.st_size <= MAX_VERIFIER_ARGUMENT_FILE_BYTES
+        ):
+            raise ValueError("verifier file argument is unsafe")
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_BINARY", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        descriptor = os.open(resolved, flags)
+        try:
+            opened = os.fstat(descriptor)
+            identity = (
+                int(initial.st_dev),
+                int(initial.st_ino),
+                int(initial.st_size),
+                int(initial.st_mtime_ns),
+                int(initial.st_ctime_ns),
+                int(initial.st_nlink),
+            )
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or _is_link_or_reparse(opened)
+                or (
+                    int(opened.st_dev),
+                    int(opened.st_ino),
+                    int(opened.st_size),
+                    int(opened.st_mtime_ns),
+                    int(opened.st_nlink),
+                )
+                != (
+                    identity[0],
+                    identity[1],
+                    identity[2],
+                    identity[3],
+                    identity[5],
+                )
+            ):
+                raise ValueError("verifier file argument changed")
+            content_digest = sha512()
+            observed = 0
+            while True:
+                chunk = os.read(
+                    descriptor,
+                    min(
+                        1_048_576,
+                        MAX_VERIFIER_ARGUMENT_FILE_BYTES + 1 - observed,
+                    ),
+                )
+                if not chunk:
+                    break
+                observed += len(chunk)
+                if observed > MAX_VERIFIER_ARGUMENT_FILE_BYTES:
+                    raise ValueError("verifier file argument too large")
+                content_digest.update(chunk)
+        finally:
+            os.close(descriptor)
+        after = candidate.lstat()
+        if (
+            (
+                int(after.st_dev),
+                int(after.st_ino),
+                int(after.st_size),
+                int(after.st_mtime_ns),
+                int(after.st_ctime_ns),
+                int(after.st_nlink),
+            )
+            != identity
+            or _is_link_or_reparse(after)
+            or observed != initial.st_size
+        ):
+            raise ValueError("verifier file argument changed")
+        return _VerifierArgumentFileMeasurement(
+            index,
+            prefix,
+            str(resolved),
+            *identity,
+            content_digest.hexdigest(),
+        )
+    except (OSError, RuntimeError, TypeError) as exc:
+        raise ValueError("verifier file argument unavailable") from exc
+
+
+def _measure_command_argument_files(
+    command: Sequence[str | Path],
+) -> tuple[_VerifierArgumentFileMeasurement, ...]:
+    records: list[_VerifierArgumentFileMeasurement] = []
+    for index, part in enumerate(command[1:], start=1):
+        record = _measure_argument_file(index, str(part))
+        if record is not None:
+            records.append(record)
+    return tuple(records)
+
+
+def _command_digest(
+    command: Sequence[str | Path],
+    files: tuple[_VerifierArgumentFileMeasurement, ...],
+) -> str:
+    encoded = canonical_json_bytes(
+        {
+            "arguments": [str(part) for part in command],
+            "argument_files": [
+                {
+                    "argument_index": item.argument_index,
+                    "argument_prefix": item.argument_prefix,
+                    "resolved_path": item.resolved_path,
+                    "device": item.device,
+                    "inode": item.inode,
+                    "byte_count": item.byte_count,
+                    "modified_at_ns": item.modified_at_ns,
+                    "changed_at_ns": item.changed_at_ns,
+                    "link_count": item.link_count,
+                    "sha512": item.sha512,
+                }
+                for item in files
+            ],
+        }
+    )
+    return sha512(b"SBP-LEX/V2/ASSURANCE-VERIFIER-COMMAND/1\x00" + encoded).hexdigest()
+
+
+def verifier_command_digest(command: Sequence[str | Path]) -> str:
+    return _command_digest(command, _measure_command_argument_files(command))
+
+
+def _verifier_environment() -> dict[str, str]:
+    allowed = {
+        "COMSPEC",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LOCALAPPDATA",
+        "OS",
+        "SYSTEMDRIVE",
+        "SYSTEMROOT",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "WINDIR",
+    }
+    environment = {
+        name.upper(): value
+        for name, value in os.environ.items()
+        if name.upper() in allowed
+    }
+    environment.update(
+        {
+            "NO_COLOR": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONHASHSEED": "0",
+            "PYTHONIOENCODING": "utf-8",
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONSAFEPATH": "1",
+            "PATH": "",
+        }
+    )
+    return environment
 
 
 class _JobBasicLimitInformation(ctypes.Structure):
@@ -268,15 +585,19 @@ def _invoke_bounded(
     containment_failed = False
     readers: tuple[threading.Thread, ...] = ()
     try:
-        with tempfile.TemporaryFile() as verifier_input:
+        with tempfile.TemporaryFile() as verifier_input, tempfile.TemporaryDirectory(
+            prefix="sbp-lex-verifier-"
+        ) as isolated_cwd:
             verifier_input.write(encoded_envelope)
             verifier_input.seek(0)
             process = subprocess.Popen(
                 arguments,
+                cwd=isolated_cwd,
                 stdin=verifier_input,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 shell=False,
+                env=_verifier_environment(),
                 close_fds=True,
                 start_new_session=os.name != "nt",
                 creationflags=_windows_creation_flags(),
@@ -478,6 +799,8 @@ def invoke_veto_verifier(
     envelope: Mapping[str, Any],
     *,
     command: Sequence[str | Path],
+    expected_executable_sha512: str,
+    expected_command_sha512: str,
     timeout_seconds: float = DEFAULT_VERIFIER_TIMEOUT_SECONDS,
 ) -> VerifierInvocation:
     """Invoke a bounded veto verifier without a shell.
@@ -486,23 +809,73 @@ def invoke_veto_verifier(
     must bind its executable and arguments into measured startup evidence.
     """
 
-    if not command:
+    if (
+        not command
+        or len(command) > MAX_VERIFIER_ARGUMENT_COUNT
+        or any(
+            not isinstance(part, (str, Path))
+            or not str(part)
+            or "\x00" in str(part)
+            for part in command
+        )
+        or sum(len(str(part).encode("utf-8")) for part in command)
+        > MAX_VERIFIER_ARGUMENT_BYTES
+    ):
         return _invalid("VERIFIER_COMMAND_MISSING")
-    if timeout_seconds <= 0:
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, (int, float))
+        or not 0 < timeout_seconds <= 300
+    ):
         return _invalid("VERIFIER_TIMEOUT_INVALID")
+    if not _is_sha512_or_none(expected_executable_sha512) or (
+        expected_executable_sha512 is None
+    ):
+        return _invalid("VERIFIER_EXECUTABLE_PIN_INVALID")
+    if not _is_sha512_or_none(expected_command_sha512) or (
+        expected_command_sha512 is None
+    ):
+        return _invalid("VERIFIER_COMMAND_PIN_INVALID")
+    try:
+        argument_files = _measure_command_argument_files(command)
+        observed_command_digest = _command_digest(command, argument_files)
+    except ValueError:
+        return _invalid("VERIFIER_COMMAND_ARGUMENT_FILE_INVALID")
+    if observed_command_digest != expected_command_sha512:
+        return _invalid("VERIFIER_COMMAND_PIN_MISMATCH")
 
     executable = Path(command[0])
-    if not executable.is_absolute() or not executable.is_file():
+    try:
+        resolved_executable = executable.resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
         return _invalid("VERIFIER_EXECUTABLE_INVALID")
+    if (
+        not executable.is_absolute()
+        or os.path.normcase(os.path.abspath(executable))
+        != os.path.normcase(str(resolved_executable))
+    ):
+        return _invalid("VERIFIER_EXECUTABLE_INVALID")
+    executable_measurement = _measure_verifier_executable(resolved_executable)
+    if executable_measurement is None:
+        return _invalid("VERIFIER_EXECUTABLE_INVALID")
+    if executable_measurement.sha512 != expected_executable_sha512:
+        return _invalid("VERIFIER_EXECUTABLE_PIN_MISMATCH")
 
     encoded_envelope = canonical_json_bytes(envelope)
     if len(encoded_envelope) > MAX_VERIFIER_INPUT_BYTES:
         return _invalid("VERIFIER_INPUT_TOO_LARGE")
     completed = _invoke_bounded(
-        [str(part) for part in command],
+        [str(resolved_executable), *(str(part) for part in command[1:])],
         encoded_envelope=encoded_envelope,
         timeout_seconds=timeout_seconds,
     )
+    if _measure_verifier_executable(resolved_executable) != executable_measurement:
+        return _invalid("VERIFIER_EXECUTABLE_CHANGED")
+    try:
+        if _measure_command_argument_files(command) != argument_files:
+            return _invalid("VERIFIER_COMMAND_ARGUMENT_FILE_CHANGED")
+    except ValueError:
+        return _invalid("VERIFIER_COMMAND_ARGUMENT_FILE_CHANGED")
     if completed.failure_reason is not None:
         return _invalid(
             completed.failure_reason,

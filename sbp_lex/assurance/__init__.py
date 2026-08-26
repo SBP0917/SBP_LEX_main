@@ -15,16 +15,18 @@ from .verifier import (
     VerifierInvocation,
     invoke_veto_verifier,
     mode_requires_denial,
+    verifier_command_digest,
 )
 
 __all__ = [
     "ASSURANCE_ENVELOPE_VERSION",
     "AssuranceContractError",
+    "AssuranceMode",
+    "VerifierInvocation",
     "assurance_envelope_digest",
     "build_assurance_envelope",
     "canonical_json_bytes",
-    "AssuranceMode",
-    "VerifierInvocation",
     "invoke_veto_verifier",
     "mode_requires_denial",
+    "verifier_command_digest",
 ]

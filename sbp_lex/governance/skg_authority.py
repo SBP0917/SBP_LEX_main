@@ -50,7 +50,7 @@ SKG_DENY: Final = "DENY"
 SKG_SATISFIED: Final = "SATISFIED"
 SKG_NOT_SATISFIED: Final = "NOT_SATISFIED"
 
-_SOURCE_FIELDS: Final = {
+_SOURCE_FIELDS: Final = frozenset({
     "contract_id",
     "schema_status",
     "evaluator_id",
@@ -67,8 +67,8 @@ _SOURCE_FIELDS: Final = {
     "digest",
     "signature",
     "verified",
-}
-_SNAPSHOT_FIELDS: Final = {
+})
+_SNAPSHOT_FIELDS: Final = frozenset({
     "contract_id",
     "schema_status",
     "content_classes",
@@ -78,16 +78,16 @@ _SNAPSHOT_FIELDS: Final = {
     "pre_evaluation_state_hash",
     "evaluation_time",
     "prior_skg_digest",
-}
-_DETERMINATION_FIELDS: Final = {
+})
+_DETERMINATION_FIELDS: Final = frozenset({
     "result",
     "content_class_results",
     "evidence_references",
     "authority_granted",
     "execution_authority_granted",
     "downstream_override_permitted",
-}
-_RECORD_FIELDS: Final = {
+})
+_RECORD_FIELDS: Final = frozenset({
     "contract_id",
     "schema_status",
     "content_classes",
@@ -103,7 +103,7 @@ _RECORD_FIELDS: Final = {
     "authority_granted",
     "execution_authority_granted",
     "downstream_override_permitted",
-}
+})
 
 
 class SKGAuthorityEvaluator(Protocol):

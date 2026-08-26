@@ -12,6 +12,7 @@ import stat
 import sys
 from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from .artifact import build_signed_artifact, validate_signed_artifact
@@ -55,13 +56,13 @@ _HASH_LOCK_LINE = re.compile(
 )
 _ASSURANCE_DIRECT_REQUIREMENTS = frozenset({"pytest"})
 _PYTHON_BOOTSTRAP_PACKAGES = frozenset({"pip", "setuptools", "wheel"})
-_TOOL_VERSION_COMMANDS = {
+_TOOL_VERSION_COMMANDS = MappingProxyType({
     "python": "tool_python_version",
     "cargo": "tool_cargo_version",
     "java": "tool_java_version",
     "alr": "tool_alr_version",
     "git": "tool_git_version",
-}
+})
 
 
 def _stable_file_bytes(root: Path, relative: str) -> bytes:

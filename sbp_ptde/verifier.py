@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -19,14 +19,15 @@ from .canonical import (
 from .constants import (
     ASSURANCE_LIMITS,
     D_DESCRIPTOR_PATH,
-    EVIDENCE_ROOT,
     E_MANIFEST_NAME,
+    EVIDENCE_ROOT,
     NO_AUTHORITY,
     POLICY_PATH,
     RESULT_SCHEMA_ID,
     SUCCESS_CLAIM_TEXT,
     SUCCESS_RESULT,
     T_PROFILE_PATH,
+    assurance_limits_document,
 )
 from .errors import PTDEVerificationError, reject
 from .git_objects import (
@@ -44,8 +45,7 @@ from .trust import (
     validate_accepted_attempt_history,
 )
 
-
-_RESULT_FIELDS = {
+_RESULT_FIELDS = frozenset({
     "schema_id",
     "result",
     "claim_text",
@@ -71,13 +71,13 @@ _RESULT_FIELDS = {
     "accepted_attempt_history_sequence",
     "accepted_attempt_history_sha512",
     "result_sha512",
-}
-_OBJECT_BINDING_FIELDS = {
+})
+_OBJECT_BINDING_FIELDS = frozenset({
     "commit_oid",
     "commit_raw_sha512",
     "tree_oid",
     "tree_raw_sha512",
-}
+})
 
 
 def _commit_binding(
@@ -178,7 +178,7 @@ def _build_result(
         "lanes_sha512": d_descriptor["lanes_sha512"],
         "evidence_inventory_sha512": e_manifest["evidence_inventory_sha512"],
         "no_authority": dict(NO_AUTHORITY),
-        "assurance_limits": deepcopy(ASSURANCE_LIMITS),
+        "assurance_limits": assurance_limits_document(),
         "admission_state": "NOT_ADMITTED",
         "git_executable_sha512": expected_git_executable_sha512,
         "accepted_attempt_history_id": accepted_attempt_history.history_id,
@@ -422,7 +422,9 @@ def _validate_verification_result_impl(value: Any) -> dict[str, Any]:
     lane_order = result["lane_order"]
     resource_maxima = ASSURANCE_LIMITS.get("resource_maxima")
     maximum_lanes = (
-        resource_maxima.get("lanes") if type(resource_maxima) is dict else None
+        resource_maxima.get("lanes")
+        if isinstance(resource_maxima, Mapping)
+        else None
     )
     if (
         type(lane_order) is not list

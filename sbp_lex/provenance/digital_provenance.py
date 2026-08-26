@@ -24,6 +24,7 @@ import json
 from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha512
+from types import MappingProxyType
 from typing import Any, Final, Protocol, TypeGuard
 
 from cryptography.exceptions import InvalidSignature
@@ -84,14 +85,14 @@ DURABLE_ROLLBACK: Final = "ROLLBACK"
 DURABLE_CONFLICT: Final = "CONFLICT"
 PRODUCTION_MODE: Final = "PRODUCTION"
 TEST_ONLY_MODE: Final = "TEST_ONLY"
-_PRODUCTION_DURABLE_STORAGE_CLASSES: Final = {
+_PRODUCTION_DURABLE_STORAGE_CLASSES: Final = frozenset({
     "EXTERNAL_TRANSACTIONAL_DURABLE_ATOMIC_STORE",
     "TPM_SEALED_DURABLE_ATOMIC_STORE",
-}
-_FORBIDDEN_PRODUCTION_STORAGE_TERMS: Final = {
+})
+_FORBIDDEN_PRODUCTION_STORAGE_TERMS: Final = frozenset({
     "TEST", "MEMORY", "MOCK", "STUB", "FIXTURE", "PLACEHOLDER",
     "SELF_ATTESTED",
-}
+})
 
 PROVENANCE_GRAPH_SIGNER_ROLE: Final = "PROVENANCE_GRAPH_AUTHORITY"
 PROVENANCE_NODE_TYPES: Final = (
@@ -101,13 +102,13 @@ PROVENANCE_NODE_TYPES: Final = (
     "release_manifest",
     "runtime_measurement",
 )
-PROVENANCE_NODE_SIGNER_ROLES: Final = {
+PROVENANCE_NODE_SIGNER_ROLES: Final = MappingProxyType({
     "authoritative_source": "AUTHORITATIVE_SOURCE_AUTHORITY",
     "extraction_transformation_toolchain": "TRANSFORMATION_TOOLCHAIN_AUTHORITY",
     "generated_artifact": "ARTIFACT_BUILD_AUTHORITY",
     "release_manifest": "RELEASE_MANIFEST_AUTHORITY",
     "runtime_measurement": "RUNTIME_MEASUREMENT_AUTHORITY",
-}
+})
 PROVENANCE_EDGE_RELATIONS: Final = (
     "SOURCE_TRANSFORMED_BY",
     "TRANSFORMATION_GENERATED",
@@ -118,7 +119,7 @@ REQUIRED_SIGNER_ROLES: Final = (
     PROVENANCE_GRAPH_SIGNER_ROLE,
     *(PROVENANCE_NODE_SIGNER_ROLES[kind] for kind in PROVENANCE_NODE_TYPES),
 )
-NO_AUTHORIZATION_EFFECT: Final = {
+NO_AUTHORIZATION_EFFECT: Final = MappingProxyType({
     "legal_truth_proven": False,
     "semantic_correctness_proven": False,
     "governance_allow_granted": False,
@@ -126,30 +127,30 @@ NO_AUTHORIZATION_EFFECT: Final = {
     "execution_authority_granted": False,
     "effect_authority_granted": False,
     "pipeline_bypass_permitted": False,
-}
+})
 
-_SIGNED_RESERVED_FIELDS: Final = {"digest", "signature", "verified"}
-_OWNER_PIN_FIELDS: Final = {
+_SIGNED_RESERVED_FIELDS: Final = frozenset({"digest", "signature", "verified"})
+_OWNER_PIN_FIELDS: Final = frozenset({
     "schema_id", "pin_id", "registry_id", "registry_context",
     "authority_role", "authority_credential_id", "provider_id", "algorithm",
     "key_id", "public_key_fingerprint", "custody_class", "effect_authority",
-}
-_REGISTRY_SNAPSHOT_FIELDS: Final = {
+})
+_REGISTRY_SNAPSHOT_FIELDS: Final = frozenset({
     "schema_id", "registry_id", "registry_version", "registry_context",
     "snapshot_sequence", "prior_snapshot_digest", "issued_at", "effective_from",
     "effective_until", "status", "revocation_sequence", "owner_pin_digest",
     "authority_role", "authority_credential_id", "credential_inclusions",
     "inclusion_set_digest", "authorization_effect", "digest", "signature", "verified",
-}
-_CREDENTIAL_INCLUSION_FIELDS: Final = {
+})
+_CREDENTIAL_INCLUSION_FIELDS: Final = frozenset({
     "schema_id", "registry_id", "registry_version", "registry_context",
     "snapshot_sequence", "inclusion_sequence", "credential_id",
     "credential_digest", "signer_role", "status", "effective_from",
     "effective_until", "revocation_status", "revocation_sequence", "provider_id",
     "algorithm", "key_id", "public_key_fingerprint", "custody_class",
     "effect_authority", "authorization_effect", "digest", "signature", "verified",
-}
-_GRAPH_FIELDS: Final = {
+})
+_GRAPH_FIELDS: Final = frozenset({
     "contract_id", "schema_status", "proof_scope", "graph_id", "graph_version",
     "request_fingerprint", "evaluation_time", "sequence", "revocation_status",
     "revocation_sequence", "prior_provenance_digest", "owner_pin_digest",
@@ -158,39 +159,39 @@ _GRAPH_FIELDS: Final = {
     "credential_inclusion_digest", "declared_transformation_ids", "nodes", "edges",
     "release_manifest_digest", "runtime_measurement_digest", "lineage_only",
     *NO_AUTHORIZATION_EFFECT, "digest", "signature", "verified",
-}
-_NODE_FIELDS: Final = {
+})
+_NODE_FIELDS: Final = frozenset({
     "node_id", "node_type", "content_digest", "recorded_at", "effective_from",
     "effective_until", "effective_status", "sequence", "revocation_status",
     "revocation_sequence", "signer_role", "authority_credential_id",
     "authority_credential_digest", "credential_inclusion_digest", "attributes",
     "digest", "signature", "verified",
-}
-_EDGE_FIELDS: Final = {
+})
+_EDGE_FIELDS: Final = frozenset({
     "edge_id", "sequence", "from_node_id", "to_node_id", "relation",
     "from_content_digest", "to_content_digest",
-}
-_ATTRIBUTE_FIELDS: Final = {
-    "authoritative_source": {
+})
+_ATTRIBUTE_FIELDS: Final = MappingProxyType({
+    "authoritative_source": frozenset({
         "source_authority_id", "source_authority_credential_digest",
         "source_uri", "source_version",
-    },
-    "extraction_transformation_toolchain": {
+    }),
+    "extraction_transformation_toolchain": frozenset({
         "transformation_id", "tool_id", "tool_version", "tool_digest",
         "config_digest", "dependency_digests", "declared_input_digest",
         "declared_output_digest",
-    },
-    "generated_artifact": {"artifact_id", "artifact_version", "derivation_digest"},
-    "release_manifest": {
+    }),
+    "generated_artifact": frozenset({"artifact_id", "artifact_version", "derivation_digest"}),
+    "release_manifest": frozenset({
         "release_id", "release_version", "release_manifest_digest",
         "artifact_content_digest",
-    },
-    "runtime_measurement": {
+    }),
+    "runtime_measurement": frozenset({
         "runtime_id", "runtime_environment_digest", "release_manifest_digest",
         "runtime_measurement_digest",
-    },
-}
-_DURABLE_CLAIM_FIELDS: Final = {
+    }),
+})
+_DURABLE_CLAIM_FIELDS: Final = frozenset({
     "contract_id", "stream_id", "registry_context", "owner_pin_digest",
     "request_fingerprint", "graph_id", "graph_digest", "provenance_sequence",
     "prior_provenance_digest", "provenance_revocation_sequence",
@@ -199,34 +200,34 @@ _DURABLE_CLAIM_FIELDS: Final = {
     "evaluation_time", "release_manifest_digest", "runtime_measurement_digest",
     "current_revocation_head_digest",
     "current_clock_evidence_digest",
-}
-_CLOCK_EVIDENCE_FIELDS: Final = {
+})
+_CLOCK_EVIDENCE_FIELDS: Final = frozenset({
     "schema_id", "context_id", "clock_id", "clock_sequence",
     "observed_at", "status", "authorization_effect", "digest", "signature",
     "verified",
-}
-_REVOCATION_HEAD_FIELDS: Final = {
+})
+_REVOCATION_HEAD_FIELDS: Final = frozenset({
     "schema_id", "registry_id", "registry_context", "snapshot_digest",
     "snapshot_sequence", "revocation_sequence", "observed_at",
     "owner_pin_digest", "authority_role", "authority_credential_id",
     "authorization_effect", "digest", "signature", "verified",
-}
-_HEAD_FIELDS: Final = {"sequence", "digest", "revocation_sequence"}
-_DURABLE_TRANSITION_FIELDS: Final = {
+})
+_HEAD_FIELDS: Final = frozenset({"sequence", "digest", "revocation_sequence"})
+_DURABLE_TRANSITION_FIELDS: Final = frozenset({
     "schema_id", "context_id", "claim_digest", "result",
     "transition_sequence", "previous_state_digest", "state_digest",
     "stream_id", "previous_stream_head", "current_stream_head",
     "previous_registry_head", "current_registry_head", "evaluation_time",
     "revocation_head_digest", "authorization_effect", "digest", "signature",
     "verified",
-}
-_DURABLE_LIVE_HEADS_FIELDS: Final = {
+})
+_DURABLE_LIVE_HEADS_FIELDS: Final = frozenset({
     "schema_id", "context_id", "transition_sequence", "state_digest",
     "stream_id", "stream_head", "registry_head", "last_evaluation_time",
     "revocation_head_digest", "queried_claim_digest", "is_claimed",
     "authorization_effect", "digest", "signature", "verified",
-}
-_VERIFICATION_RECEIPT_FIELDS: Final = {
+})
+_VERIFICATION_RECEIPT_FIELDS: Final = frozenset({
     "schema_id", "contract_id", "schema_status", "proof_scope", "result",
     "reason", "evaluation_time", "request_fingerprint", "graph_id",
     "graph_digest", "provenance_sequence", "prior_provenance_digest",
@@ -241,7 +242,7 @@ _VERIFICATION_RECEIPT_FIELDS: Final = {
     "production_durable_storage_proven_by_module",
     "lineage_authenticated", "lineage_only", *NO_AUTHORIZATION_EFFECT,
     "digest", "signature", "verified",
-}
+})
 
 
 class ProvenanceAttestationProvider(SignatureProvider, Protocol):

@@ -11,8 +11,8 @@ import stat
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
 from ctypes import wintypes
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +34,6 @@ from .constants import (
     TREE_MODE,
 )
 from .errors import PTDEVerificationError, reject
-
 
 _WINDOWS_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
 _REJECTED_GIT_ENVIRONMENT = frozenset(
@@ -534,7 +533,7 @@ class GitObjectDatabase:
                     )
                     try:
                         windows_tree = _WindowsProcessTree(process)
-                    except BaseException as exc:
+                    except BaseException:
                         try:
                             process.kill()
                             process.wait(timeout=5)
@@ -543,7 +542,7 @@ class GitObjectDatabase:
                             raise reject(
                                 "GIT_PROCESS_TREE_TERMINATION_FAILED"
                             ) from cleanup_exc
-                        raise exc
+                        raise
                     deadline = time.monotonic() + MAX_GIT_SUBPROCESS_SECONDS
                     exceeded = False
                     while process.poll() is None:

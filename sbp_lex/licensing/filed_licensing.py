@@ -44,7 +44,7 @@ LICENCE_ALLOW = "ALLOW"
 LICENCE_DENY = "DENY"
 LICENCE_ESCALATE = "ESCALATE"
 
-_SOURCE_FIELDS = {
+_SOURCE_FIELDS = frozenset({
     "evaluator_id",
     "evaluator_version",
     "authority_credential",
@@ -59,7 +59,7 @@ _SOURCE_FIELDS = {
     "digest",
     "signature",
     "verified",
-}
+})
 
 
 class FiledLicenceEvaluator(Protocol):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -123,4 +124,51 @@ def test_invalid_claim_inputs_are_never_persisted(tmp_path: Path) -> None:
         revocation_scope=SCOPE,
         revocation_sequence=1,
     ) is False
+    assert guard.consume(
+        exchange_id="exchange-integer-overflow",
+        envelope_digest="a" * 128,
+        revocation_scope=SCOPE,
+        revocation_sequence=2**63,
+    ) is False
     assert _consume(guard, "exchange-invalid", 1) is True
+
+
+def test_injected_sqlite_schema_objects_fail_closed_before_claim(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "exchange-replay.sqlite3"
+    guard = _guard(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TRIGGER hostile_replay_delete AFTER INSERT ON consumed_exchange "
+            "BEGIN DELETE FROM consumed_exchange WHERE exchange_id = NEW.exchange_id; END"
+        )
+
+    with pytest.raises(DurableExchangeReplayError, match="schema_mismatch"):
+        _consume(guard, "exchange-trigger-target", 1)
+
+
+def test_semantically_corrupt_revocation_head_fails_closed(tmp_path: Path) -> None:
+    database = tmp_path / "exchange-replay.sqlite3"
+    guard = _guard(database)
+    assert _consume(guard, "exchange-before-semantic-corruption", 1)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE revocation_head SET highest_sequence = 'not-an-integer'"
+        )
+
+    with pytest.raises(DurableExchangeReplayError, match="state_invalid"):
+        _consume(guard, "exchange-after-semantic-corruption", 2)
+
+
+def test_dangling_database_symlink_is_never_followed(tmp_path: Path) -> None:
+    database = tmp_path / "dangling.sqlite3"
+    missing_target = tmp_path / "attacker-target.sqlite3"
+    try:
+        database.symlink_to(missing_target)
+    except OSError:
+        pytest.skip("symlink creation is not available to this test process")
+
+    with pytest.raises(DurableExchangeReplayError, match="database_not_safe"):
+        _guard(database)
+    assert not missing_target.exists()

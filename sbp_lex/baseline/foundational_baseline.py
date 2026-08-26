@@ -60,14 +60,14 @@ _APPLICATION_INTEGRITY_DIGEST_FIELDS: Final = (
     "application_integrity_runtime_measurement_digest",
     "application_integrity_trust_context_digest",
 )
-_SIGNATURE_FIELDS: Final = {
+_SIGNATURE_FIELDS: Final = frozenset({
     "provider_id",
     "algorithm",
     "key_id",
     "custody_class",
     "effect_authority",
     "signature_b64",
-}
+})
 _SOVEREIGN_IDENTITY_FALSE_FIELDS: Final = (
     "biometric_proof_established",
     "access_granted",
@@ -112,7 +112,7 @@ _AUSTRALIAN_MINOR_FALSE_FIELDS: Final = (
     "execution_authority_granted",
     "effect_authority",
 )
-_RECORD_FIELDS: Final = {
+_RECORD_FIELDS: Final = frozenset({
     "contract_id",
     "schema_status",
     "foundational_order",
@@ -139,8 +139,8 @@ _RECORD_FIELDS: Final = {
     "australian_minor_access_result",
     "australian_minor_access_record_digest",
     *_AGGREGATE_AUTHORITY_FIELDS,
-}
-_HASH_PAYLOAD_FIELDS: Final = {
+})
+_HASH_PAYLOAD_FIELDS: Final = frozenset({
     "contract_id",
     "schema_status",
     "result",
@@ -158,7 +158,7 @@ _HASH_PAYLOAD_FIELDS: Final = {
     "impersonation_protection_digest",
     "australian_minor_access_record_digest",
     *_AGGREGATE_AUTHORITY_FIELDS,
-}
+})
 
 
 def _text(value: Any) -> bool:

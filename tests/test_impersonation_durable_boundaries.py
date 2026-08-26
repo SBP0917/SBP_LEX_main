@@ -104,7 +104,7 @@ def _claim(head: dict) -> dict:
         "clock_sequence": 1,
         "clock_record_digest": "4" * 128,
         "result": REPLAY_CLAIMED,
-        "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+        "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
     }
 
 
@@ -349,6 +349,61 @@ def test_durable_store_rejects_links_aliases_and_uses_owner_only_permissions(
         )
 
 
+def test_durable_store_rejects_dangling_links_sidecar_collisions_and_replacement(
+    tmp_path: Path,
+) -> None:
+    provider = Ed25519FixtureProvider("hostile-path-substitution")
+    dangling_database = tmp_path / "dangling.sqlite3"
+    dangling_target = tmp_path / "attacker-created.sqlite3"
+    try:
+        dangling_database.symlink_to(dangling_target)
+    except OSError:
+        pytest.skip("symlink creation is not available to this test process")
+    with pytest.raises(ImpersonationDurabilityError, match="PATH_ALIAS"):
+        SQLiteImpersonationReplayGuard(
+            database_path=dangling_database,
+            anchor_path=tmp_path / "dangling.anchor.json",
+            store_id="dangling-store",
+            context_id=CONTEXT_ID,
+            context_digest=CONTEXT_DIGEST,
+            signer=provider,
+            allow_test_only=True,
+        )
+    assert not dangling_target.exists()
+
+    database, _anchor = _paths(tmp_path, "sidecar-collision")
+    with pytest.raises(ImpersonationDurabilityError, match="ANCHOR_PATH_INVALID"):
+        SQLiteImpersonationReplayGuard(
+            database_path=database,
+            anchor_path=Path(f"{database}-wal"),
+            store_id="sidecar-collision-store",
+            context_id=CONTEXT_ID,
+            context_digest=CONTEXT_DIGEST,
+            signer=provider,
+            allow_test_only=True,
+        )
+
+    guard = _test_replay(tmp_path, provider)
+    replay_database, _replay_anchor = _paths(tmp_path, "replay")
+    replacement = tmp_path / "replay-replacement.sqlite3"
+    with closing_sqlite(replay_database) as source, closing_sqlite(replacement) as target:
+        source.backup(target)
+    os.replace(replacement, replay_database)
+    assert guard.validate_store() is False
+
+
+def test_signed_state_detects_injected_sqlite_trigger(tmp_path: Path) -> None:
+    guard = _test_replay(tmp_path)
+    database, _anchor = _paths(tmp_path, "replay")
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TRIGGER hostile_claim_delete AFTER INSERT ON replay_claims "
+            "BEGIN DELETE FROM replay_claims WHERE replay_key = NEW.replay_key; END"
+        )
+
+    assert guard.validate_store() is False
+
+
 class closing_sqlite:
     def __init__(self, path: Path) -> None:
         self.connection = sqlite3.connect(path)
@@ -412,6 +467,11 @@ def test_registry_clock_and_clock_head_are_restart_safe_and_monotonic(
     rolled_back["registry_sequence"] = 6
     with pytest.raises(ImpersonationDurabilityError, match="ROLLBACK"):
         restarted_registry.install_identity(rolled_back)
+    with pytest.raises(ImpersonationDurabilityError, match="LOOKUP_INPUT_INVALID"):
+        restarted_registry.lookup_identity(
+            subject_id="x" * 513,
+            participant_id="participant-one",
+        )
 
     clock_provider = Ed25519FixtureProvider("durable-clock")
     times = iter((1_000, 999))
@@ -485,9 +545,13 @@ def test_registry_clock_and_clock_head_are_restart_safe_and_monotonic(
         "prior_clock_record_digest": GENESIS_HASH,
         "observed_at_ms": 1_000,
         "result": "ADVANCED",
-        "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
+        "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
     }
     receipt = head_store.advance_once(transition=transition)
+    extended_transition = deepcopy(transition)
+    extended_transition["unadmitted_extension"] = True
+    with pytest.raises(ImpersonationDurabilityError, match="TRANSITION_INVALID"):
+        head_store.advance_once(transition=extended_transition)
     restarted_head = SQLiteImpersonationClockHead(
         database_path=head_db,
         anchor_path=head_anchor,
@@ -506,6 +570,44 @@ def test_registry_clock_and_clock_head_are_restart_safe_and_monotonic(
     assert current["latest_transition_receipt_digest"] == (
         canonical_integrity_hash(receipt)
     )
+
+
+def test_replay_persistence_and_time_source_inputs_fail_closed(tmp_path: Path) -> None:
+    replay = _test_replay(tmp_path)
+    with pytest.raises(ImpersonationDurabilityError, match="PERSISTENCE_INPUT_INVALID"):
+        replay.is_claimed(
+            namespace="sbp-lex-v2:impersonation",
+            replay_key="not-a-digest",
+            receipt_digest="a" * 128,
+            subject_binding_digest=SUBJECT_DIGEST,
+            observed_at_ms=1_000,
+            current_head_digest="b" * 128,
+        )
+
+    clock_database, clock_anchor = _paths(tmp_path, "unavailable-clock")
+
+    def unavailable_time_source() -> int:
+        raise OSError("trusted time source unavailable")
+
+    clock = AuthenticatedMonotonicClock(
+        database_path=clock_database,
+        anchor_path=clock_anchor,
+        store_id="unavailable-clock-store",
+        context_id=CONTEXT_ID,
+        context_digest=CONTEXT_DIGEST,
+        clock_id="unavailable-clock",
+        clock_version="1",
+        clock_provider=Ed25519FixtureProvider("unavailable-clock"),
+        trusted_time_source_admission_digest="5" * 128,
+        maximum_forward_step_ms=100,
+        time_source=unavailable_time_source,
+        allow_test_only=True,
+    )
+    with pytest.raises(ImpersonationDurabilityError, match="SOURCE_UNAVAILABLE"):
+        clock.current_time_record(
+            context_id=CONTEXT_ID,
+            context_digest=CONTEXT_DIGEST,
+        )
 
 
 def test_registry_read_serializes_with_anchor_and_database_update(
@@ -873,8 +975,8 @@ def test_production_composition_accepts_durable_contract_and_requires_custody(
         "minimum_clock_sequence": 1,
         "valid_from_ms": 0,
         "valid_until_ms": 5_000,
-        "authorization_effect": deepcopy(NO_AUTHORIZATION_EFFECT),
-        "deployment_dependencies": deepcopy(DEPLOYMENT_DEPENDENCIES),
+        "authorization_effect": dict(NO_AUTHORIZATION_EFFECT),
+        "deployment_dependencies": dict(DEPLOYMENT_DEPENDENCIES),
     }
     context_record = build_signed_object(
         context_payload,
@@ -911,6 +1013,15 @@ def test_production_composition_accepts_durable_contract_and_requires_custody(
             clock_head.production_admission_record()
         ),
     }
+    for boundary in (registry, replay, clock, clock_head):
+        admission = boundary.production_admission_record()
+        assert admission["durable_storage_class"] == (
+            "SINGLE_HOST_LOCAL_SQLITE_WAL_SIGNED_ANCHOR"
+        )
+        assert admission["distributed_durability_admitted"] is False
+        assert admission["externally_operated_rollback_anchor_admitted"] is False
+        assert admission["hardware_custody_provided_by_store"] is False
+        assert admission["filesystem_owner_only_mode_enforced"] is (os.name != "nt")
     with (
         patch.object(
             impersonation_module,

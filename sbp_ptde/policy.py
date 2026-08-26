@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from .canonical import canonical_json_document_bytes, exact_fields, sha512_hex
@@ -20,9 +21,9 @@ from .constants import (
     RESULT_SCHEMA_ID,
     SUCCESS_CLAIM_TEXT,
     SUCCESS_RESULT,
-    TIMEOUT_STATUS,
     T_PROFILE_PATH,
     T_SCHEMA_ID,
+    TIMEOUT_STATUS,
     TRANSCRIPT_SCHEMA_ID,
 )
 from .errors import reject
@@ -30,8 +31,8 @@ from .errors import reject
 
 def expected_policy() -> dict[str, Any]:
     resource_maxima = ASSURANCE_LIMITS.get("resource_maxima")
-    if type(resource_maxima) is not dict:
-        raise RuntimeError("PTDE_RESOURCE_MAXIMA_INVALID")
+    if not isinstance(resource_maxima, Mapping):
+        raise TypeError("PTDE_RESOURCE_MAXIMA_INVALID")
     return {
         "callable_allowed_set": [dict(item) for item in CALLABLE_ALLOWED_SET],
         "canonical_json": {
@@ -111,7 +112,7 @@ def expected_policy() -> dict[str, Any]:
     }
 
 
-_POLICY_FIELDS = {
+_POLICY_FIELDS = frozenset({
     "callable_allowed_set",
     "canonical_json",
     "evidence_digest",
@@ -128,7 +129,7 @@ _POLICY_FIELDS = {
     "success",
     "trust_inputs",
     "version",
-}
+})
 
 
 def validate_policy(value: Any) -> dict[str, Any]:

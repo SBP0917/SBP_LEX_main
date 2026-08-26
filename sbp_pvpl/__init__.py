@@ -20,15 +20,14 @@ from .verifier import (
     validation_report,
 )
 
-
 __all__ = [
     "CLAIM_SCHEMA_ID",
     "CONTRACT_VERSION",
     "EXTERNAL_PINS_SCHEMA_ID",
     "HISTORY_SCHEMA_ID",
-    "PVPLValidationError",
     "RECEIPT_SCHEMA_ID",
     "SOURCE_RESULT_SCHEMA_ID",
+    "PVPLValidationError",
     "build_publication_claim",
     "validate_accepted_history",
     "validate_detached_receipt",

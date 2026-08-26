@@ -67,7 +67,7 @@ EXTERNAL_PRODUCTION_SIGNATURE_REQUIRED = "EXTERNAL_PRODUCTION_SIGNATURE_REQUIRED
 NOT_A_VALID_HISTORY = "NOT_A_VALID_HISTORY"
 
 _MAX_OWNER_IDENTIFIER_BYTES = 255
-_PTDE_PREPARATION_FIELDS = {
+_PTDE_PREPARATION_FIELDS = frozenset({
     "schema_id",
     "preparation_state",
     "pin_state",
@@ -76,8 +76,8 @@ _PTDE_PREPARATION_FIELDS = {
     "accepted_attempt_history",
     "accepted_attempt_history_sha512",
     "no_authority",
-}
-_CUSTODY_METADATA_FIELDS = {
+})
+_CUSTODY_METADATA_FIELDS = frozenset({
     "schema_id",
     "verification_context_sha512",
     "custody_class",
@@ -85,8 +85,8 @@ _CUSTODY_METADATA_FIELDS = {
     "mldsa87_custody",
     "ed448_custody",
     "no_authority",
-}
-_UNSIGNED_HISTORY_FIELDS = {
+})
+_UNSIGNED_HISTORY_FIELDS = frozenset({
     "schema_id",
     "repository_identity_digest",
     "history_id",
@@ -96,8 +96,8 @@ _UNSIGNED_HISTORY_FIELDS = {
     "records",
     "status",
     "no_authority",
-}
-_SIGNING_REQUEST_FIELDS = {
+})
+_SIGNING_REQUEST_FIELDS = frozenset({
     "schema_id",
     "request_state",
     "signature_state",
@@ -115,8 +115,8 @@ _SIGNING_REQUEST_FIELDS = {
     "owner_action_required",
     "no_authority",
     "request_sha512",
-}
-_LANE_CUSTODY_FIELDS = {
+})
+_LANE_CUSTODY_FIELDS = frozenset({
     "algorithm",
     "provider_id",
     "key_id",
@@ -131,7 +131,7 @@ _LANE_CUSTODY_FIELDS = {
     "external_custody_admitted",
     "custody_admission_sha512",
     "non_exportable",
-}
+})
 _FORBIDDEN_SOFTWARE_MARKERS = (
     "TEST_ONLY",
     "SOFTWARE",

@@ -2,21 +2,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
-from .artifact import build_signed_artifact, validate_artifact_chain, validate_signed_artifact
+from .artifact import (
+    build_signed_artifact,
+    validate_signed_artifact,
+)
 from .constants import FAIL, PASS
 from .paths import LocalTrustPathError, measure_file, validated_root
 from .signing import HybridSigningContext, HybridVerificationContext
 
-
 PAYLOAD_SCHEMA = "SBP_LEX_V2_LOCAL_TRUST_EVIDENCE_CHAIN_PAYLOAD_V1"
-_PAYLOAD_FIELDS = {
+_PAYLOAD_FIELDS = frozenset({
     "schema_id", "status", "bound_manifest_digest", "bound_envelope_digest",
     "evidence_snapshot", "missing_evidence", "changed_evidence",
     "runtime_attachment",
-}
+})
 
 
 def compare_evidence_to_current_files(
